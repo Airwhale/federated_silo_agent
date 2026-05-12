@@ -16,7 +16,7 @@ A federated computation platform for clinical analytics. Three layers, cleanly s
 2. **Deterministic federated computation** in the middle. Each silo computes only the sufficient statistics required by the plan (`XᵀX`, `Xᵀy`, `n` for OLS; per-iteration gradient + Hessian for logistic; bucket counts for histograms; etc.). The aggregator sums them numerically. No LLM in the math path.
 3. **Privacy enforcement at silo egress.** Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp). Per-user privacy budget tracked across queries with composition combinators. Schema validation prevents structural leakage. Differencing-pattern auditor flags adversarial query sequences.
 
-**The demo cohort:** federated outcomes analytics on a Congestive Heart Failure (CHF) study population across three synthetic hospitals (Riverside General, Lakeside Medical, Summit Community Health) using [Synthea](https://synthetichealth.github.io/synthea/)-generated data.
+**The demo cohort:** federated outcomes analytics on a Congestive Heart Failure (CHF) study population across **five** synthetic hospitals (Riverside General, Lakeside Medical, Summit Community Health, Fairview Regional, Coastal Medical Center) using [Synthea-OMOP](https://registry.opendata.aws/synthea-omop/) data in OHDSI [OMOP CDM v5.4](https://ohdsi.github.io/CommonDataModel/cdm54.html) format. Each silo holds 1,000 cardiac patients (~50 CHF + ~950 other heart-disease). Per silo, single-site logistic regression is underpowered; pooled across five silos, the cohort is large enough for credible multi-predictor inference. **That confidence-interval shrinkage is the demo's headline AI/stats moment.**
 
 ---
 
@@ -112,10 +112,12 @@ flowchart TB
         LT_A["Lobster Trap<br/>(NL channel policy)"]
     end
 
-    subgraph Silos["Hospital Silos (private, isolated)"]
-        S1["Riverside General<br/>~12K patients<br/>(academic)"]
-        S2["Lakeside Medical<br/>~8K patients<br/>(regional)"]
-        S3["Summit Community<br/>~6K patients<br/>(community)"]
+    subgraph Silos["Five Hospital Silos (private, isolated) — 1,000 cardiac patients each"]
+        S1["Riverside General<br/>(academic)"]
+        S2["Lakeside Medical<br/>(regional)"]
+        S3["Summit Community<br/>(community)"]
+        S4["Fairview Regional<br/>(mid-size)"]
+        S5["Coastal Medical Ctr<br/>(suburban)"]
     end
 
     Chat -->|NL query| Planner
@@ -123,9 +125,13 @@ flowchart TB
     Disp -->|plan| S1
     Disp -->|plan| S2
     Disp -->|plan| S3
-    S1 -->|DP-noised<br/>sufficient stats| Comb
-    S2 -->|DP-noised<br/>sufficient stats| Comb
-    S3 -->|DP-noised<br/>sufficient stats| Comb
+    Disp -->|plan| S4
+    Disp -->|plan| S5
+    S1 -->|DP-noised stats| Comb
+    S2 -->|DP-noised stats| Comb
+    S3 -->|DP-noised stats| Comb
+    S4 -->|DP-noised stats| Comb
+    S5 -->|DP-noised stats| Comb
     Comb --> Narr
     Narr -->|summary| Chat
     LT_A -.polices.- Planner

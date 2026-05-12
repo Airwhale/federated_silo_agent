@@ -305,34 +305,88 @@ Defense mapping: Lobster Trap closes NL extraction + injection. Schema validatio
 
 > *Purpose: synthetic data is a designed artifact too. The shape it takes determines what demos are possible.*
 
-### 9.1 Synthea as the data backbone
+### 9.1 Synthea → OMOP CDM as the data backbone
 
-[Synthea](https://synthetichealth.github.io/synthea/) is an open-source, well-validated synthetic patient generator from MITRE. It produces realistic longitudinal records (encounters, conditions, medications, observations, procedures, claims) for synthetic populations. Free, no IRB needed, no privacy concerns because the patients don't exist. **This is the single biggest schedule win of the healthcare pivot** — we don't write a synthetic data generator from scratch.
+[Synthea](https://synthetichealth.github.io/synthea/) (MITRE) is an open-source synthetic patient generator. We use the pre-built [Synthea-OMOP datasets on AWS Open Data](https://registry.opendata.aws/synthea-omop/), already transformed into the OHDSI [OMOP CDM v5.4](https://ohdsi.github.io/CommonDataModel/cdm54.html) — the standard clinical-research schema used by 500+ hospitals worldwide. No IRB or PhysioNet credentialing needed; the system is plug-compatible with real OMOP hospital data post-hackathon.
 
-We generate three independent populations with different demographic and acuity profiles, mirroring the differences between an academic medical center, a regional hospital, and a community hospital.
+### 9.2 Five silos × 1,000 patients — a small hospital network
 
-### 9.2 Schema (drawn from Synthea outputs)
+| Silo | Patients | Profile |
+|---|---|---|
+| **Riverside General** | 1,000 | Academic medical center; older + higher acuity tilt |
+| **Lakeside Medical** | 1,000 | Regional referral hospital; balanced |
+| **Summit Community Health** | 1,000 | Community hospital; younger + lower acuity |
+| **Fairview Regional** | 1,000 | Mid-size regional; slightly elevated diabetes prevalence |
+| **Coastal Medical Center** | 1,000 | Suburban; slightly higher BMI distribution |
+
+**Cohort restriction:** each silo's 1,000 patients are filtered to those with **at least one cardiac diagnosis** (CHF, CAD, AFib, post-MI, hypertensive heart disease, or valve disease). Of those 1,000:
+
+- **~50 CHF patients** (ICD-10 I50.x / SNOMED 84114007) — the study cohort
+- **~950 other heart-disease** — the comparison/control group (CAD, AFib, post-MI, etc.)
+- **~2 cardiac amyloidosis** patients embedded within the 50 CHF — rare subtype, synthetically labeled
+
+**Pooled across all 5 silos:**
+
+| Group | Single silo | Pooled (×5) | Statistical implication |
+|---|---|---|---|
+| CHF cases | ~50 | ~250 | Single-silo logistic on ~10 events is underpowered; pooled (~50 events) is borderline-adequate for 5 predictors |
+| Other heart disease | ~950 | ~4,750 | Plenty of comparison-group power |
+| Amyloid subtype | ~2 | ~10 | "Useless case series" → "directional finding" |
+
+### 9.3 Why this volume design makes the demo land
+
+The 5×1,000 structure is deliberate, not a side effect of dataset size. With ~10 readmission events per silo's CHF cohort, single-site logistic regression has confidence intervals so wide the coefficients are functionally uninterpretable. Pooled across 5 silos (~50 events), CIs tighten meaningfully — and the **visible CI shrinkage during the federated logistic demo is the moneyshot for AI judges.**
+
+The amyloid sub-cohort gives a secondary federation beat: 2 cases per silo is *literally* a useless sample, while 10 cases pooled is enough to make a directional statement about elevated severity. *"We can do A, and even harder, B"* is the narrative rhythm.
+
+### 9.4 OMOP CDM schema (subset used)
 
 ```
-patients     (patient_id, dob, sex, race, ethnicity, zip3, marital_status)
-encounters   (encounter_id, patient_id, encounter_type, start_date, end_date,
-              admit_source, discharge_disposition, length_of_stay_days, hospital_id)
-conditions   (condition_id, patient_id, encounter_id, snomed_code, icd10_code,
-              onset_date, resolved_date)  -- CHF, diabetes, CKD, etc.
-medications  (medication_id, patient_id, encounter_id, rxnorm_code,
-              start_date, stop_date, dose)
-observations (observation_id, patient_id, encounter_id, loinc_code,
-              value_numeric, value_text, observation_date)  -- vitals, labs, EF
-procedures   (procedure_id, patient_id, encounter_id, cpt_code, snomed_code,
-              procedure_date)
+person                  (person_id, birth_datetime, gender_concept_id,
+                         race_concept_id, ethnicity_concept_id, ...)
+observation_period      (person_id, period_start_date, period_end_date)
+visit_occurrence        (visit_occurrence_id, person_id, visit_concept_id,
+                         visit_start_date, visit_end_date, visit_type_concept_id, ...)
+condition_occurrence    (condition_occurrence_id, person_id, condition_concept_id,
+                         condition_start_date, condition_source_value, ...)
+drug_exposure           (drug_exposure_id, person_id, drug_concept_id,
+                         drug_exposure_start_date, drug_exposure_end_date,
+                         dose_unit_source_value, quantity, ...)
+measurement             (measurement_id, person_id, measurement_concept_id,
+                         measurement_date, value_as_number, unit_concept_id, ...)
+procedure_occurrence    (procedure_occurrence_id, person_id, procedure_concept_id,
+                         procedure_date, ...)
+death                   (person_id, death_date, cause_concept_id)
++ vocabulary tables     (concept, concept_relationship, concept_ancestor, ...)
++ chf_cohort_features   (derived per-silo, see 9.5)
 ```
 
-**Volume per silo:**
-- Riverside General (academic): ~12,000 patients, higher CHF complexity, more comorbidities
-- Lakeside Medical (regional): ~8,000 patients, mixed acuity
-- Summit Community Health (community): ~6,000 patients, lower acuity average
+### 9.5 Engineered analytical features (per CHF patient, computed at silo startup)
 
-**Study cohort:** patients with at least one CHF diagnosis (ICD-10 I50.x or SNOMED equivalents). Across the three silos, ~4,000–5,000 CHF patients with ~12,000–15,000 CHF-related encounters in a 24-month observation window.
+Stored in a `chf_cohort_features` table inside each silo's SQLite database:
+
+- `age_at_index` — age at first CHF encounter
+- `sex`, `race`, `ethnicity` — from OMOP `person`
+- `index_bmi` — most recent BMI within 90 days of index
+- `index_ef` — most recent ejection fraction within 180 days of index (LOINC 10230-1 / 8806-2 / 18043-0)
+- `prior_chf_admissions_12mo` — count of prior CHF inpatient visits
+- `has_diabetes` — binary (ICD-10 E10/E11)
+- `has_ckd` — binary (ICD-10 N18)
+- `gdmt_adherence` — binary composite (ACE/ARB + beta-blocker + diuretic on discharge)
+- `has_amyloid` — binary (synthetic label for the rare subtype)
+- `readmit_30d` — binary outcome (any inpatient visit ≤30d post-index discharge)
+- `los_index` — length of stay for index encounter (days)
+
+### 9.6 Planted scenarios
+
+Designed deliberately into the otherwise-realistic Synthea-derived data so the demo can land. Applied as post-ETL surgery on the OMOP tables and `chf_cohort_features`:
+
+1. **GDMT effect on readmission.** Patients with `gdmt_adherence = 1` have ~30% lower 30-day readmission risk. Federated logistic recovers this with tight CI; single-silo CIs are too wide to confirm.
+2. **Diabetes + CKD heterogeneity.** CHF + DM + CKD patients have *supra-additive* readmission risk (interaction term in `readmit ~ DM + CKD + DM:CKD` is positive). No single silo has enough triple-positive patients for inference.
+3. **Hospital-level LOS variation.** Riverside has ~1.3-day longer median index LOS, matched on acuity. Quality-officer benchmarking story.
+4. **Cardiac amyloidosis rare subtype (the headline).** ~10 amyloid cases distributed across the 5 silos (~2 per silo). `has_amyloid = 1` is associated with ~1.8× elevated readmission. Per silo: useless. Pooled: directional.
+
+All four are recoverable centrally on pooled data; the first two are also recoverable from single-silo data given enough effort, but scenarios 2 and 4 require federation to be statistically credible.
 
 ### 9.3 Engineered analytical features (computed once at silo startup)
 
@@ -526,7 +580,7 @@ Each part is a self-contained "build this thing" unit. When feeding to me, paste
 
 **P1. Shared schemas.** Pydantic v2 `ComputationPlan` + `SufficientStats` discriminated union (`MeanStats`, `HistogramStats`, `PearsonStats`, `OLSStats`, `LogisticIterStats`, `PoissonIterStats`). Files: `shared/plans.py`, `tests/test_plans.py`. Acceptance: round-trip + rejection tests for each variant. Depends on: nothing.
 
-**P2. Synthea data generation + per-silo loader.** Generate three independent Synthea populations (Riverside ~12K, Lakeside ~8K, Summit ~6K) with differentiated acuity profiles. Post-process to add planted scenarios (GDMT effect, DM+CKD interaction, hospital LOS variation, rare comorbidity). Compute engineered features (`age_at_index`, `index_ef`, `gdmt_adherence`, `readmit_30d`, etc.) and load per-silo SQLite DBs. Files: `backend/data/synthea_runner.py` (orchestrates Synthea CLI), `backend/data/feature_engineering.py`, `backend/data/scenarios.py`, `tests/test_data_loader.py`. Acceptance: three SQLite DBs with documented schema; CHF cohort present in each (>1000 patients); same-seed produces identical DB hashes; planted-scenario queries return expected magnitudes. Depends on: P1.
+**P2. Synthea-OMOP data layer for five silos.** Download AWS Open Data Synthea-OMOP 100K dataset, filter to heart-disease patients, sub-sample five 1,000-patient silos with target CHF prevalence (~50 each), apply the four planted scenarios. Compute engineered features. Output: five OMOP CDM v5.4 SQLite databases at `data/silos/`. Scripts under `data/scripts/`. Files: `data/scripts/download_synthea_omop.py`, `data/scripts/split_silos.py`, `data/scripts/feature_engineering.py`, `data/scripts/apply_scenarios.py`, `data/scripts/validate.py`. Acceptance: five SQLite DBs with documented OMOP schema; ~50 CHF + ~950 other-heart-disease per silo; ~10 amyloid total; same-seed produces identical DB hashes; `validate.py` confirms all four planted scenarios are recoverable centrally. Detailed instructions: [`data/README.md`](data/README.md). Depends on: P1.
 
 **P3. Silo runtime skeleton + schema validator.** FastAPI silo with `POST /execute(plan) → SufficientStats`; stub stats; egress validator. Files: `backend/silos/runner.py`, `backend/silos/schema.py`, `backend/silos/configs/riverside.yaml`, `tests/test_silo_runner.py`. Acceptance: returns shape-mismatched response → validator rejects. Depends on: P1.
 
