@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+*.egg-info/
+*.egg
+.pytest_cache/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Data layer outputs (reproducible from data/scripts/)
+data/raw/
+data/silos/*.db
+data/silos/*.db-journal
+data/silos/*.db-wal
+data/silos/*.db-shm

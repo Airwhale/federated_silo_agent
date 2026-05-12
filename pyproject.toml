@@ -1,0 +1,15 @@
+[project]
+name = "federated-silo-agent"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.5.2",
+    "numpy>=2.4.4",
+    "pandas>=3.0.3",
+    "pyarrow>=24.0.0",
+    "requests>=2.34.0",
+    "scipy>=1.17.1",
+    "sqlite-utils>=3.39",
+    "tqdm>=4.67.3",
+]
