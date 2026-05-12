@@ -122,7 +122,7 @@ The single-vertical choice trades the "platform breadth" pitch beat for **demo c
 
 ### 4.3 Success metrics
 
-- **Build:** all 37 parts complete by Day 7 evening (with later tests P34–P37 explicitly stretch-tier).
+- **Build:** all 40 parts complete by Day 7 evening (with later tests P34–P37 explicitly stretch-tier).
 - **Correctness:** federated math equivalence test passes for every operation. Six block tests pass.
 - **Demo:** 3:00 ± 0:15 in three consecutive dry-runs.
 - **Submission:** live demo + recorded screencast + README + pitch deck submitted before May 19.
@@ -149,7 +149,7 @@ Three orthogonal mechanisms each doing what they're best at: **Lobster Trap poli
 2. **Honest about guarantees.** State what each mechanism does and doesn't protect. The threat model is part of the pitch, not a hidden footnote.
 3. **AI at the edges, math in the middle.** The LLM translates between NL and structured representations; it doesn't compute statistics. This bounds the LLM's blast radius and keeps results numerically verifiable.
 4. **Open substrates over proprietary stacks.** Lobster Trap, OpenDP, Synthea, Anthropic SDK, Pydantic, FastAPI — all open or vendor-portable.
-5. **Composable parts, single responsibility.** Each statistic computer is one file. Each silo is one process. Build is decomposed into ~37 self-contained units.
+5. **Composable parts, single responsibility.** Each statistic computer is one file. Each silo is one process. Build is decomposed into ~40 self-contained units.
 6. **Provable equivalence.** Federated math with DP off must be bit-identical to centralized analysis. If that fails, nothing else matters.
 7. **Audit is product.** The audit panel isn't an afterthought; it's the demo's signature visual and the artifact a compliance officer or HIPAA auditor would inspect.
 8. **LLMs have latitude over plans; plans don't have latitude over data.** The set of computational primitives (sufficient-statistic shapes) is a fixed contract between aggregator and silos. LLMs can compose, sequence, and translate queries against that contract — they cannot author novel queries that emit unbounded shapes. This preserves DP calibration, schema validation, auditability, and adversarial resistance. Practical consequences: planner can emit DAGs of primitives (P28); silos can resolve fuzzy filters against schema metadata (P29).
@@ -267,9 +267,12 @@ Privacy is paid once at silo egress (DP). Combine + narrate are post-processing 
 | Operation | Per-silo sufficient stats | Combine | DP |
 |---|---|---|---|
 | `count` | `n_i` | `Σ n_i` | Laplace |
-| `mean(x)` | `Σx_i, n_i` | divide | Laplace on `Σx` |
+| `mean(x)` (returns mean + SEM = σ/√n) | `Σx_i, n_i` | divide | Laplace on `Σx` |
+| `proportion(numerator, denominator)` (Wilson + Clopper-Pearson CIs) | per-silo `(numerator_count, denominator_count)` | sum, divide, compute CI | Laplace per count |
 | `variance(x)` / `stddev(x)` | `Σx_i, Σx²_i, n_i` | combine to pooled variance | Gaussian on both sums |
-| `quantile(x, q)` (median, IQR, %iles) | fine-grain DP histogram of `x` | sum histograms, interpolate quantiles | Laplace per bucket |
+| `skewness(x)` / `kurtosis(x)` | `Σx_i, Σx²_i, Σx³_i, Σx⁴_i, n_i` | combine central moments | Gaussian on each sum |
+| `quantile(x, q)` (median, IQR, %iles, **min @ q=0, max @ q=100**) | fine-grain DP histogram of `x` | sum histograms, interpolate quantiles | Laplace per bucket |
+| `incidence_rate(event_predicate, person_time_expr)` (Poisson CI) | per-silo `(event_count, total_person_time, n_patients)` | sum, divide, compute Garwood CI | Laplace on counts + person-time |
 | `histogram(x, bins)` | bucket counts | sum vectors | Laplace per bucket |
 | `pearson(x,y)` | `Σx, Σy, Σxy, Σx², Σy², n_i` | sum + formula | Gaussian per cross-product |
 | `t_test(x ~ group)` (Welch's) | per-group `Σx, Σx², n` | combine to pooled means + vars, then `t, df, p` | Gaussian on group sums |
@@ -369,8 +372,11 @@ Designed deliberately into the otherwise-realistic Synthea-derived data so the d
 
 **New-primitive equivalence checks** (each compared to a centralized reference on pooled silo data, DP off):
 
-- **P30 variance** — federated `var` matches `numpy.var(ddof=1)` within 1e-9.
-- **P31 quantile** — federated median, Q25, Q75 within ±5% of `numpy.percentile` (interpolation error from binning).
+- **P30 variance / SEM** — federated `var` matches `numpy.var(ddof=1)` within 1e-9; SEM matches `scipy.stats.sem`.
+- **P38 proportion** — federated proportion + Wilson CI matches `statsmodels.stats.proportion.proportion_confint(method='wilson')` within tolerance; Clopper-Pearson option works.
+- **P39 skewness / kurtosis** — federated values match `scipy.stats.skew` and `scipy.stats.kurtosis` within 1e-6.
+- **P31 quantile** — federated median, Q25, Q75 within ±5% of `numpy.percentile` (interpolation error from binning); min/max within clip range.
+- **P40 incidence rate** — federated `events / person-time` matches centralized calculation within 1e-9; Garwood CI bounds match `scipy.stats.chi2.ppf` reference.
 - **P32 t-test** — federated `t`, df, p-value match `scipy.stats.ttest_ind(equal_var=False)` within 1e-9.
 - **P33 chi-square** — federated χ² and p-value match `scipy.stats.chi2_contingency` within 1e-9; Fisher's exact fallback triggers correctly when E < 5.
 - **P34 cluster-robust SEs** — match `statsmodels.OLS.fit().get_robustcov_results(cov_type='cluster')` and `Logit.fit(...).get_robustcov_results(cov_type='cluster')`.
@@ -461,27 +467,36 @@ P14 (differencing)            ▼
                   │
                   ▼
    ┌──────────────┴──────────────┐
-   │  Tier-1 statistical primitives (easy → harder)
+   │  Statistical primitives (easy → harder)
    ▼
-   P30 (variance / stddev)            ← uses P4, P12
+   P30 (variance / stddev / SEM)      ← uses P4, P12
    │
    ▼
-   P31 (quantile / median / IQR)     ← extends histogram + P12
+   P38 (proportion w/ Wilson CI)      ← uses P4
    │
    ▼
-   P32 (Welch's t-test)              ← uses P30
+   P39 (skewness / kurtosis)          ← uses P30
    │
    ▼
-   P33 (chi-square)                  ← uses histogram pattern
+   P31 (quantile / median / IQR / min / max)  ← extends histogram + P12
    │
    ▼
-   P34 (cluster-robust SEs)          ← extends P15 (OLS), P18 (logistic)
+   P40 (incidence rate, person-time)  ← uses P4, P12
    │
    ▼
-   P35 (AUC / ROC)                   ← uses P18 (logistic)
+   P32 (Welch's t-test)               ← uses P30
    │
    ▼
-   P36 (Mann-Whitney U)              ← uses P31 (quantile/histogram)
+   P33 (chi-square)                   ← uses histogram pattern
+   │
+   ▼
+   P34 (cluster-robust SEs)           ← extends P15 (OLS), P18 (logistic)
+   │
+   ▼
+   P35 (AUC / ROC)                    ← uses P18 (logistic)
+   │
+   ▼
+   P36 (Mann-Whitney U)               ← uses P31 (quantile/histogram)
    │
    ▼
    P37 (mixed-effects, random intercept) ← uses P15, P12, P13
@@ -503,7 +518,7 @@ P14 (differencing)            ▼
           P27 (README + pitch)
 ```
 
-### 11.2 The 37 parts
+### 11.2 The 40 parts
 
 Each part is a self-contained "build this thing" unit. When feeding to me, paste the part heading and bullets; I'll have the design context above.
 
@@ -571,9 +586,9 @@ Each part is a self-contained "build this thing" unit. When feeding to me, paste
 
 These extend the primitive set into a full clinical-research toolkit (Table 1 reporting, group comparisons, robust SEs, mixed-effects modeling). Order is by implementation difficulty, with dependencies respected — each part only depends on parts above it.
 
-**P30. Variance / standard deviation primitive.** Pooled variance and stddev across silos for a single variable; the foundation for almost every other test. Files: `backend/silos/stats/variance.py`, `backend/aggregator/combine/variance.py`, `tests/test_variance.py`. Updates `shared/plans.py` to add `VarianceStats {sum_x: float, sum_x_sq: float, n: int, dp_params}`. Approach: each silo computes `Σx, Σx², n` under the plan's filter; aggregator combines as `var = (Σx² − (Σx)²/n) / (n−1)`. Gaussian DP on both sums with split budget. Acceptance: federated variance matches `numpy.var(ddof=1)` on pooled data within 1e-9 (DP off); empirical noise distribution matches theoretical Gaussian (KS p>0.05). Depends on: P1, P3, P4, P12. **Difficulty: trivial** (~0.5 day).
+**P30. Variance / standard deviation / SEM primitive.** Pooled variance, stddev, and standard error of the mean across silos for a single variable; the foundation for almost every other test. Also augments `mean(x)` to return `mean ± SEM` alongside the point estimate. Files: `backend/silos/stats/variance.py`, `backend/aggregator/combine/variance.py`, updates to `backend/aggregator/combine/mean.py` (return SEM), `tests/test_variance.py`. Updates `shared/plans.py` to add `VarianceStats {sum_x: float, sum_x_sq: float, n: int, dp_params}`. Approach: each silo computes `Σx, Σx², n` under the plan's filter; aggregator combines as `var = (Σx² − (Σx)²/n) / (n−1)`, `SEM = stddev / √n`. Gaussian DP on both sums with split budget. Acceptance: federated variance matches `numpy.var(ddof=1)` on pooled data within 1e-9 (DP off); SEM matches `scipy.stats.sem`; empirical noise distribution matches theoretical Gaussian (KS p>0.05). Depends on: P1, P3, P4, P12. **Difficulty: trivial** (~0.5 day).
 
-**P31. Quantile primitive (median, IQR, percentiles).** Approximate quantile estimation under DP — the missing piece for clinical Table 1 reporting of skewed distributions. Files: `backend/silos/stats/quantile.py`, `backend/aggregator/combine/quantile.py`, `tests/test_quantile.py`. Updates `shared/plans.py` for `QuantileStats {bucket_counts: list[int], range_lo, range_hi, dp_params}`. Approach: each silo emits a DP histogram with ~100 fine bins over the variable's clip range; aggregator sums element-wise, computes cumulative counts, interpolates the requested quantile(s). Bias decreases with bin count; noise increases — pick ~100 as a default. Acceptance: federated median of LOS within ±5% of centralized median (DP off, bit-equal); IQR computed and rendered. Depends on: P1, P3, P4, P12. **Difficulty: small** (~1 day).
+**P31. Quantile primitive (median, IQR, percentiles, min, max).** Approximate quantile estimation under DP — the missing piece for clinical Table 1 reporting of skewed distributions, plus min/max via extreme quantiles. Files: `backend/silos/stats/quantile.py`, `backend/aggregator/combine/quantile.py`, `tests/test_quantile.py`. Updates `shared/plans.py` for `QuantileStats {bucket_counts: list[int], range_lo, range_hi, dp_params}` and `q: list[float]` request field. Approach: each silo emits a DP histogram with ~100 fine bins over the variable's clip range; aggregator sums element-wise, computes cumulative counts, interpolates the requested quantile(s). Supports `q=0` (min) and `q=100` (max) as special cases — these are inherently more sensitive (single record dominates), so the narrator surfaces "approximate min/max under DP" rather than reporting exact extremes. Bias decreases with bin count; noise increases — pick ~100 as a default. Acceptance: federated median of LOS within ±5% of centralized median (DP off, bit-equal); IQR computed; min/max return values within the clip range with honest CI. Depends on: P1, P3, P4, P12. **Difficulty: small** (~1 day).
 
 **P32. Two-sample Welch's t-test.** Compare a continuous outcome between two groups (e.g., GDMT-adherent vs non-adherent) with unequal variances. Files: `backend/silos/stats/ttest.py`, `backend/aggregator/combine/ttest.py`, `tests/test_ttest.py`. Updates `shared/plans.py` for `TTestStats {group_a: {sum_x, sum_x_sq, n}, group_b: {sum_x, sum_x_sq, n}, dp_params}`. Approach: plan specifies grouping variable (binary) + outcome variable. Each silo emits per-group sufficient stats. Aggregator combines, computes Welch's `t = (x̄_a − x̄_b) / √(s²_a/n_a + s²_b/n_b)` and Satterthwaite degrees of freedom; produces p-value, mean difference, 95% CI. Acceptance: federated `t` matches `scipy.stats.ttest_ind(equal_var=False)` on pooled data within DP tolerance. Depends on: P1, P3, P30. **Difficulty: small** (~0.5 day).
 
@@ -587,15 +602,28 @@ These extend the primitive set into a full clinical-research toolkit (Table 1 re
 
 **P37. Linear mixed-effects model with random hospital intercept.** Properly models hospital-level clustering by treating hospitals as a random sample with `y = Xβ + Zu + ε`, `u ~ N(0, σ²ᵤ I)`. Files: `backend/silos/stats/mixed_effects.py`, `backend/aggregator/combine/mixed_effects.py`, `tests/test_mixed_effects.py`. Updates `shared/plans.py` for `MixedEffectsIterStats` capturing per-iteration per-cluster `(XᵀX, Xᵀy, yᵀy, ZᵀX, Zᵀy, ZᵀZ, n)`. Approach: iterative REML estimation. Each iteration: aggregator broadcasts current `(β, σ²ᵤ, σ²_e)`; each silo computes its cluster contribution to the REML score equations; aggregator combines, updates variance components via REML score, refits fixed effects via GLS; iterate to convergence (typical 10–20 iters). Per-iteration DP via Gaussian on cluster-level sufficient stats. Acceptance: fixed-effect coefficients and variance components match `statsmodels.regression.mixed_linear_model.MixedLM` on pooled data within DP-noise tolerance; converges in ≤20 iterations on the CHF cohort; produces hospital-level intercept variance estimate. Depends on: P15, P12, P13, P18 (pattern). **Difficulty: high** (~2.5–3 days). *Most ambitious primitive; treat as Phase 2-stretch if Day 5 looks tight.*
 
+### 11.2.2 Additional descriptive primitives — completing the clinical reporting toolkit
+
+These three parts close out the descriptive-statistics gap a clinical researcher would notice within minutes. Each is independently small and can slot in anywhere after its dependencies are met.
+
+**P38. Proportion with Wilson and Clopper-Pearson confidence intervals.** Clinical proportions (e.g., "GDMT adherence rate," "30-day readmission rate") reported with statistically-appropriate CIs. Naive Wald CIs are wrong at small n or extreme p; Wilson is the clinical default, Clopper-Pearson the conservative option. Files: `backend/silos/stats/proportion.py`, `backend/aggregator/combine/proportion.py`, `tests/test_proportion.py`. Updates `shared/plans.py` for `ProportionStats {numerator_count: int, denominator_count: int, dp_params}` and plan fields `numerator_filter` + `denominator_filter`. Approach: each silo emits noised (numerator_count, denominator_count) under the two filters. Aggregator sums each, computes `p̂ = num / den`, then Wilson interval `(p̂ + z²/2n ± z·√(p̂(1−p̂)/n + z²/4n²)) / (1 + z²/n)`. Clopper-Pearson available as option (beta-distribution-based exact interval). Acceptance: federated proportion + Wilson CI matches `statsmodels.stats.proportion.proportion_confint(method='wilson')` on pooled data within DP tolerance; Clopper-Pearson option works; CIs are tighter than naive Wald for small n. Depends on: P1, P3, P4, P12. **Difficulty: trivial** (~0.5 day).
+
+**P39. Skewness and kurtosis.** Third and fourth standardized moments — used by clinical researchers for normality screening before choosing parametric vs. non-parametric tests (skewness near 0 + kurtosis near 3 → roughly normal → t-test acceptable; otherwise lean toward Mann-Whitney + median). Files: `backend/silos/stats/moments.py`, `backend/aggregator/combine/moments.py`, `tests/test_moments.py`. Updates `shared/plans.py` for `MomentsStats {sum_x, sum_x_sq, sum_x_cu, sum_x_qu, n, dp_params}`. Approach: each silo emits `Σx, Σx², Σx³, Σx⁴, n` under the filter. Aggregator combines to compute central moments `m_k = E[(x−μ)^k]`, then skewness = `m_3 / m_2^(3/2)` and (excess) kurtosis = `m_4 / m_2² − 3`. Gaussian DP on each sum with split budget. Acceptance: federated skewness and kurtosis match `scipy.stats.skew` and `scipy.stats.kurtosis` on pooled data within tolerance. Depends on: P1, P3, P30 (extends variance pattern), P12. **Difficulty: trivial** (~0.5 day).
+
+**P40. Incidence rate (events per person-time) with Poisson CI.** Epidemiology workhorse: "X events per 1000 person-years." The denominator is person-time-at-risk, not headcount — a per-patient observation window must be accumulated. Files: `backend/silos/stats/incidence_rate.py`, `backend/aggregator/combine/incidence_rate.py`, `tests/test_incidence_rate.py`. Updates `shared/plans.py` for `IncidenceRateStats {event_count: int, total_person_time: float, n_patients: int, dp_params}` plus plan fields `event_predicate`, `person_time_expr` (e.g., `min(observation_end, study_end) − observation_start`), `time_unit` (days / years). Approach: each silo computes per-patient person-time, accumulates `(Σ events, Σ person-time, n)` under the filter. Aggregator sums, divides for rate, computes Garwood (exact Poisson) CI for the rate from chi-square quantiles. Time-unit conversion handled in narrator (rate per 1000 person-years etc.). Acceptance: federated rate matches centralized calculation on pooled data; Garwood CI bounds correct against `scipy.stats.chi2.ppf` reference; rate-per-1000-person-years rendering reads naturally. Depends on: P1, P3, P4, P12. **Difficulty: small** (~1 day).
+
 ### 11.3 Suggested build order
 
-**Early-demo-first** (working demo as soon as possible): P0 → P1 → P2 → P3 → P4 → P5 → P7 → P8 → P9 → P10 → *(closed-form demo working)* → P11 → P12 → P13 → **P30** → **P31** → **P32** → **P33** → *(Tier-1 clinical Table-1 capability)* → P15 → P16 → *(OLS w/ DP)* → P17 → P18 → P19 → *(logistic — the hero)* → **P34** → **P35** → P14 → **P28 → P29** → **P36** → **P37** → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27.
+**Early-demo-first** (working demo as soon as possible): P0 → P1 → P2 → P3 → P4 → P5 → P7 → P8 → P9 → P10 → *(closed-form demo working)* → P11 → P12 → P13 → **P30** → **P38** → **P39** → **P31** → **P40** → **P32** → **P33** → *(Tier-1 clinical Table-1 + descriptive capability)* → P15 → P16 → *(OLS w/ DP)* → P17 → P18 → P19 → *(logistic — the hero)* → **P34** → **P35** → P14 → **P28 → P29** → **P36** → **P37** → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27.
 
-**Foundation-first** (privacy stack solid before features): P0 → P1 → P9 → P3 → P11 → P12 → P13 → P14 → *(privacy proven)* → P2 → P4 → **P30 → P31 → P32 → P33** → P5–P8 → P10 → *(closed-form demo + Table-1 tests)* → P15 → P16 → P17 → P18 → P19 → *(GLMs)* → **P34 → P35** → **P28 → P29** → **P36 → P37** → P20–P22 → P23 → P24 → P25 → P26 → P27.
+**Foundation-first** (privacy stack solid before features): P0 → P1 → P9 → P3 → P11 → P12 → P13 → P14 → *(privacy proven)* → P2 → P4 → **P30 → P38 → P39 → P31 → P40 → P32 → P33** → P5–P8 → P10 → *(closed-form + descriptive + Table-1 tests)* → P15 → P16 → P17 → P18 → P19 → *(GLMs)* → **P34 → P35** → **P28 → P29** → **P36 → P37** → P20–P22 → P23 → P24 → P25 → P26 → P27.
 
-**Difficulty-ordered (the new tests, with dependencies respected):**
-- **P30** Variance / stddev — trivial (~0.5 day) — deps: P4, P12
-- **P31** Quantile / median / IQR — small (~1 day) — deps: P4, P12
+**Difficulty-ordered (all new statistical primitives, with dependencies respected):**
+- **P30** Variance / stddev / SEM — trivial (~0.5 day) — deps: P4, P12
+- **P38** Proportion with Wilson + Clopper-Pearson CI — trivial (~0.5 day) — deps: P4, P12
+- **P39** Skewness / kurtosis — trivial (~0.5 day) — deps: P30
+- **P31** Quantile (median / IQR / min / max) — small (~1 day) — deps: P4, P12
+- **P40** Incidence rate (events per person-time, Garwood CI) — small (~1 day) — deps: P4, P12
 - **P32** Welch's t-test — small (~0.5 day) — deps: P30
 - **P33** Chi-square / Fisher's — small (~0.5 day) — deps: P4, P12
 - **P34** Cluster-robust SEs for OLS / logistic — small-medium (~1 day) — deps: P15, P18
@@ -604,7 +632,7 @@ These extend the primitive set into a full clinical-research toolkit (Table 1 re
 - **P37** Mixed-effects (random intercept) — high (~2.5–3 days) — deps: P15, P12, P13
 
 **Notes on placement:**
-- **P30–P33 land before the GLM stack** in the early-demo-first order because they unlock a complete clinical Table-1 capability in the demo (mean ± SD with t-test p-values for continuous variables, N (%) with χ² for categorical, median [IQR] for skewed continuous). Table 1 is the single most-recognized clinical-research artifact; landing it early makes the demo immediately credible.
+- **P30, P38, P39, P31, P40, P32, P33 land before the GLM stack** in the early-demo-first order because together they unlock a complete clinical descriptive + Table-1 capability (mean ± SD ± SEM, median [IQR], min/max, proportions with Wilson CI, incidence rates with Poisson CI, skewness/kurtosis for normality screening, t-test p-values for continuous group comparisons, χ² for categorical). Table 1 is the single most-recognized clinical-research artifact; landing the descriptive + comparative stack early makes the demo immediately credible.
 - **P34 lands right after the GLM stack** because it's a 1-line addition to existing OLS/logistic results (`cluster_se=True` flag) that produces visibly different (wider, correct) CIs — a high-credibility flex for clinical audiences.
 - **P35 (AUC) lands right after logistic** because every binary classifier needs it.
 - **P36 (Mann-Whitney) requires P31** (uses the histogram/quantile infrastructure).
