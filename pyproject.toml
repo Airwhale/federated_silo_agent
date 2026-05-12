@@ -1,7 +1,7 @@
 [project]
 name = "federated-silo-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Federated privacy-preserving clinical analytics platform"
 requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.5.2",
@@ -13,3 +13,12 @@ dependencies = [
     "sqlite-utils>=3.39",
     "tqdm>=4.67.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
