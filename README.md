@@ -1,24 +1,24 @@
 # federated_silo_agent
 
-**Privacy-preserving federated statistics for clinical research, with a natural-language interface.**
+**Multi-agent cross-bank AML investigation system with privacy-preserving federation.**
 
-Ask a question in English. The system translates it into a structured computation, dispatches sufficient-statistic computations to each hospital silo, applies calibrated differential privacy at every silo egress, sums the results, and narrates the answer back. **No hospital ever sees another's raw data.** Every query is auditable. Privacy budget is visibly bounded across queries.
+Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist agents (graph analyst, sanctions screener, SAR drafter, compliance auditor) compose investigations across the network. **Every cross-bank conversation is policed by Veea Lobster Trap. Aggregate transaction patterns are shared under differential privacy. No customer data ever crosses bank boundaries.**
 
-Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11–19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: use **Gemini** through Google AI Studio / Gemini API for the planner and narrator, and use **Veea Lobster Trap** for visible LLM-channel governance and audit metadata. See [`plan.md`](./plan.md) for the full product design doc and 40-part build plan.
+Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11–19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: **Gemini** powers all six agents (Google partner award); **Veea Lobster Trap** is the policy substrate (Veea partner award). Pitch comp: **Verafin → Nasdaq $2.75B (2020)** for the non-private version of exactly this. See [`plan.md`](./plan.md) for the full product design doc.
+
+> **Pivot note (May 12, 2026):** this project pivoted from clinical federated stats (Synthea-OMOP, CHF cohort) to cross-bank AML mid-build, when the AI-hackathon framing made the multi-agent texture of AML the better fit. Clinical work is preserved in [`docs/clinical-archive/`](docs/clinical-archive/) and [`data/scripts/clinical-archive/`](data/scripts/clinical-archive/). Mermaid diagrams below still reflect the prior clinical architecture and will be replaced with AML versions during Day 3 of the new build.
 
 ---
 
 ## What this is
 
-A federated computation platform for clinical analytics. Three layers, cleanly separated:
+A multi-agent federated AML investigation platform. Three layers:
 
-1. **Natural-language translation** at the edges. Gemini converts the researcher's question into a structured `ComputationPlan`. After the math runs, Gemini converts the numerical result back into English. Both LLM calls are policed by [Veea's Lobster Trap](https://github.com/veeainc/lobstertrap).
-2. **Deterministic federated computation** in the middle. Each silo computes only the sufficient statistics required by the plan (`XᵀX`, `Xᵀy`, `n` for OLS; per-iteration gradient + Hessian for logistic; bucket counts for histograms; etc.). The aggregator sums them numerically. No LLM in the math path.
-3. **Privacy enforcement at silo egress.** Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp). Per-user privacy budget tracked across queries with composition combinators. Schema validation prevents structural leakage. Differencing-pattern auditor flags adversarial query sequences.
+1. **Six agents talking to each other.** Two bank-local agents (transaction monitoring + investigator) at each of three banks, plus four federation-layer agents (cross-bank coordinator, graph analyst, sanctions screener, SAR drafter, compliance auditor) in an assumed TEE. All agents are powered by Gemini.
+2. **Lobster Trap polices every inter-agent message.** §314(b) purpose-declaration enforcement, customer-name redaction on cross-bank queries, role-based authorization (only investigator agents can send cross-bank queries; transaction-monitoring agents can't).
+3. **Privacy enforcement at silo egress.** Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp) on aggregate pattern signals. Per-user privacy budget tracked across queries. Schema validation prevents structural leakage of raw transactions.
 
-**The demo cohort:** federated outcomes analytics on a Congestive Heart Failure (CHF) study population across **five** synthetic hospitals (Riverside General, Lakeside Medical, Summit Community Health, Fairview Regional, Coastal Medical Center) using [Synthea-OMOP](https://registry.opendata.aws/synthea-omop/) data in OHDSI [OMOP CDM v5.4](https://ohdsi.github.io/CommonDataModel/cdm54.html) format. Each silo holds 363 cardiac patients including ~50 synthetically-labeled CHF cases (~251 CHF pooled across silos). Per-silo CHF inference is underpowered; pooled CIs visibly tighten in the federated logistic demo — **that confidence-interval shrinkage is the demo's headline AI/stats moment.**
-
-**Honest statistical caveat** (also in [`data/README.md`](data/README.md)): the five silos share an underlying source pool of 363 unique cardiac patients with per-silo `person_id` offsets and small demographic perturbations. From the federation engine's perspective the silos are independent (each holds its own data, contributes its own sufficient statistics, applies its own DP). Statistically, the silos are *not* independent samples — so pooled CIs are tighter than what real distinct hospital populations would produce. The demo proves federated-computation correctness and the privacy/governance story, *not* real multi-site statistical inference. The same pipeline produces real independent-cohort inference when the synthetic data is swapped for real OMOP data from distinct hospitals — only the `data/` layer changes.
+**The demo scenario:** a 5-entity structuring ring spanning all three banks (Bank Alpha, Bank Beta, Bank Gamma). Each entity holds accounts at exactly two of the three banks. Sub-$10K transfers cycle through the ring over a 90-day window. Per-bank velocity stays just below each bank's individual alert threshold, so the ring is invisible to any single bank. **Federated agent coordination surfaces the ring in a 3-minute demo.** One entity has a PEP relation that the sanctions agent flags.
 
 ---
 
@@ -26,11 +26,11 @@ A federated computation platform for clinical analytics. Three layers, cleanly s
 
 | Persona | What they do | What this gives them |
 |---|---|---|
-| **Outcomes researcher** at a multi-site research network member | Studies clinical questions across hospitals; today blocked by months of IRB / data-use agreement negotiation; rare-cohort studies statistically underpowered at any single site | Cohort histograms, regressions, and survival-adjacent analyses in minutes, with audit trails their IRB would accept |
-| **Quality officer / CMIO** | Benchmarks hospital performance on CMS quality measures, Joint Commission accreditation, value-based-care contracts | Real-time peer-benchmark comparisons on equivalent patient populations without uploading any records to a third-party benchmarker |
-| **Compliance / Privacy officer** | Reviews data-sharing arrangements for HIPAA readiness | Defensible audit log demonstrating that only DP-noised aggregate statistics — never raw rows — ever left the local environment |
+| **AML investigator** at a participating bank | BSA/AML-certified specialist clearing a daily docket of alerts, most of which are false positives | Cross-bank investigation in minutes via §314(b)-authorized agent coordination, without exposing customer identities unless mutual leads warrant escalation |
+| **BSA officer / Chief Compliance Officer** | Accountable for the bank's AML compliance posture; signs SARs; faces personal liability | Audit trail demonstrating every cross-bank disclosure was within §314(b) bounds — regulator-readable record |
+| **AML consortium operator** (e.g., what Verafin built for credit unions) | Runs federation infrastructure on behalf of member banks | Privacy-preserving primitives that make §314(b) actually usable — without raw customer-data exchange |
 
-**Not for** clinicians wanting individual case lookups, data scientists wanting raw exports, or single-hospital analytics where federation is overkill.
+**Not for** banks wanting full customer-data sharing (out of scope by design — the federation's value is *not* sharing raw data), single-bank AML tooling, or real-time payment authorization. We're investigative, not authorization-time.
 
 ---
 

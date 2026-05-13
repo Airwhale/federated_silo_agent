@@ -1,4 +1,18 @@
-"""Content-based fingerprint checksum of the five hospital silo datasets.
+"""Content-based fingerprint checksum of the bank silo datasets.
+
+**Status (post-AML pivot):** the canonical hash here references the prior
+clinical (Synthea-OMOP) build and will not match the new AML dataset.
+The test now skips when the new bank SQLite databases are not yet
+present at ``data/silos/``. Once the AML data pipeline (Day 1 build —
+see plan.md Section 11) produces three bank SQLite databases, the
+``compute_fingerprint`` body should be rewritten to fingerprint the
+bank-specific tables (customers, accounts, transactions, suspicious_signals)
+and the canonical hash regenerated with::
+
+    uv run python tests/test_data_checksum.py --update
+
+The clinical fingerprint shape (chf_cohort_features + condition_occurrence
++ person) is preserved in git history at commit 5bf0283.
 
 What this test does
 -------------------
@@ -53,14 +67,20 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SILOS_DIR = REPO_ROOT / "data" / "silos"
 
-SILO_IDS = ["riverside", "lakeside", "summit", "fairview", "coastal"]
+# Bank silo IDs for the AML build (Day 1 work). The clinical silo IDs
+# (riverside, lakeside, summit, fairview, coastal) are preserved in git
+# history at commit 5bf0283 along with the matching fingerprint hash.
+SILO_IDS = ["bank_alpha", "bank_beta", "bank_gamma"]
 
 # ---------------------------------------------------------------------------
 # The known-good fingerprint hash, captured against the canonical build.
 # Update with ``python tests/test_data_checksum.py --update`` when you
 # intentionally change the data pipeline.
 # ---------------------------------------------------------------------------
-EXPECTED_FINGERPRINT_HASH = "b9093e83bfc97e3fac35ebec30e3b58109a58776c553c36eac258ca2463259b5"
+# Reset to None after the AML pivot. Will be regenerated once the bank
+# SQLite databases exist and ``compute_fingerprint`` is rewritten for the
+# AML schema. Until then the test skips.
+EXPECTED_FINGERPRINT_HASH: str | None = None
 
 
 def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
@@ -163,12 +183,20 @@ def _databases_present() -> bool:
 
 def test_data_checksum() -> None:
     """The dataset fingerprint matches the canonical expected value."""
+    if EXPECTED_FINGERPRINT_HASH is None:
+        pytest.skip(
+            "EXPECTED_FINGERPRINT_HASH is None — the AML dataset is not yet "
+            "built. Day 1 of the post-pivot build adds data/scripts/build_banks.py "
+            "and data/scripts/plant_ring.py; once those exist and the SQLite "
+            "databases are produced, regenerate the hash with:\n"
+            "    uv run python tests/test_data_checksum.py --update"
+        )
+
     if not _databases_present():
         pytest.skip(
             "data/silos/*.db not present. Build first with:\n"
-            "    uv run python data/scripts/build_silos.py\n"
-            "    uv run python data/scripts/feature_engineering.py\n"
-            "    uv run python data/scripts/apply_scenarios.py"
+            "    uv run python data/scripts/build_banks.py\n"
+            "    uv run python data/scripts/plant_ring.py"
         )
 
     fp = compute_fingerprint()

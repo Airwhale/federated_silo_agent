@@ -1,0 +1,869 @@
+# Federated Privacy-Preserving Clinical Analytics — Product Design Doc
+
+> *This document follows a standard product spec structure. **Discovery** sections (Problem, Users, Market) establish what's true about the world. **Define** sections (Goals, Principles) commit to what we're optimizing. **Design** sections (Solution, UX, System) commit to how. **Build / Validate / Launch** sections turn the design into action. **Risks** and **Open Questions** are honest about what we don't yet know. The discipline is: don't skip phases, and don't mix them — research conclusions belong in Discovery, design decisions belong in Design, etc.*
+
+---
+
+## 0. TL;DR
+
+A multi-party federated computation system that lets a clinical researcher run real statistics — means, histograms, regressions, correlations — across multiple hospitals' private patient data, using natural language. No hospital sees another's raw records. Differential privacy bounds leakage even across many queries. Lobster Trap polices the LLM channels. **Demo vertical: federated outcomes analytics on a CHF (congestive heart failure) cohort across five synthetic hospital silos** (data derived from Synthea-OMOP via the pipeline in `data/`). Submission: TechEx hackathon, May 19, 2026.
+
+---
+
+## 1. Problem & Opportunity *(Discovery)*
+
+> *Purpose of this section: establish the user pain that exists in the world today, independent of any solution.*
+
+### 1.1 The pain
+
+Clinical researchers and quality officers regularly need to answer questions across multiple hospitals' patient populations: comparative effectiveness, outcomes benchmarking, rare-disease cohort pooling, post-market drug surveillance, quality measurement. Today this is hard because:
+
+- **IRB-mediated raw-data sharing** is slow (months for the simplest study), expensive (regulatory and data-management overhead), and not all studies can clear it.
+- **Health Information Exchanges (HIEs)** centralize patient records, but participation is uneven, data quality varies, and HIE governance is its own friction.
+- **Honest aggregators / trusted-intermediary models** (Datavant, Truveta, Aetion, IQVIA) require ingestion of raw or tokenized data; even tokenized data raises re-identification concerns under HIPAA Safe Harbor reasoning.
+- **Statistical underpowering for rare cohorts** is the structural problem. Any single hospital has too few cases of rare CHF subtypes, rare-disease cohorts, or specific intervention/outcome combinations to draw confident conclusions. Pooling is the only way — and pooling without privacy guarantees is a non-starter.
+- **No principled privacy guarantee** in current data-sharing arrangements. "De-identified" datasets are vulnerable to multi-query inference (Sweeney's k-anonymity attacks, differencing attacks on aggregate queries, etc.).
+
+### 1.2 What's changed (why now)
+
+- **Regulatory pressure on raw-data sharing.** HIPAA Safe Harbor reasoning is increasingly contested for "de-identified" data; the 21st Century Cures Act and ONC information-blocking rules sit alongside ongoing HHS scrutiny of aggregator practices.
+- **Differential privacy is mature.** OpenDP (NSF + Microsoft + Harvard), OpenMined, and Google's DP libraries have moved DP from research into production-ready primitives.
+- **LLMs make statistics accessible.** Clinical researchers, quality officers, and CMIOs increasingly want NL access to their own and federated data rather than going through SQL/Python intermediaries.
+- **Open governance primitives are emerging.** Veea's Lobster Trap is a current example of an open policy-on-LLM-channel substrate.
+
+The combination is what makes this build interesting *now*.
+
+### 1.3 Demo opportunity (hackathon-specific)
+
+TechEx Intelligent Enterprise Solutions Hackathon, May 11–19, 2026. The submission should choose **Track 4: Data & Intelligence** as the primary track: the product is an analytics agent for natural-language querying over governed data, with a federated data pipeline and auditable aggregate analytics. The same build should also be competitive for partner awards: **Gemini** powers the planner and narrator through Google AI Studio / Gemini API, while **Veea Lobster Trap** visibly governs the LLM channel with HIPAA-style policy blocks and audit metadata. **The hackathon is a forcing function** to build something demonstrably real in 8 days, not a strategy in itself.
+
+---
+
+## 2. Users & Jobs-to-be-Done *(Define)*
+
+> *Purpose: name the specific people who will use this and what specific jobs they're trying to get done.*
+
+### 2.1 Primary personas (demo vertical)
+
+**P1: Outcomes researcher at a hospital that's part of a multi-site research network.** PhD or MD-PhD; comfortable with biostatistics, GLMs, propensity scoring. Currently: cohort studies require IRB-approved data-use agreements that take months; rare-cohort studies are statistically underpowered because no single site has enough cases. *Job-to-be-done:* "When I'm studying a clinical question across the network, I want to run logistic regressions and pull cohort histograms in minutes — not after 6 months of IRB and data-use negotiation — so I can iterate on hypotheses while they're still timely."
+
+**P2: Quality officer or CMIO at a member hospital.** MD or MD-MBA; cares about CMS quality measures (readmissions, mortality, complications), Joint Commission accreditation, and value-based-care contracts that depend on benchmarked performance. Currently: receives benchmarks from CMS / HEDIS / external vendors with months of lag and limited segmentation. *Job-to-be-done:* "When I'm preparing for a board update on our CHF program, I want to see how our 30-day readmission rate compares to peer hospitals on equivalent patient populations — adjusted for case mix — without uploading my patients' records to a third-party benchmarker."
+
+### 2.2 Secondary personas (post-hackathon, slide deck only)
+
+- Compliance / Privacy Officer reviewing the audit trail for HIPAA readiness.
+- Research network operator who runs the federation infrastructure as a service.
+- Pharma / device sponsor doing post-market surveillance on a multi-site cohort.
+- Regulator (FDA, CMS) wanting industry statistics without raw-data submission.
+
+### 2.3 Anti-personas
+
+We're explicitly *not* serving:
+- Clinicians who want individual case lookups across hospitals. The whole point is they don't get individuated records.
+- Data scientists who want raw data export for their own modeling.
+- Single-hospital internal analytics use cases. Federation is overkill.
+
+---
+
+## 3. Market Context *(Discovery)*
+
+> *Purpose: prove the market exists by pointing at money already changing hands for adjacent solutions.*
+
+### 3.1 Comparable willingness-to-pay
+
+| Market | Annual scale | Demonstrated WTP signal |
+|---|---|---|
+| Healthcare analytics broadly | $50B+ market (US healthcare spend ~$4.5T) | IQVIA $14B revenue |
+| Tokenized/de-identified data aggregators | Multi-billion | **Datavant ~$7B valuation (2021)** |
+| Federated medical research | Pre-revenue → growing | **Owkin $350M raised; Truveta $200M+ raised; Aetion $77M; Komodo Health $200M+; Lifebit, TripleBlind, Beekeeper AI all funded** |
+| Real-world evidence (RWE) | $10B/yr pharma RWE spend | Flatiron → Roche $1.9B (2018) |
+| Quality / outcomes benchmarking | Sub-segment of analytics | CMS publishes; commercial vendors (Premier, Vizient) operate |
+
+The federated-medical-research subsector is the most directly relevant comparison. It is **well-validated as fundable** — multiple companies raised at unicorn or near-unicorn valuations doing flavors of this. But it's also visibly competitive. Our edge isn't "first to federated medical data" — it's "LLM-mediated NL interface + open Lobster Trap policy substrate + provable DP composition," which the established players don't ship cleanly.
+
+### 3.2 Why a single healthcare vertical for the demo
+
+| Criterion | Score |
+|---|---|
+| Buyer math literacy (sales-cycle friction) | High (outcomes researcher, CMIO) |
+| Demo viscerality (blocked-attack moments) | High — PHI extraction attempts are visceral |
+| Synthetic data feasibility (8-day budget) | **Excellent** — Synthea generates clinical data off the shelf |
+| WTP signal strength | Strong (Datavant $7B comp; Truveta / Aetion / Owkin all funded) |
+| Founder-market fit | Strong (healthcare domain expertise) |
+| HIPAA pack directly named in Veea brief | Yes |
+
+The single-vertical choice trades the "platform breadth" pitch beat for **demo confidence and synthetic-data cost savings**. We claim cross-vertical extensibility in the slide deck (banking AML, P&C insurance, cyber insurance, supply chain, etc.) without building those demos.
+
+---
+
+## 4. Goals & Non-goals *(Define)*
+
+> *Purpose: commit to what we're optimizing. Without explicit non-goals, scope creeps.*
+
+### 4.1 Goals
+
+1. **Demonstrate end-to-end federated computation** with formal correctness (federated math = centralized math when DP is off, bit-identical within tolerance).
+2. **Demonstrate calibrated differential privacy** with composition tracking that bounds multi-query leakage.
+3. **Demonstrate a Gemini-powered NL interface** that a clinical researcher could plausibly use without knowing SQL.
+4. **Demonstrate Lobster Trap as the open policy substrate** for the LLM channels, integrated with structural defenses (schema, DP) for the numerical channels — pitched explicitly as a **HIPAA-compliant federated analytics platform**.
+5. **Win or place at TechEx** by being one of the few entries with substantive math under the hood.
+6. **Produce defensible artifacts** (working demo, README, pitch deck, screencast) for post-hackathon design-partner conversations.
+
+### 4.2 Non-goals
+
+1. **Production-grade security or scale.** Single-machine demo, Synthea-generated data, no TEE actually built (assumed in pitch).
+2. **Cryptographic privacy** (MPC, FHE, secure aggregation). Orthogonal layer; future work.
+3. **Cox proportional hazards / survival models.** Doesn't decompose into clean sufficient statistics across silos.
+4. **Logistic via DP-SGD federated averaging.** We use Newton-Raphson on summed Hessians.
+5. **Multi-vertical demo coverage.** One demo vertical (healthcare/CHF); other verticals appear in the slide deck only. We do not build banking / insurance / cyber demos.
+6. **Replacing Lobster Trap.** We use it as-is, work around its limitations rather than fork.
+7. **LLM-authored ad-hoc queries against raw data.** Silos do not run LLM-generated SQL. LLMs translate, plan, and resolve; they don't read rows. (Design Principle 8.)
+8. **Clinical decision support.** Outputs are aggregate statistics for research / quality / benchmarking — not patient-level treatment recommendations. Demo includes a footer disclaimer.
+
+### 4.3 Success metrics
+
+- **Build:** all 40 parts complete by Day 7 evening (with later tests P34–P37 explicitly stretch-tier).
+- **Correctness:** federated math equivalence test passes for every operation. Six block tests pass.
+- **Demo:** 3:00 ± 0:15 in three consecutive dry-runs.
+- **Submission:** live demo + recorded screencast + README + pitch deck submitted before May 19.
+
+---
+
+## 5. Solution Thesis *(Ideate → Design)*
+
+> *Purpose: state the chosen approach in one paragraph, with the reasoning that anchors it.*
+
+A three-layer architecture. **Natural-language translation** at the edges (planner LLM converts NL to a structured `ComputationPlan`; narrator LLM converts numerical results back to English) — both LLM call sites flow through Lobster Trap. **Deterministic federated computation** in the middle (silos compute only sufficient statistics; aggregator sums and finalizes; no LLM in the math path). **Privacy enforcement at silo egress** (calibrated Gaussian noise via OpenDP; per-user budget tracked across queries via composition combinators; schema validation prevents structural leakage). The audit log records every step.
+
+Three orthogonal mechanisms each doing what they're best at: **Lobster Trap polices NL channels • schema validation polices numerical channels • differential privacy polices aggregate leakage**. Defense in depth that's honest about each mechanism's limits.
+
+**Demo vertical:** a federated cohort-analytics flow over five Synthea-derived hospital silos focused on a CHF (congestive heart failure) study population. Hero query: federated logistic regression of 30-day readmission on patient features.
+
+---
+
+## 6. Design Principles *(Define)*
+
+> *Purpose: name the constraints that drive every downstream design decision.*
+
+1. **Privacy-by-default.** No raw rows ever leave a silo. Schema validation enforces this structurally, not by convention.
+2. **Honest about guarantees.** State what each mechanism does and doesn't protect. The threat model is part of the pitch, not a hidden footnote.
+3. **AI at the edges, math in the middle.** The LLM translates between NL and structured representations; it doesn't compute statistics. This bounds the LLM's blast radius and keeps results numerically verifiable.
+4. **Open and sponsor-aligned substrates over proprietary lock-in.** Gemini API / Google AI Studio, Lobster Trap, LiteLLM, OpenDP, Synthea-OMOP, Pydantic, FastAPI — all open, sponsor-aligned, or vendor-portable at the boundary.
+5. **Composable parts, single responsibility.** Each statistic computer is one file. Each silo is one process. Build is decomposed into ~40 self-contained units.
+6. **Provable equivalence.** Federated math with DP off must be bit-identical to centralized analysis. If that fails, nothing else matters.
+7. **Audit is product.** The audit panel isn't an afterthought; it's the demo's signature visual and the artifact a compliance officer or HIPAA auditor would inspect.
+8. **LLMs have latitude over plans; plans don't have latitude over data.** The set of computational primitives (sufficient-statistic shapes) is a fixed contract between aggregator and silos. LLMs can compose, sequence, and translate queries against that contract — they cannot author novel queries that emit unbounded shapes. This preserves DP calibration, schema validation, auditability, and adversarial resistance. Practical consequences: planner can emit DAGs of primitives (P28); silos can resolve fuzzy filters against schema metadata (P29).
+
+---
+
+## 7. User Experience Design *(Design)*
+
+> *Purpose: describe the experience before describing the system.*
+
+### 7.1 Primary flow
+
+1. Researcher opens the chat interface.
+2. Asks a question in natural language about the CHF cohort.
+3. Sees the planner's interpreted plan rendered transparently (so they can correct misinterpretation).
+4. Sees per-hospital dispatches happening in real-time on the audit panel.
+5. Sees per-hospital privacy budget meters tick down as DP noise is applied.
+6. Sees the structured numerical result (coefficient table, histogram, scalar with CI) and a plain-English summary.
+7. Can drill into the audit log for forensic detail.
+
+### 7.2 Key UI surfaces
+
+| Surface | What it shows | Why it matters |
+|---|---|---|
+| Chat panel | NL input, streamed result | Primary interaction |
+| Hospital silo view | Per-silo identity, HIPAA pack status, cohort summary (counts only — no PHI), ε meter | Transparency and trust |
+| Audit panel | Live SSE feed of LT + DP + schema events | **Most demo-critical UI** — the compliance dashboard a HIPAA auditor would inspect |
+| Coefficient table renderer | OLS / logistic results with CIs | Result clarity |
+| Iteration trajectory | β coefficients across Newton iterations | Logistic demo's signature visual |
+
+### 7.3 Demo experience design
+
+The demo is a single coherent act focused on a CHF cohort study across five hospital silos:
+
+- **Riverside General** — academic medical center; older + higher acuity tilt; ~50 CHF patients
+- **Lakeside Medical** — regional referral; balanced; ~50 CHF patients
+- **Summit Community Health** — community hospital; younger + lower acuity; ~48 CHF patients
+- **Fairview Regional** — mid-size regional; slightly elevated diabetes; ~52 CHF patients
+- **Coastal Medical Center** — suburban; slightly higher BMI distribution; ~51 CHF patients
+
+All five are notional members of the "New England Outcomes Research Network." All run the `hipaa_pack.yaml` policy. Each silo holds 363 cardiac patients (the CHF cohort is a synthetic subset within them — see Section 9 and `data/README.md`).
+
+**Three minutes, four beats:**
+
+1. **Setup (15s)** — five hospitals lit up. Each shows pack (HIPAA), ε meter (full), and cohort metadata (~50 CHF patients each, all > k-floor).
+2. **Hero query (75s)** — researcher asks a logistic regression on 30-day readmission. Newton-Raphson runs over 6 iterations, budget meter visibly ticks down per iteration. Final coefficient table with CIs and a narrated summary.
+3. **Texture queries (45s)** — comorbidity histogram + length-of-stay comparison across hospitals.
+4. **Blocked attacks (60s)** — four staged failures: PHI extraction denied, low-n cohort refused, differencing attack flagged, budget exhaustion enforced. Audit panel lights up on each.
+5. **Closing (15s)** — pitch line referencing Datavant ($7B), Truveta ($200M+), Owkin ($350M), positioning ours as the privacy-preserving alternative.
+
+The blocked-attack beats are not theater — they're load-bearing pitch material. Each demonstrates a different defense mechanism (HIPAA Safe Harbor identifier rule, schema validation, k-anonymity floor, differencing auditor, budget exhaustion). The audit panel lights up visibly on each block.
+
+---
+
+## 8. System Design *(Design)*
+
+> *Purpose: the technical specification.*
+
+### 8.1 Architecture
+
+```
+                    ┌─────────────────────────────┐
+                    │  Researcher (Browser)       │
+                    │  Chat • Hospitals • Audit   │
+                    └──────────────┬──────────────┘
+                                   │ HTTPS / SSE
+                                   ▼
+        ╔══════════════════════════════════════════════════╗
+        ║              "TEE boundary" (assumed)             ║
+        ║   ┌─────────────────────────────────────────┐    ║
+        ║   │  Aggregator (FastAPI)                       │    ║
+        ║   │   • Planner LLM  (NL → ComputationPlan) │    ║
+        ║   │   • Dispatcher   (parallel + iterative) │    ║
+        ║   │   • Combiner     (sum sufficient stats) │    ║
+        ║   │   • Narrator LLM (result → English)     │    ║
+        ║   └─────────────┬───────────────────────────┘    ║
+        ║                 ▼                                 ║
+        ║   ┌─────────────────────────────────────────┐    ║
+        ║   │  Aggregator Lobster Trap  →  Aggregator LiteLLM │    ║
+        ║   └─────────────┬───────────────────────────┘    ║
+        ╚═════════════════│═════════════════════════════════╝
+                          │ ComputationPlan dispatch
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+   ┌────────────┐    ┌────────────┐    ┌────────────┐
+   │Riverside LT│    │Lakeside LT │    │ Summit LT  │
+   │ + LiteLLM  │    │ + LiteLLM  │    │ + LiteLLM  │
+   └─────┬──────┘    └─────┬──────┘    └─────┬──────┘
+         ▼                 ▼                 ▼
+   ┌────────────┐    ┌────────────┐    ┌────────────┐
+   │ Riverside  │    │  Lakeside  │    │   Summit   │
+   │  stats →   │    │  stats →   │    │  stats →   │
+   │  DP →      │    │  DP →      │    │  DP →      │
+   │  schema →  │    │  schema →  │    │  schema →  │
+   │  budget    │    │  budget    │    │  budget    │
+   │ SQLite     │    │ SQLite     │    │ SQLite     │
+   │(Synthea)   │    │(Synthea)   │    │(Synthea)   │
+   └────────────┘    └────────────┘    └────────────┘
+```
+
+LLM wire path: `agent → Lobster Trap → LiteLLM → Gemini API`. Lobster Trap inspects OpenAI-compatible `/v1/chat/completions` traffic; LiteLLM keeps that shape while routing to Gemini. This keeps Gemini as the primary model provider for Track 4 / Gemini award alignment while preserving Veea's governance layer. OpenRouter can serve as an OpenAI-compatible Gemini fallback if direct LiteLLM-to-Gemini routing blocks, but it should not be the primary Google story.
+
+### 8.2 Statistical pipeline
+
+```
+NL query → [PLAN] → [DISPATCH] → [LOCAL COMPUTE] → [DP NOISE] → [SCHEMA VALIDATE] → [BUDGET DEBIT]
+                                       │
+                              (per silo, in parallel)
+                                       │
+              → [EGRESS JSON] → [BROKER COMBINE] → [FINALIZE] → [NARRATE] → result + audit
+```
+
+Privacy is paid once at silo egress (DP). Combine + narrate are post-processing — free under DP closure.
+
+### 8.3 Computation primitives
+
+| Operation | Per-silo sufficient stats | Combine | DP |
+|---|---|---|---|
+| `count` | `n_i` | `Σ n_i` | Laplace |
+| `mean(x)` (returns mean + SEM = σ/√n) | `Σx_i, n_i` | divide | Laplace on `Σx` |
+| `proportion(numerator, denominator)` (Wilson + Clopper-Pearson CIs) | per-silo `(numerator_count, denominator_count)` | sum, divide, compute CI | Laplace per count |
+| `variance(x)` / `stddev(x)` | `Σx_i, Σx²_i, n_i` | combine to pooled variance | Gaussian on both sums |
+| `skewness(x)` / `kurtosis(x)` | `Σx_i, Σx²_i, Σx³_i, Σx⁴_i, n_i` | combine central moments | Gaussian on each sum |
+| `quantile(x, q)` (median, IQR, %iles, **min @ q=0, max @ q=100**) | fine-grain DP histogram of `x` | sum histograms, interpolate quantiles | Laplace per bucket |
+| `incidence_rate(event_predicate, person_time_expr)` (Poisson CI) | per-silo `(event_count, total_person_time, n_patients)` | sum, divide, compute Garwood CI | Laplace on counts + person-time |
+| `histogram(x, bins)` | bucket counts | sum vectors | Laplace per bucket |
+| `pearson(x,y)` | `Σx, Σy, Σxy, Σx², Σy², n_i` | sum + formula | Gaussian per cross-product |
+| `t_test(x ~ group)` (Welch's) | per-group `Σx, Σx², n` | combine to pooled means + vars, then `t, df, p` | Gaussian on group sums |
+| `chi_square(var1, var2)` | 2-D contingency cell counts | sum cells, compute χ² + p | Laplace per cell |
+| `ols(y ~ X)` | `XᵀX, Xᵀy, yᵀy, n_i` | sum + SVD-solve | Gaussian Functional Mechanism |
+| `ols(...) + cluster_se` | retain per-silo `(XᵀX, Xᵀy, residuals)` | sandwich estimator with silo as cluster | same as OLS |
+| `logistic(y ~ X)` | per-iter `g_i, H_i, n_i` | sum + Newton step + iterate | Gaussian per iteration |
+| `logistic(...) + cluster_se` | retain per-silo per-iter contributions | sandwich estimator on converged Hessian | same as logistic |
+| `poisson(y ~ X)` | per-iter as logistic, log link | as logistic | as logistic |
+| `negative_binomial(y ~ X)` *(near-free family member)* | per-iter as logistic, NB likelihood | as logistic | as logistic |
+| `auc_roc(model, threshold_bins)` | per-bin `(TP, FP, TN, FN)` counts | sum confusion counts per threshold, integrate | Laplace per confusion cell |
+| `mann_whitney_u(x ~ group)` | per-group DP histogram of `x` | construct pooled CDF, compute U + asymptotic p | Laplace per bucket |
+| `mixed_effects(y ~ X + (1 | hospital))` | per-iter cluster-level `(XᵀX, Xᵀy, yᵀy, ZᵀX, Zᵀy, ZᵀZ)` | iterative REML; update fixed effects + variance components | Gaussian per iteration on cluster stats |
+
+### 8.4 Threat model
+
+| Trusted | Untrusted |
+|---|---|
+| Each hospital's own data + runtime | Other hospitals |
+| Aggregator process (assumed in TEE) | Operator/cloud (production) |
+| Lobster Trap (NL channel) | Compromised silo agent (defended by schema) |
+| Schema validator (numerical channel) | Curious researcher (defended by DP + budget) |
+| OpenDP composition (aggregate leakage) | Malicious researcher (defended by LT + schema) |
+
+Defense mapping: Lobster Trap closes NL extraction + injection. Schema validation closes silo-side raw-row exfiltration. K-anonymity floor closes trivially-small cohorts. **Differential privacy noise** closes single-query reconstruction and differencing. **DP budget composition** closes multi-query inference attacks. Query-pattern auditor flags adversarial sequences below budget. Audit log enables forensics and HIPAA-readiness demonstrability.
+
+---
+
+## 9. Synthetic Data Strategy *(Design)*
+
+> *Purpose: synthetic data is a designed artifact too. The shape it takes determines what demos are possible.*
+
+### 9.1 Synthea → OMOP CDM as the data backbone
+
+[Synthea](https://synthetichealth.github.io/synthea/) (MITRE) is an open-source synthetic patient generator. We use the pre-built [Synthea-OMOP datasets on AWS Open Data](https://registry.opendata.aws/synthea-omop/), already transformed into the OHDSI [OMOP CDM v5.4](https://ohdsi.github.io/CommonDataModel/cdm54.html) — the standard clinical-research schema used by 500+ hospitals worldwide. No IRB or PhysioNet credentialing needed; the system is plug-compatible with real OMOP hospital data post-hackathon.
+
+### 9.2 Five silos × 363 cardiac patients — a small hospital network
+
+Each silo holds **363 cardiac patients** drawn from the Synthea-OMOP 1k source pool (all source patients with at least one cardiac condition: CHF, CAD, AFib, post-MI, hypertensive heart disease, or valve disease). The same 363 source patients appear in all five silos with per-silo `person_id` offsets and small demographic perturbations — see Section 9.5 for the honest framing of inter-silo independence.
+
+| Silo | Cardiac patients | CHF (synthetic injection) | Profile |
+|---|---:|---:|---|
+| **Riverside General** | 363 | 50 | Academic medical center; older + higher acuity tilt |
+| **Lakeside Medical** | 363 | 50 | Regional referral hospital; balanced |
+| **Summit Community Health** | 363 | 48 | Community hospital; younger + lower acuity |
+| **Fairview Regional** | 363 | 52 | Mid-size regional; slightly elevated diabetes prevalence |
+| **Coastal Medical Center** | 363 | 51 | Suburban; slightly higher BMI distribution |
+
+Of each silo's 363 cardiac patients:
+
+- **~50 are synthetically labeled CHF** (the Synthea 1k pool has zero native heart-failure patients; we inject `condition_occurrence` rows with concept_id 316139 — the OMOP schema and concept_id are real, the label assignment is synthetic).
+- **~313 are non-CHF cardiac** (CAD, AFib, post-MI, hypertensive heart disease) — the comparison/control group.
+- **~2 are also flagged as cardiac amyloidosis** (rare subtype, synthetic label, scenario S4).
+
+**Pooled across all 5 silos** (with honest caveats about replication — see 9.5):
+
+| Group | Single silo | Pooled (×5) | Statistical implication |
+|---|---|---|---|
+| CHF cases | ~50 | ~251 | Single-silo logistic on ~12 events is underpowered; pooled (~62 events) is borderline-adequate for 5 predictors — *but the silos share an underlying source pool, so this isn't true multi-site power* |
+| Non-CHF cardiac comparison | ~313 | ~1,562 | Comparison-group depth |
+| Amyloid subtype | ~2 | ~10 | Per-silo useless; pooled directional |
+
+### 9.3 Why this volume design makes the demo land
+
+The 363-cardiac / 50-CHF-per-silo structure is calibrated so the demo's signature visual — the confidence-interval shrinkage from single-silo to federated logistic — is mathematically real. With ~12 readmission events per silo's CHF cohort, single-site logistic regression has confidence intervals wide enough to be visually striking; the pooled estimate from 5 silos produces visibly tighter CIs. **The visual CI tightening during the federated logistic demo is the AI-judge moneyshot.**
+
+The amyloid sub-cohort gives a secondary federation beat: 2 cases per silo is *literally* a useless sample (per-silo CIs unbounded), while 10 cases pooled is enough to make a directional statement about elevated readmission risk. *"We can do A, and even harder, B"* is the narrative rhythm.
+
+See Section 9.5 below for the honest caveat about what this demonstrates statistically.
+
+### 9.4 OMOP CDM schema (subset used)
+
+```
+person                  (person_id, birth_datetime, gender_concept_id,
+                         race_concept_id, ethnicity_concept_id, ...)
+observation_period      (person_id, period_start_date, period_end_date)
+visit_occurrence        (visit_occurrence_id, person_id, visit_concept_id,
+                         visit_start_date, visit_end_date, visit_type_concept_id, ...)
+condition_occurrence    (condition_occurrence_id, person_id, condition_concept_id,
+                         condition_start_date, condition_source_value, ...)
+drug_exposure           (drug_exposure_id, person_id, drug_concept_id,
+                         drug_exposure_start_date, drug_exposure_end_date,
+                         dose_unit_source_value, quantity, ...)
+measurement             (measurement_id, person_id, measurement_concept_id,
+                         measurement_date, value_as_number, unit_concept_id, ...)
+procedure_occurrence    (procedure_occurrence_id, person_id, procedure_concept_id,
+                         procedure_date, ...)
+death                   (person_id, death_date, cause_concept_id)
++ vocabulary tables     (concept, concept_relationship, concept_ancestor, ...)
++ chf_cohort_features   (derived per-silo, see 9.5)
+```
+
+### 9.5 Engineered analytical features (per CHF patient, computed at silo startup)
+
+Stored in a `chf_cohort_features` table inside each silo's SQLite database:
+
+- `age_at_index` — age at first CHF encounter
+- `sex`, `race`, `ethnicity` — from OMOP `person`
+- `index_bmi` — most recent BMI within 90 days of index
+- `index_ef` — most recent ejection fraction within 180 days of index (LOINC 10230-1 / 8806-2 / 18043-0)
+- `prior_chf_admissions_12mo` — count of prior CHF inpatient visits
+- `has_diabetes` — binary (ICD-10 E10/E11)
+- `has_ckd` — binary (ICD-10 N18)
+- `gdmt_adherence` — binary composite (ACE/ARB + beta-blocker + diuretic on discharge)
+- `has_amyloid` — binary (synthetic label for the rare subtype)
+- `readmit_30d` — binary outcome (any inpatient visit ≤30d post-index discharge)
+- `los_index` — length of stay for index encounter (days)
+
+### 9.6 Planted scenarios
+
+Designed deliberately into the otherwise-realistic Synthea-derived data so the demo can land. Applied as post-ETL surgery on the OMOP tables and `chf_cohort_features`:
+
+1. **GDMT effect on readmission.** Patients with `gdmt_adherence = 1` have ~30% lower 30-day readmission risk. Federated logistic recovers this with tight CI; single-silo CIs are too wide to confirm.
+2. **Diabetes + CKD heterogeneity.** CHF + DM + CKD patients have *supra-additive* readmission risk (interaction term in `readmit ~ DM + CKD + DM:CKD` is positive). No single silo has enough triple-positive patients for inference.
+3. **Hospital-level LOS variation.** Riverside has ~1.3-day longer median index LOS, matched on acuity. Quality-officer benchmarking story.
+4. **Cardiac amyloidosis rare subtype (the headline).** ~10 amyloid cases distributed across the 5 silos (~2 per silo). `has_amyloid = 1` is associated with ~1.8× elevated readmission. Per silo: useless. Pooled: directional.
+
+All four are recoverable centrally on pooled data; the first two are also recoverable from single-silo data given enough effort, but scenarios 2 and 4 require federation to be statistically credible.
+
+### 9.3 Engineered analytical features (computed once at silo startup)
+
+To make the demo's regressions work cleanly without runtime feature engineering:
+
+- `age_at_index` — age at first CHF encounter
+- `index_bmi` — most recent BMI within 90 days of index
+- `index_ef` — most recent ejection fraction (LOINC 10230-1) within 180 days of index
+- `prior_chf_admissions_12mo` — count of prior CHF inpatient encounters
+- `has_diabetes` — binary indicator (ICD-10 E10/E11)
+- `has_ckd` — binary indicator (ICD-10 N18)
+- `gdmt_adherence` — composite of ACE/ARB + beta-blocker + diuretic on discharge
+- `readmit_30d` — binary outcome (any inpatient encounter ≤30d of index discharge)
+- `los_index` — length of stay for index encounter
+
+### 9.4 Planted scenarios
+
+Designed deliberately into the otherwise-realistic Synthea-derived data so the demo lands. We modify Synthea outputs in a post-processing step to seed these patterns:
+
+1. **GDMT effect on readmission.** Patients with `gdmt_adherence = 1` have ~30% lower 30-day readmission risk (true causal effect baked in). Federated logistic should recover this with a tight CI; single-hospital models have wide CIs.
+2. **Diabetic + CKD heterogeneity.** CHF patients with both diabetes and CKD have non-linearly higher readmission than additive prediction; an interaction term in the federated logistic surfaces this. No single silo has enough CHF + DM + CKD cases for a robust single-site estimate.
+3. **Hospital-level LOS variation.** Riverside has ~1.3-day longer median LOS for matched acuity (academic bias toward longer workups). Federated histogram with hospital indicator reveals this; quality officers would care.
+4. **Rare-comorbidity statistical power unlock.** ~10 cases of a rare CHF comorbidity (cardiac amyloidosis) spread across the five silos (~2 per silo). No single silo has enough for inference; federated regression has tight enough CIs to make a directional statement.
+
+### 9.5 Statistical caveats — honest framing for AI judges
+
+The current build replicates one Synthea source pool across five silos with per-silo `person_id` offsets and small demographic perturbations. From the federation engine's perspective the silos are independent — they each hold their own data, expose their own egress, contribute their own sufficient statistics. From a true *statistical* perspective the silos share underlying source patients, so pooled CIs computed on this data are tighter than what would obtain on five genuinely-independent hospital populations of the same size.
+
+This is fine — and we should say so on stage. **The demo proves federated-computation correctness and the privacy/governance story, not real multi-site statistical inference.** Specifically:
+
+- ✓ Federated math equivalence (sum-of-sufficient-statistics = centralized) — provable.
+- ✓ DP composition under repeated queries — provable and visually demonstrable via the budget meter.
+- ✓ Lobster Trap policy enforcement on NL channels — provable and visually demonstrable via blocked attacks.
+- ✗ "Pooled CIs from 5 independent hospitals" — *not* what this data shows.
+- ✗ "Publish-worthy results from federated analysis" — never the goal of a demo dataset.
+
+A judge with a stats background may ask: *"how independent are the silos?"* The honest answer: *"the federation infrastructure treats them as fully independent — that's the contract — but our demo data is replicated-with-perturbation rather than drawn from distinct populations. The system architecture and DP guarantees are unchanged. In production with real OMOP data from distinct hospitals, the same pipeline produces real independent-cohort inference."*
+
+This caveat is also in `data/README.md` for anyone who reaches the data layer directly.
+
+---
+
+## 10. Validation Strategy *(Define)*
+
+> *Purpose: how we'll know we built the right thing and that it works.*
+
+### 10.1 Functional correctness
+
+- **Federated math equivalence** (most important check). For each op, central vs. federated (DP off) bit-equal within 1e-9 for closed-form, 1e-6 for iterative. *If this fails, nothing else matters.*
+- **Standard error correctness.** OLS and logistic SEs match `statsmodels` reference on pooled data within tolerance.
+- **End-to-end smoke (CHF cohort):** "Run a logistic regression of 30-day readmission on age, BMI, EF, prior admissions, diabetes, CKD across all five hospitals" returns coefficients with CIs and narrated summary.
+- **Planted-scenario recovery:** GDMT effect, comorbidity interaction, LOS hospital variation, and rare-comorbidity inference are all recoverable from the federated path within their expected effect sizes.
+
+**New-primitive equivalence checks** (each compared to a centralized reference on pooled silo data, DP off):
+
+- **P30 variance / SEM** — federated `var` matches `numpy.var(ddof=1)` within 1e-9; SEM matches `scipy.stats.sem`.
+- **P38 proportion** — federated proportion + Wilson CI matches `statsmodels.stats.proportion.proportion_confint(method='wilson')` within tolerance; Clopper-Pearson option works.
+- **P39 skewness / kurtosis** — federated values match `scipy.stats.skew` and `scipy.stats.kurtosis` within 1e-6.
+- **P31 quantile** — federated median, Q25, Q75 within ±5% of `numpy.percentile` (interpolation error from binning); min/max within clip range.
+- **P40 incidence rate** — federated `events / person-time` matches centralized calculation within 1e-9; Garwood CI bounds match `scipy.stats.chi2.ppf` reference.
+- **P32 t-test** — federated `t`, df, p-value match `scipy.stats.ttest_ind(equal_var=False)` within 1e-9.
+- **P33 chi-square** — federated χ² and p-value match `scipy.stats.chi2_contingency` within 1e-9; Fisher's exact fallback triggers correctly when E < 5.
+- **P34 cluster-robust SEs** — match `statsmodels.OLS.fit().get_robustcov_results(cov_type='cluster')` and `Logit.fit(...).get_robustcov_results(cov_type='cluster')`.
+- **P35 AUC** — federated AUC within ±0.02 of `sklearn.metrics.roc_auc_score` at moderate ε; ROC curve renders.
+- **P36 Mann-Whitney U** — U statistic and p-value approximately match `scipy.stats.mannwhitneyu` within DP-noise tolerance.
+- **P37 mixed-effects** — fixed-effect coefficients and variance components match `statsmodels.regression.mixed_linear_model.MixedLM` within DP-noise tolerance; converges in ≤20 iterations.
+
+**Table-1 reproducibility** — given a published reference Table 1 from a real CHF outcomes paper, run the equivalent federated queries (means, medians, t-tests, χ²) on the Synthea cohort and produce a comparable Table 1 in under 30 seconds. The numbers won't match the published paper (different cohort), but the *structure and execution time* demonstrate clinical workflow viability.
+
+### 10.2 Defense correctness (six block tests)
+
+1. **PHI identifier leak** — *"List all CHF patients at Riverside General with their ages."* Aggregator LT denies on analyst input; matched `phi_safe_harbor_v1`.
+2. **Schema violation simulation** — silo validator rejects when a silo agent is forced to return raw rows.
+3. **Prompt injection** — known injection corpus on the analyst-input channel denied by aggregator LT.
+4. **Low-n / k-anonymity floor** — *"Mean EF for women age 67 with diabetes and CKD at Summit Community"* (n=2). Silo refuses; audit shows `min_cohort_violation`.
+5. **Differencing pattern** — auditor flags two queries differing only by one excluded patient identifier.
+6. **Budget exhaustion** — silo refuses with `budget_exhausted` after repeated identical queries deplete ε.
+
+### 10.3 DP correctness
+
+- Noise distribution matches theoretical Gaussian (KS test on 1000 trials).
+- ε accounting matches OpenDP composition theorem within tolerance.
+- Sensitivity bounding via covariate clipping verified.
+
+### 10.4 Demo readiness
+
+- 3:00 ± 0:15 in three consecutive dry-runs.
+- Audit panel visibly working.
+- Budget meters tick down during iterative GLMs.
+- Backup screencast recorded.
+
+---
+
+## 11. Build Plan *(Develop)*
+
+> *Purpose: convert the design into an executable sequence of small, composable units.*
+
+### 11.1 Build map (dependencies)
+
+```
+                P0 (scaffold + proxy chain smoke)
+                          │
+                          ▼
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+ P1 (schemas)      P2 (Synthea data) P9 (HIPAA pack)
+        │                 │                 │
+        └────────┬────────┘                 │
+                 ▼                          │
+          P3 (silo runtime)                 │
+                 │                          │
+                 ▼                          │
+          P4 (closed-form stats)            │
+                 │                          │
+                 ▼                          │
+    ┌────────────┼──────────────┐           │
+    ▼            ▼              ▼           ▼
+ P5 (planner) P7 (combiners) P8 (narrator)  │
+    │            │              │           │
+    └────────────┼──────────────┘           │
+                 ▼                          │
+          P10 (backend wire) ───────────────┘
+                 │
+                 ▼
+          P11 (audit tail)
+                 │
+    ┌────────────┴────────────┐
+    ▼                         ▼
+P12 (DP noise)        P15 (OLS stats+combiner)
+P13 (budget)                  │
+P14 (differencing)            ▼
+    │                  P16 (DP-OLS)
+    │                         │
+    │                         ▼
+    │                  P17 (logistic stats)
+    │                         │
+    │                         ▼
+    │                  P18 (logistic Newton loop)
+    │                         │
+    │                         ▼
+    │                  P19 (DP-logistic)
+    └─────────────┬───────────┘
+                  ▼
+          P28 (multi-step plan composition)
+                  │
+                  ▼
+          P29 (silo-side fuzzy filter resolution)
+                  │
+                  ▼
+   ┌──────────────┴──────────────┐
+   │  Statistical primitives (easy → harder)
+   ▼
+   P30 (variance / stddev / SEM)      ← uses P4, P12
+   │
+   ▼
+   P38 (proportion w/ Wilson CI)      ← uses P4
+   │
+   ▼
+   P39 (skewness / kurtosis)          ← uses P30
+   │
+   ▼
+   P31 (quantile / median / IQR / min / max)  ← extends histogram + P12
+   │
+   ▼
+   P40 (incidence rate, person-time)  ← uses P4, P12
+   │
+   ▼
+   P32 (Welch's t-test)               ← uses P30
+   │
+   ▼
+   P33 (chi-square)                   ← uses histogram pattern
+   │
+   ▼
+   P34 (cluster-robust SEs)           ← extends P15 (OLS), P18 (logistic)
+   │
+   ▼
+   P35 (AUC / ROC)                    ← uses P18 (logistic)
+   │
+   ▼
+   P36 (Mann-Whitney U)               ← uses P31 (quantile/histogram)
+   │
+   ▼
+   P37 (mixed-effects, random intercept) ← uses P15, P12, P13
+                  │
+                  ▼
+          P20–P22 (frontend)
+                  │
+                  ▼
+          P23 (planted-scenario validation suite)
+                  │
+                  ▼
+          P24 (demo-query bank + narration polish)
+                  │
+                  ▼
+          P25 (audit panel polish + budget-meter visualization)
+                  │
+                  ▼
+          P26 (dry-run + screencast)
+          P27 (README + pitch)
+```
+
+### 11.2 The 40 parts
+
+Each part is a self-contained "build this thing" unit. When feeding to me, paste the part heading and bullets; I'll have the design context above.
+
+**P0. Repo scaffold + proxy-chain smoke.** Repo skeleton, Go 1.22+ toolchain check for Lobster Trap, LiteLLM configured for Gemini, one Lobster Trap proxy in front of LiteLLM, and an end-to-end Gemini round trip through the proxy chain. *Validates the biggest schedule risk before any feature work.* Files: `pyproject.toml`, `infra/docker-compose.yml`, `infra/litellm_config.yaml`, `infra/lobstertrap/base_policy.yaml`, `scripts/smoke_proxy.py`, `scripts/smoke_lobstertrap.py`. Acceptance: `python scripts/smoke_proxy.py` calls `http://localhost:8080/v1/chat/completions`, receives a Gemini response, and the JSON includes Lobster Trap `_lobstertrap` metadata; a blocked prompt returns a Lobster Trap denial without reaching Gemini. Depends on: nothing.
+
+**P1. Shared schemas.** Pydantic v2 `ComputationPlan` + `SufficientStats` discriminated union (`MeanStats`, `HistogramStats`, `PearsonStats`, `OLSStats`, `LogisticIterStats`, `PoissonIterStats`). Files: `shared/plans.py`, `tests/test_plans.py`. Acceptance: round-trip + rejection tests for each variant. Depends on: nothing.
+
+**P2. Synthea-OMOP data layer for five silos.** **Built and shipping** — see [`data/README.md`](data/README.md) for the canonical description. Pipeline: download AWS Synthea-OMOP **1k** dataset (plain CSV; the 100k version is LZO-compressed and requires a C toolchain we deliberately avoid), filter source pool to 363 cardiac patients, replicate across five silos with per-silo `person_id` offsets and small demographic perturbations, synthetically inject ~50 CHF labels per silo via new `condition_occurrence` rows. Apply four planted scenarios deterministically. Output: five OMOP CDM v5.4 SQLite databases at `data/silos/`. Scripts under `data/scripts/`: `download_synthea_omop.py`, `build_silos.py`, `feature_engineering.py`, `apply_scenarios.py`, `validate.py` + shared `vocab.py`. Acceptance: five DBs each with ~363 cardiac patients including ~50 CHF; pooled ~250 CHF; all four scenarios recoverable centrally; `tests/test_data_checksum.py` confirms bit-deterministic reconstruction across fresh processes (uses SHA-256 derived seeds, not Python's process-randomized `hash()`). **Honest caveat:** silos share an underlying source patient pool — this is a federated-computation correctness demo, not a multi-site independence demo (see "Statistical caveats" below). Depends on: P1.
+
+**P3. Silo runtime skeleton + schema validator.** FastAPI silo with `POST /execute(plan) → SufficientStats`; stub stats; egress validator. Files: `backend/silos/runner.py`, `backend/silos/schema.py`, `backend/silos/configs/riverside.yaml`, `tests/test_silo_runner.py`. Acceptance: returns shape-mismatched response → validator rejects. Depends on: P1.
+
+**P4. Closed-form stats.** Real `count`, `mean`, `histogram`, `pearson` computers over silo SQLite. Files: `backend/silos/stats/{count,mean,histogram,pearson}.py`, `backend/silos/stats/__init__.py`, `tests/test_silo_stats_closed_form.py`. Acceptance: federated equivalence to centralized within 1e-9. Depends on: P1, P2, P3.
+
+**P5. Aggregator planner.** Gemini Pro-class model via the P0 proxy chain, constrained to emit a validated `ComputationPlan` JSON object. System prompt includes clinical-domain examples (CHF cohort queries, comorbidity filters, etc.). Files: `backend/aggregator/planner.py`, `backend/aggregator/prompts/planner_system.md`, `tests/test_planner.py`. Acceptance: 5 hand-written clinical NL queries → valid plans; off-scope query refused. Depends on: P0, P1.
+
+**P6. Aggregator dispatcher.** Parallel HTTP fanout to silos (`httpx.AsyncClient`); iterative dispatch helper for logistic. Files: `backend/aggregator/dispatcher.py`, `tests/test_dispatcher.py`. Acceptance: 5-silo mock fanout in parallel; total latency ~ max-silo not sum. Depends on: P1, P3.
+
+**P7. Aggregator combiners (closed-form).** Sum sufficient stats, finalize for `count`, `mean`, `histogram`, `pearson`. Files: `backend/aggregator/combine/__init__.py` + per-op modules, `tests/test_combine_closed_form.py`. Acceptance: central-vs-federated equivalence. Depends on: P1, P4.
+
+**P8. Aggregator narrator.** Gemini Flash-class model via the P0 proxy chain, constrained to mention only numbers in the structured input. Clinical-domain prompt examples. Files: `backend/aggregator/narrator.py`, `backend/aggregator/prompts/narrator_system.md`, `tests/test_narrator.py`. Acceptance: produces summary mentioning the headline number; no hospital names or patient identifiers; appropriate clinical caveats (e.g., "not for treatment decisions"). Depends on: P0, P1.
+
+**P9. Lobster Trap config — base + hipaa_pack.** YAML for analyst-input ingress, narrator egress, prompt injection, off-scope, **HIPAA Safe Harbor 18 identifier rules** (names, dates other than year, geographic units smaller than state, phone, email, MRN, account, license, vehicle, device, URL, IP, biometric, photo, "any other unique identifying characteristic"). Files: `infra/lobstertrap/base_policy.yaml`, `infra/lobstertrap/packs/hipaa_pack.yaml`, `infra/lobstertrap/compose-policy.py`, `tests/test_policies.py`. Acceptance: known injection prompts matched; HIPAA Safe Harbor identifier requests denied; legitimate cohort queries pass. Depends on: nothing.
+
+**P10. Backend wire-up — `main.py`.** FastAPI app routing analyst NL through planner → dispatcher → combiner → narrator. Files: `backend/main.py`, `tests/test_e2e_closed_form.py`. Acceptance: end-to-end NL → result + narrative round trip with 5 hospital silos. Depends on: P0–P9.
+
+**P11. Audit tail + SSE.** Tail LT JSONL + emit DP/schema/budget events; SSE stream to frontend. Files: `backend/audit/tail.py`, `backend/audit/api.py`, `backend/audit/events.py`, `tests/test_audit_tail.py`. Acceptance: trigger query, observe events on SSE. Depends on: P0, P9, P10.
+
+**P12. OpenDP integration (`silos/dp.py`).** Calibrated Gaussian noise per shape; sensitivity from clip ranges. Files: `backend/silos/dp.py`, `tests/test_dp_noise.py`. Acceptance: empirical noise distribution matches theoretical Gaussian (KS p>0.05); sensitivity bounding verified. Depends on: P1.
+
+**P13. Budget tracker (`silos/budget.py`).** Per-silo, per-user ε ledger via OpenDP zCDP/RDP combinators; refusal on exhaustion. Files: `backend/silos/budget.py`, `tests/test_budget.py`. Acceptance: composition matches OpenDP theorem; exhaustion → rejection. Depends on: P1, P12.
+
+**P14. Differencing-pattern auditor.** Hash plans into shape-keys; flag near-duplicate sequences. Files: `backend/audit/differencing.py`, `tests/test_differencing.py`. Acceptance: staged differencing pair (e.g., cohort-of-11 then cohort-of-10-excluding-one) → flagged; unrelated queries → not flagged. Depends on: P11.
+
+**P15. OLS sufficient stats + combiner.** Silo computes `XᵀX, Xᵀy, yᵀy, n`; aggregator SVD-solves. Files: `backend/silos/stats/ols.py`, `backend/aggregator/combine/ols.py`, `tests/test_ols_equivalence.py`. Acceptance: federated OLS (DP off) bit-equal to `statsmodels.OLS` on pooled data. Depends on: P1, P3, P4.
+
+**P16. DP for OLS.** Functional Mechanism with calibrated sensitivity from clip ranges. Files: updates to `backend/silos/dp.py`, `tests/test_dp_ols.py`. Acceptance: 1000-trial coefficient distribution centered on truth; 95% CI coverage ≥ 95%. Depends on: P12, P15.
+
+**P17. Logistic per-iteration stats.** Given `β_t`, return `(g_i, H_i, n_i)`. Files: `backend/silos/stats/logistic.py`, `tests/test_logistic_iter.py`. Acceptance: 3-row toy example matches hand-calculation; CHF-cohort gradient matches centralized calculation. Depends on: P1, P3.
+
+**P18. Aggregator logistic Newton loop.** Iterate dispatch + sum + Newton step + convergence check, bounded `T_max=10`. Files: `backend/aggregator/combine/logistic.py`, `tests/test_logistic_equivalence.py`. Acceptance: federated logistic (DP off) bit-close to `statsmodels.Logit` on the CHF readmission model; converges in ≤10 iterations. Depends on: P6, P17.
+
+**P19. DP for logistic (per-iteration).** Per-iter Gaussian noise; iterative budget cost. Files: updates to `backend/silos/dp.py` and `backend/silos/budget.py`, `tests/test_dp_logistic.py`. Acceptance: empirical coefficient distribution centered; budget meter visibly debits per iteration; GDMT effect recoverable from federated path with reasonable noise. Depends on: P13, P18.
+
+**P20. Frontend chat panel.** Browser UI for the researcher conversation; renders coefficient tables, histograms, scalars. Clinical-context UI polish (e.g., "CHF Cohort" header, hospital tiles). Files: `frontend/app/page.tsx` + result-renderer components (or Streamlit fallback). Acceptance: three different op types render correctly. Depends on: P10.
+
+**P21. Frontend audit panel + budget meter.** Live SSE tail color-coded; per-hospital ε meters. Files: `frontend/app/audit/page.tsx`, `frontend/components/{AuditEvent,BudgetMeter}.tsx`. Acceptance: OLS query visibly debits ε; logistic Newton iteration shows multiple debits in sequence. **Most demo-critical UI.** Depends on: P11, P13.
+
+**P22. Frontend hospital view.** Per-hospital identity, HIPAA pack status, schema metadata (NOT row data), cohort summary counts above k-floor, LT health. Files: `frontend/app/hospitals/page.tsx`. Acceptance: renders 5 hospital silos with cohort counts. Depends on: P10.
+
+**P23. Planted-scenario validation suite.** End-to-end tests that the four planted scenarios (GDMT effect, DM+CKD interaction, hospital LOS variation, rare comorbidity power unlock) are recoverable from the federated path within expected effect sizes and CIs. Files: `tests/test_planted_scenarios.py`, helper script `scripts/verify_scenarios.py`. Acceptance: each scenario passes; if any fails, surface the gap clearly (effect size off, CI too wide, etc.). Depends on: P19, P15, P7.
+
+**P24. Demo query bank + narration polish.** Curated list of NL queries that drive the demo flow (hero query, texture queries, all four blocked-attack beats). Tune narrator prompts so each query produces a clean, presentable summary. Files: `docs/demo_queries.md`, updates to `backend/aggregator/prompts/narrator_system.md`. Acceptance: each demo query rendered end-to-end produces a presentable result + narration in one shot. Depends on: P20, P8.
+
+**P25. Audit panel polish + budget visualization.** Visual polish on the audit panel: color coding for allow/deny/HUMAN_REVIEW, per-hospital ε meter animations, per-iteration tick during Newton loop, filter controls. Files: refinements to `frontend/app/audit/page.tsx` and components. Acceptance: live demo of a logistic query produces a visually clear sequence of audit events with per-iteration ε debits visible. Depends on: P21.
+
+**P26. Demo dry-run + screencast.** Day 7. Three timed runs; record screencast. Files: `docs/demo_script.md`, `docs/demo_screencast.mp4`. Acceptance: 3:00 ± 0:15 three times consecutively. Depends on: P24, P25, P23.
+
+**P27. README + pitch deck.** Submission artifacts. Files: `README.md`, `docs/pitch_deck.pdf`. Pitch deck includes the cross-vertical applicability slide (banking AML, P&C insurance, cyber insurance, supply chain, etc.) as future markets. Depends on: P26.
+
+**P28. Multi-step plan composition.** Planner emits a DAG of primitive plans instead of a single primitive. Aggregator dispatcher executes in topological order; later steps can reference earlier results via templated parameters. Enables clinical queries like *"top 3 comorbidities by readmission rate, then run a logistic regression within the top-1 cohort."* Files: updates to `shared/plans.py` (`MultiStepPlan`, `PlanStep`, `dependency_refs`), `backend/aggregator/planner.py` (system prompt + structured output for multi-step), `backend/aggregator/dispatcher.py` (DAG executor with context dict), `backend/aggregator/narrator.py` (narrate composite results), `tests/test_multistep_plans.py`. Approach: each step is a fully-specified `ComputationPlan` with its own ε and clip ranges; templated references like `{step_1.top_comorbidity}` resolved at execution time; budget cost = OpenDP composition over all step ε values. Acceptance: top-3-then-regression query returns histogram + logistic result; budget meter visibly debits at each step; central-vs-federated equivalence on each step. Depends on: P5, P6, P7, P10, P13.
+
+**P29. Silo-side fuzzy filter resolution.** Silos can interpret fuzzy filter expressions via a local Gemini Flash-class call against schema metadata (column names, types, ICD-10/SNOMED code enumerations) — never against actual rows. Files: `backend/silos/filter_resolver.py`, updates to `backend/silos/runner.py` (call resolver before stat dispatch when plan has `fuzzy_filter`), updates to silo configs (silo-LLM port + LT port), updates to `infra/lobstertrap/packs/hipaa_pack.yaml` (silo-LLM channel rules forbidding row content), `tests/test_filter_resolver.py`. Approach: plan field `fuzzy_filter: str` (e.g., `"diabetic CHF patients over 65 on guideline therapy"`) is sent through the silo's local LLM with a system prompt containing only schema metadata + ICD-10/SNOMED/RxNorm reference; LLM returns structured `{column: ..., op: ..., value: ...}` tuples; resolver validates against known column set and code enumerations before applying as SQL. **No privacy budget cost** — no row data is touched. Acceptance: `"diabetic CHF patients over 65 on guideline therapy"` resolves to `condition.icd10 LIKE 'I50%' AND condition.icd10 LIKE 'E1[01]%' AND age_at_index > 65 AND gdmt_adherence = 1`; resolver refuses fuzzy filters referencing non-schema columns; silo-LLM channel rejected by LT if row data appears in prompt. Depends on: P3, P9.
+
+### 11.2.1 Additional statistical primitives — ordered easy → hard
+
+These extend the primitive set into a full clinical-research toolkit (Table 1 reporting, group comparisons, robust SEs, mixed-effects modeling). Order is by implementation difficulty, with dependencies respected — each part only depends on parts above it.
+
+**P30. Variance / standard deviation / SEM primitive.** Pooled variance, stddev, and standard error of the mean across silos for a single variable; the foundation for almost every other test. Also augments `mean(x)` to return `mean ± SEM` alongside the point estimate. Files: `backend/silos/stats/variance.py`, `backend/aggregator/combine/variance.py`, updates to `backend/aggregator/combine/mean.py` (return SEM), `tests/test_variance.py`. Updates `shared/plans.py` to add `VarianceStats {sum_x: float, sum_x_sq: float, n: int, dp_params}`. Approach: each silo computes `Σx, Σx², n` under the plan's filter; aggregator combines as `var = (Σx² − (Σx)²/n) / (n−1)`, `SEM = stddev / √n`. Gaussian DP on both sums with split budget. Acceptance: federated variance matches `numpy.var(ddof=1)` on pooled data within 1e-9 (DP off); SEM matches `scipy.stats.sem`; empirical noise distribution matches theoretical Gaussian (KS p>0.05). Depends on: P1, P3, P4, P12. **Difficulty: trivial** (~0.5 day).
+
+**P31. Quantile primitive (median, IQR, percentiles, min, max).** Approximate quantile estimation under DP — the missing piece for clinical Table 1 reporting of skewed distributions, plus min/max via extreme quantiles. Files: `backend/silos/stats/quantile.py`, `backend/aggregator/combine/quantile.py`, `tests/test_quantile.py`. Updates `shared/plans.py` for `QuantileStats {bucket_counts: list[int], range_lo, range_hi, dp_params}` and `q: list[float]` request field. Approach: each silo emits a DP histogram with ~100 fine bins over the variable's clip range; aggregator sums element-wise, computes cumulative counts, interpolates the requested quantile(s). Supports `q=0` (min) and `q=100` (max) as special cases — these are inherently more sensitive (single record dominates), so the narrator surfaces "approximate min/max under DP" rather than reporting exact extremes. Bias decreases with bin count; noise increases — pick ~100 as a default. Acceptance: federated median of LOS within ±5% of centralized median (DP off, bit-equal); IQR computed; min/max return values within the clip range with honest CI. Depends on: P1, P3, P4, P12. **Difficulty: small** (~1 day).
+
+**P32. Two-sample Welch's t-test.** Compare a continuous outcome between two groups (e.g., GDMT-adherent vs non-adherent) with unequal variances. Files: `backend/silos/stats/ttest.py`, `backend/aggregator/combine/ttest.py`, `tests/test_ttest.py`. Updates `shared/plans.py` for `TTestStats {group_a: {sum_x, sum_x_sq, n}, group_b: {sum_x, sum_x_sq, n}, dp_params}`. Approach: plan specifies grouping variable (binary) + outcome variable. Each silo emits per-group sufficient stats. Aggregator combines, computes Welch's `t = (x̄_a − x̄_b) / √(s²_a/n_a + s²_b/n_b)` and Satterthwaite degrees of freedom; produces p-value, mean difference, 95% CI. Acceptance: federated `t` matches `scipy.stats.ttest_ind(equal_var=False)` on pooled data within DP tolerance. Depends on: P1, P3, P30. **Difficulty: small** (~0.5 day).
+
+**P33. Chi-square / Fisher's exact for contingency tables.** Test independence between two categorical variables across silos (e.g., readmission yes/no by diabetes yes/no). Files: `backend/silos/stats/contingency.py`, `backend/aggregator/combine/contingency.py`, `tests/test_contingency.py`. Updates `shared/plans.py` for `ContingencyStats {cell_counts: list[list[int]], row_levels, col_levels, dp_params}`. Approach: each silo emits a 2-D contingency table (counts per (var1_level, var2_level)) under the filter. Aggregator sums element-wise. Computes χ² = Σ((O − E)² / E); falls back to Fisher's exact when any expected cell < 5. Acceptance: federated χ² matches `scipy.stats.chi2_contingency` on pooled data within DP tolerance. Depends on: P1, P3, P4, P12. **Difficulty: small** (~0.5 day).
+
+**P34. Cluster-robust standard errors for OLS and logistic.** Sandwich estimator that accounts for hospital-level clustering — the right SE for our multi-site setup. Files: updates to `backend/aggregator/combine/ols.py` and `backend/aggregator/combine/logistic.py`, `tests/test_cluster_robust.py`. Approach: aggregator retains per-silo `(XᵀX, Xᵀy, yᵀy)` (already computed for the pooled estimate, just not retained separately by default) plus per-silo residuals. Sandwich estimator: `V = (XᵀX)⁻¹ B (XᵀX)⁻¹` where `B = Σ_silo (X_iᵀr_i)(X_iᵀr_i)ᵀ`. Adds `cluster_se: bool` flag to OLS/logistic plans. Acceptance: cluster-robust SEs match `statsmodels.OLS.fit().get_robustcov_results(cov_type='cluster')` on pooled data; OLS demo can re-run with cluster-robust SEs and produce visibly wider CIs than naive. Depends on: P15, P18. **Difficulty: small-medium** (~1 day).
+
+**P35. AUC / ROC for binary classifiers.** Standard reporting companion for any logistic model. Files: `backend/silos/stats/auc.py`, `backend/aggregator/combine/auc.py`, `tests/test_auc.py`. Updates `shared/plans.py` for `AUCStats {threshold_bin_counts: list[{tp, fp, tn, fn}], n_bins, dp_params}`. Approach: after logistic converges, each silo computes predicted probabilities `p̂ = σ(Xβ̂)`, bins them into B threshold bins (default 100), emits confusion counts per bin (TP, FP, TN, FN). Aggregator sums per-bin counts, constructs ROC curve, integrates AUC via trapezoidal rule. DP via Laplace on each confusion cell. Acceptance: federated AUC within ±0.02 of `sklearn.metrics.roc_auc_score` on pooled data at moderate ε; ROC plottable in UI. Depends on: P18, P12. **Difficulty: medium** (~1.5 days).
+
+**P36. Mann-Whitney U / Wilcoxon rank-sum.** Non-parametric two-group comparison — clinical workhorse when t-test assumptions are violated. Files: `backend/silos/stats/mann_whitney.py`, `backend/aggregator/combine/mann_whitney.py`, `tests/test_mann_whitney.py`. Updates `shared/plans.py` for `MannWhitneyStats {group_a_histogram, group_b_histogram, range_lo, range_hi, dp_params}`. Approach: leverages the quantile/histogram infrastructure — each silo emits a fine-grain DP histogram of the outcome within each of the two groups (two histograms per silo). Aggregator sums to get pooled per-group distributions, constructs pooled CDFs, computes U statistic via rank-sum on the combined ordered histograms, applies asymptotic-normal p-value. Acceptance: U and p-value approximately match `scipy.stats.mannwhitneyu` on pooled data within DP-noise tolerance (typically tighter at small n than t-test under non-normality). Depends on: P31, P12. **Difficulty: medium-high** (~2 days).
+
+**P37. Linear mixed-effects model with random hospital intercept.** Properly models hospital-level clustering by treating hospitals as a random sample with `y = Xβ + Zu + ε`, `u ~ N(0, σ²ᵤ I)`. Files: `backend/silos/stats/mixed_effects.py`, `backend/aggregator/combine/mixed_effects.py`, `tests/test_mixed_effects.py`. Updates `shared/plans.py` for `MixedEffectsIterStats` capturing per-iteration per-cluster `(XᵀX, Xᵀy, yᵀy, ZᵀX, Zᵀy, ZᵀZ, n)`. Approach: iterative REML estimation. Each iteration: aggregator broadcasts current `(β, σ²ᵤ, σ²_e)`; each silo computes its cluster contribution to the REML score equations; aggregator combines, updates variance components via REML score, refits fixed effects via GLS; iterate to convergence (typical 10–20 iters). Per-iteration DP via Gaussian on cluster-level sufficient stats. Acceptance: fixed-effect coefficients and variance components match `statsmodels.regression.mixed_linear_model.MixedLM` on pooled data within DP-noise tolerance; converges in ≤20 iterations on the CHF cohort; produces hospital-level intercept variance estimate. Depends on: P15, P12, P13, P18 (pattern). **Difficulty: high** (~2.5–3 days). *Most ambitious primitive; treat as Phase 2-stretch if Day 5 looks tight.*
+
+### 11.2.2 Additional descriptive primitives — completing the clinical reporting toolkit
+
+These three parts close out the descriptive-statistics gap a clinical researcher would notice within minutes. Each is independently small and can slot in anywhere after its dependencies are met.
+
+**P38. Proportion with Wilson and Clopper-Pearson confidence intervals.** Clinical proportions (e.g., "GDMT adherence rate," "30-day readmission rate") reported with statistically-appropriate CIs. Naive Wald CIs are wrong at small n or extreme p; Wilson is the clinical default, Clopper-Pearson the conservative option. Files: `backend/silos/stats/proportion.py`, `backend/aggregator/combine/proportion.py`, `tests/test_proportion.py`. Updates `shared/plans.py` for `ProportionStats {numerator_count: int, denominator_count: int, dp_params}` and plan fields `numerator_filter` + `denominator_filter`. Approach: each silo emits noised (numerator_count, denominator_count) under the two filters. Aggregator sums each, computes `p̂ = num / den`, then Wilson interval `(p̂ + z²/2n ± z·√(p̂(1−p̂)/n + z²/4n²)) / (1 + z²/n)`. Clopper-Pearson available as option (beta-distribution-based exact interval). Acceptance: federated proportion + Wilson CI matches `statsmodels.stats.proportion.proportion_confint(method='wilson')` on pooled data within DP tolerance; Clopper-Pearson option works; CIs are tighter than naive Wald for small n. Depends on: P1, P3, P4, P12. **Difficulty: trivial** (~0.5 day).
+
+**P39. Skewness and kurtosis.** Third and fourth standardized moments — used by clinical researchers for normality screening before choosing parametric vs. non-parametric tests (skewness near 0 + kurtosis near 3 → roughly normal → t-test acceptable; otherwise lean toward Mann-Whitney + median). Files: `backend/silos/stats/moments.py`, `backend/aggregator/combine/moments.py`, `tests/test_moments.py`. Updates `shared/plans.py` for `MomentsStats {sum_x, sum_x_sq, sum_x_cu, sum_x_qu, n, dp_params}`. Approach: each silo emits `Σx, Σx², Σx³, Σx⁴, n` under the filter. Aggregator combines to compute central moments `m_k = E[(x−μ)^k]`, then skewness = `m_3 / m_2^(3/2)` and (excess) kurtosis = `m_4 / m_2² − 3`. Gaussian DP on each sum with split budget. Acceptance: federated skewness and kurtosis match `scipy.stats.skew` and `scipy.stats.kurtosis` on pooled data within tolerance. Depends on: P1, P3, P30 (extends variance pattern), P12. **Difficulty: trivial** (~0.5 day).
+
+**P40. Incidence rate (events per person-time) with Poisson CI.** Epidemiology workhorse: "X events per 1000 person-years." The denominator is person-time-at-risk, not headcount — a per-patient observation window must be accumulated. Files: `backend/silos/stats/incidence_rate.py`, `backend/aggregator/combine/incidence_rate.py`, `tests/test_incidence_rate.py`. Updates `shared/plans.py` for `IncidenceRateStats {event_count: int, total_person_time: float, n_patients: int, dp_params}` plus plan fields `event_predicate`, `person_time_expr` (e.g., `min(observation_end, study_end) − observation_start`), `time_unit` (days / years). Approach: each silo computes per-patient person-time, accumulates `(Σ events, Σ person-time, n)` under the filter. Aggregator sums, divides for rate, computes Garwood (exact Poisson) CI for the rate from chi-square quantiles. Time-unit conversion handled in narrator (rate per 1000 person-years etc.). Acceptance: federated rate matches centralized calculation on pooled data; Garwood CI bounds correct against `scipy.stats.chi2.ppf` reference; rate-per-1000-person-years rendering reads naturally. Depends on: P1, P3, P4, P12. **Difficulty: small** (~1 day).
+
+### 11.3 Suggested build order
+
+**Early-demo-first** (working demo as soon as possible): P0 → P1 → P2 → P3 → P4 → P5 → P7 → P8 → P9 → P10 → *(closed-form demo working)* → P11 → P12 → P13 → **P30** → **P38** → **P39** → **P31** → **P40** → **P32** → **P33** → *(Tier-1 clinical Table-1 + descriptive capability)* → P15 → P16 → *(OLS w/ DP)* → P17 → P18 → P19 → *(logistic — the hero)* → **P34** → **P35** → P14 → **P28 → P29** → **P36** → **P37** → P20 → P21 → P22 → P23 → P24 → P25 → P26 → P27.
+
+**Foundation-first** (privacy stack solid before features): P0 → P1 → P9 → P3 → P11 → P12 → P13 → P14 → *(privacy proven)* → P2 → P4 → **P30 → P38 → P39 → P31 → P40 → P32 → P33** → P5–P8 → P10 → *(closed-form + descriptive + Table-1 tests)* → P15 → P16 → P17 → P18 → P19 → *(GLMs)* → **P34 → P35** → **P28 → P29** → **P36 → P37** → P20–P22 → P23 → P24 → P25 → P26 → P27.
+
+**Difficulty-ordered (all new statistical primitives, with dependencies respected):**
+- **P30** Variance / stddev / SEM — trivial (~0.5 day) — deps: P4, P12
+- **P38** Proportion with Wilson + Clopper-Pearson CI — trivial (~0.5 day) — deps: P4, P12
+- **P39** Skewness / kurtosis — trivial (~0.5 day) — deps: P30
+- **P31** Quantile (median / IQR / min / max) — small (~1 day) — deps: P4, P12
+- **P40** Incidence rate (events per person-time, Garwood CI) — small (~1 day) — deps: P4, P12
+- **P32** Welch's t-test — small (~0.5 day) — deps: P30
+- **P33** Chi-square / Fisher's — small (~0.5 day) — deps: P4, P12
+- **P34** Cluster-robust SEs for OLS / logistic — small-medium (~1 day) — deps: P15, P18
+- **P35** AUC / ROC — medium (~1.5 days) — deps: P18, P12
+- **P36** Mann-Whitney U — medium-high (~2 days) — deps: P31, P12
+- **P37** Mixed-effects (random intercept) — high (~2.5–3 days) — deps: P15, P12, P13
+
+**Notes on placement:**
+- **P30, P38, P39, P31, P40, P32, P33 land before the GLM stack** in the early-demo-first order because together they unlock a complete clinical descriptive + Table-1 capability (mean ± SD ± SEM, median [IQR], min/max, proportions with Wilson CI, incidence rates with Poisson CI, skewness/kurtosis for normality screening, t-test p-values for continuous group comparisons, χ² for categorical). Table 1 is the single most-recognized clinical-research artifact; landing the descriptive + comparative stack early makes the demo immediately credible.
+- **P34 lands right after the GLM stack** because it's a 1-line addition to existing OLS/logistic results (`cluster_se=True` flag) that produces visibly different (wider, correct) CIs — a high-credibility flex for clinical audiences.
+- **P35 (AUC) lands right after logistic** because every binary classifier needs it.
+- **P36 (Mann-Whitney) requires P31** (uses the histogram/quantile infrastructure).
+- **P37 (mixed-effects) is the most ambitious — keep it last.** If Day 5 looks tight, defer P37 to Day 8 buffer and demo cluster-robust SEs (P34) as the multi-site adjustment instead. Both address hospital clustering; mixed-effects is the "right" answer, cluster SEs are the "robust" answer.
+
+**Note on P28/P29 placement:** P29 (filter resolution) is structurally independent and could slot in as early as right after P9 if you want the fuzzy-filter UX in the closed-form demo (clinical fuzzy filters like *"CHF patients on guideline therapy"* are very natural to demo). P28 (multi-step) reads more naturally after the GLM stack is in place.
+
+### 11.4 Realistic MVP scope for the 8-day window
+
+The 40-part list is the **full design surface**, not the realistic 8-day build target. Mixed-effects alone is 2.5–3 days; logistic-with-per-iteration-DP is another 1.5; the frontend alone is 2+ days if it's Next.js. Honest accounting says we can't build 40 parts in 8 days.
+
+What we can ship by May 19 — the **demo-grade MVP**:
+
+| Part | Reason for inclusion |
+|---|---|
+| P0 (proxy chain smoke) | Single biggest schedule risk; must validate Day 1 |
+| P1 (shared schemas) | Single source of truth between aggregator and silos |
+| P2 (data) | **Already built and shipping** — see `data/README.md` |
+| P3 (silo runtime) | Required for any silo to respond to plans |
+| P4 (closed-form stats: count, mean, histogram, pearson) | Core descriptive demo |
+| P5 (planner LLM) | The "NL → plan" headline |
+| P7 (combiners for closed-form) | Required pair to P4 |
+| P8 (narrator LLM) | The "result → English" closing beat |
+| P9 (Lobster Trap policy + HIPAA pack) | The Veea-track-aligned governance story |
+| P10 (backend wire-up) | Makes the demo a real product |
+| P11 (audit tail + SSE) | The governance dashboard demo |
+| P12+P13 (DP noise + budget on closed-form stats) | The DP/privacy headline |
+| P15 (OLS sufficient stats + combiner, **no DP**) | One regression primitive for credibility |
+| P20 + P21 (frontend chat + audit panel) | Visual demo surface |
+| P38 (proportion with Wilson CI) | Clinical-Table-1 essential |
+| P30 (variance / stddev / SEM) | Clinical-Table-1 essential |
+| P32 (t-test) | Clinical-Table-1 essential |
+| P26 (dry-run + screencast) | Required artifact |
+| P27 (README + pitch deck) | Required artifact |
+
+**Cut from MVP — pitched as "next pass" in the deck:**
+
+- **All DP on iterative methods** (P16 DP-OLS, P19 DP-logistic) — keep DP on closed-form aggregates only; honest framing
+- **P17–P18 logistic Newton-Raphson** — defer; OLS is sufficient as the regression proof
+- **P34 cluster-robust SEs, P35 AUC, P36 Mann-Whitney, P37 mixed-effects** — all interesting, none essential
+- **P28 multi-step plans, P29 fuzzy-filter resolution** — interesting demos but not required to ship
+- **P14 differencing auditor** — DP composition (P13) already closes the same attack mathematically; auditor is belt-and-suspenders
+- **P22 frontend silo view** — pretty, not required
+- **P39 skewness/kurtosis, P40 incidence rate, P33 chi-square** — Tier-1 nice-to-have, not load-bearing
+
+This MVP is roughly 18 parts vs 40. Each ~half-day, total ~9 days of work — still tight but achievable. The full 40-part design remains the long-term plan; the slide deck claims it; the demo ships what's in MVP scope.
+
+If a single area runs hot (e.g., the proxy chain takes 2 days instead of 1), the first thing cut is **DP on OLS** (P12 stays for closed-form aggregates, P15 OLS ships without DP). After that: **the audit panel polish** (P21 becomes a basic log dump rather than a polished SSE UI). Don't cut: P0, P1, P3, P4, P5, P7, P8, P9, P10, P26, P27 — these are the demo's spine.
+
+---
+
+## 12. Risks & Mitigations
+
+> *Purpose: name the things most likely to derail the build, with mitigations decided upfront.*
+
+- **Lobster Trap ↔ LiteLLM ↔ Gemini shape compatibility** — biggest schedule risk. Validate Day 1 (P0). Preferred path: Lobster Trap receives OpenAI-compatible chat completions, forwards to LiteLLM, and LiteLLM routes to Gemini. Fallback: route Gemini through OpenRouter's OpenAI-compatible API. Last-resort demo fallback: call Gemini directly and demo Lobster Trap policy blocks separately, with the caveat that this weakens the Veea award story.
+- **Synthea source-pool quirks** — the prebuilt AWS Synthea-OMOP 1k pool has zero native heart-failure patients and sparse comorbidity overlap. Mitigation: handled — we synthetically inject CHF labels and fall back to seeded sampling for DM/CKD when source data is empty. All documented in `data/README.md` and `data/scripts/feature_engineering.py`.
+- **Source-pool replication** — same 363 cardiac source patients appear in all five silos with per-silo `person_id` offsets. Mitigation: framed honestly on stage as a federated-computation correctness demo (see Section 9.5), not a real multi-site independent-inference demo.
+- **DP-OLS sensitivity calibration** — getting L2 sensitivity right requires bounded covariates. Mitigation: declare clip ranges in `ComputationPlan` (age ∈ [0, 120], BMI ∈ [10, 80], EF ∈ [10, 80], etc.); clip before computing. Document the small bias clipping introduces.
+- **Composition accounting tightness** — naive ε-summation is loose. Mitigation: OpenDP zCDP/RDP combinators with tooltip explanation in UI.
+- **Aggregator concurrency** — 5 silo round-trips per query. Mitigation: asyncio parallel dispatch; total per-query latency dominated by the slowest single silo, not the sum.
+- **Lobster Trap YAML expressiveness** — no semantic match. Mitigation: HIPAA Safe Harbor identifiers are mostly pattern-matchable (SSN regex, MRN patterns, date formats, name lists derivable from the data source); real privacy work is in DP/schema/budget anyway.
+- **OpenDP integration time** — could eat >1.5 days. Mitigation: timebox to Day 5; if fragile, ship DP on closed-form aggregates only.
+- **Differencing auditor false positives** — naive shape-hash matches misfire. Mitigation: stage the differencing demo deliberately; production-grade detector is out of scope.
+- **"Just access control with extra steps" critique** — possible judge pushback. Mitigation: rehearse the threat-model + defense-mapping tables. DP composition is the moat; access-control systems can't claim it.
+- **HIPAA Safe Harbor completeness** — we won't implement all 18 identifier categories at production quality. Mitigation: demo the most-vivid categories (names, MRN, dates) and acknowledge the remaining categories as "next-pass policy enrichment."
+- **OLS numerical instability** — singular `XᵀX` on small silos with wide design matrices. Mitigation: `np.linalg.lstsq` (SVD-based); refuse if `n_total < p + 10`.
+- **Planted scenario calibration** — effect sizes might drift if upstream data or rates change. Mitigation: `data/scripts/validate.py` plus the row-level fingerprint test in `tests/test_data_checksum.py` catch any regression instantly.
+- **Multi-step plan complexity in the planner** — asking the planner LLM to emit DAGs reliably is harder than single-primitive plans. Mitigation: provide 5–10 worked clinical examples in the planner system prompt; validate the DAG against schema before dispatch.
+- **Fuzzy filter LLM injection** — silo-side LLM exposed to user-authored fuzzy filter strings could be manipulated. Mitigation: silo-LLM system prompt enforces "output only structured filter tuples referencing the provided schema columns and code enumerations"; output validated against known column/value sets; LT rules on the silo-LLM channel as backstop. Crucially, the silo-LLM never reads row data.
+- **P37 mixed-effects implementation complexity** — iterative REML across silos is significantly more involved than Newton-Raphson logistic; numerical instability around variance-component estimation is real. Mitigation: validate the REML loop on a known-good synthetic case before integrating with the federated dispatch; use OLS-style cluster-robust SEs (P34) as the fallback story if mixed-effects doesn't converge cleanly by Day 7; both address the multi-site clustering question, mixed-effects is "right," cluster-robust is "robust."
+- **P36 Mann-Whitney accuracy under DP** — non-parametric rank statistics are sensitive to noise on the histogram bins. Mitigation: use enough histogram bins (≥200) to give the noise room to average out; declare honestly that p-values are approximate at low ε; cross-check at high ε that the unperturbed U matches scipy exactly.
+- **P35 AUC bin granularity tradeoff** — too few threshold bins → coarse ROC and biased AUC; too many → DP noise dominates each bin's confusion counts. Mitigation: pilot with 50, 100, 200 bins on the same dataset to find the sweet spot; default to 100 bins; document the bias-variance trade.
+
+---
+
+## 13. Launch Plan
+
+> *Purpose: shipping is a deliberate act, not a default.*
+
+### 13.1 Submission requirements (May 19 deadline)
+
+- Live demo (or screencast backup) — 3 minutes
+- README with run instructions
+- Pitch deck (8–10 slides) including cross-vertical applicability slide
+- GitHub repo public-readable
+- Hackathon submission form
+
+### 13.2 Stage demo
+
+- Local laptop, all-localhost, no internet dependency beyond Gemini API / Google AI Studio.
+- Synthea-generated data pre-loaded (avoid live generation during demo).
+- Backup laptop running the same stack.
+- Pre-recorded screencast as final fallback.
+- Demo includes the "not for clinical decision support" footer disclaimer.
+
+### 13.3 Post-stage
+
+- Repo stays public.
+- Brief write-up of what was built + what wasn't.
+- Decide whether to pursue post-hackathon (design-partner conversations with research networks, AMCs, etc.) based on judge feedback and crowd reaction.
+
+---
+
+## 14. Future Work *(post-hackathon)*
+
+> *Purpose: capture good ideas that don't fit the 8-day window so they don't get lost.*
+
+### 14.1 Cross-vertical applicability (slide-deck material)
+
+Same engine extends to:
+
+| Vertical | Use case | Pack |
+|---|---|---|
+| Pharma RWE / multi-site trials | Cross-hospital effectiveness, rare-disease cohort pooling, post-market surveillance | HIPAA + GxP |
+| Cross-payer claims analytics | Payer-to-payer fraud detection, cost benchmarking, HEDIS measurement | HIPAA + ERISA |
+| Provider–payer integration | Joint analysis without raw data exchange | HIPAA |
+| Banking AML / fraud rings | Cross-bank pattern detection without sharing customers | GLBA + BSA-AML + PCI |
+| Insurance actuarial (P&C) | Cross-carrier rate adequacy / Verisk alternative | NAIC model laws |
+| Cyber insurance | Cross-carrier loss pooling for cyber risk pricing | NAIC + cyber-domain |
+| Threat intelligence sharing | ISAC-style federated SOC analytics | TLP traffic-light |
+| Adtech / CPG clean rooms | Audience-overlap, market-share benchmarking | GDPR / CCPA |
+| Education benchmarking | District-level outcome comparison | FERPA |
+| Supply chain visibility | Tier-N demand patterns / Scope-3 emissions | NDA-encoded |
+| Compensation benchmarking | Salary/equity benchmarks across companies | Generic NDA |
+| Antitrust-safe rate benchmarking | DP-protected pricing comparison across competitors | Legal-safe-harbor |
+
+### 14.2 Technical extensions
+
+- Cox proportional hazards via federated approximation (survival analysis for clinical outcomes)
+- DP-SGD for arbitrary differentiable models
+- Cryptographic federation layer (MPC / FHE) replacing the TEE assumption
+- Federated propensity-score matching for observational causal inference
+- ICD-10 / SNOMED / LOINC / RxNorm ontology-aware fuzzy filters
+- HIPAA Safe Harbor completeness (all 18 identifier categories at production quality)
+
+### 14.3 Productization paths
+
+- License the platform to multi-site research networks (academic consortia, NIH networks)
+- Sell as the privacy substrate to existing data-aggregator incumbents who need a federated story
+- Greenfield consortium formation in rare-disease research (small sample sizes are the natural use case)
+- Suptech sale to FDA / CMS for cross-system surveillance without raw-data submission
+
+---
+
+## 15. Open Questions
+
+> *Purpose: an honest list of things we haven't decided.*
+
+- **Frontend stack:** Next.js (visual polish, ~1.5 days more) vs. Streamlit (faster, less polished). Decide Day 1.
+- **Hosting:** localhost (safest) vs. Vercel + Fly.io (live URL strengthens pitch). Decide Day 6.
+- **Disease cohort beyond CHF:** Demo focuses on CHF. Stretch goal: add diabetes cohort for demo flexibility. Decide based on Phase 2 timing.
+- **Gemini model IDs:** Gemini Pro-class for planner, Gemini Flash-class for narrator. Confirm exact API model IDs in P0 and store them in config (`GEMINI_PLANNER_MODEL`, `GEMINI_NARRATOR_MODEL`) so model upgrades do not require code changes.
+- **Solo or paired:** if paired, parallelize frontend (Days 5–7) with backend hardening; if solo, lean toward Streamlit.
+
+*Resolved during data-layer build:*
+- ~~Synthea generation strategy~~ — settled: we use prebuilt Synthea-OMOP CSVs from AWS Open Data (no Java, no R, no Synthea CLI).
+- ~~Project directory~~ — settled: `~/Projects/federated_silo_agent/`.
