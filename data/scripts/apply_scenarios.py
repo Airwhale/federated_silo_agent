@@ -17,6 +17,7 @@ Run:
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import sys
 import time
@@ -34,6 +35,12 @@ SILOS_DIR = REPO_ROOT / "data" / "silos"
 
 SEED = 20260512
 SILO_IDS = ["riverside", "lakeside", "summit", "fairview", "coastal"]
+
+
+def silo_seed(silo_id: str, base_seed: int = SEED) -> int:
+    """Deterministic per-silo seed derived from a stable hash."""
+    h = hashlib.sha256(silo_id.encode("utf-8")).hexdigest()
+    return base_seed + int(h[:8], 16) % 1_000_000
 
 # Calibrated effect sizes
 GDMT_RR_REDUCTION = 0.30       # 30% relative reduction in readmit on adherent
@@ -167,11 +174,10 @@ def apply_to_silo(silo_id: str, rng: np.random.Generator) -> dict:
 
 def main() -> None:
     print("Applying planted scenarios...\n")
-    rng = np.random.default_rng(SEED)
     t0 = time.time()
     rows = []
     for silo_id in SILO_IDS:
-        silo_rng = np.random.default_rng(SEED + hash(silo_id) % 10000)
+        silo_rng = np.random.default_rng(silo_seed(silo_id))
         r = apply_to_silo(silo_id, silo_rng)
         rows.append(r)
         print(f"  {silo_id:<12} n_chf={r['n_chf']:>3}  "

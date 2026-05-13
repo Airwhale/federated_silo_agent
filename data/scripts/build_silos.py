@@ -26,6 +26,7 @@ Run:
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import sqlite3
 import sys
@@ -45,6 +46,17 @@ RAW_DIR = REPO_ROOT / "data" / "raw" / "synthea_omop_1k"
 SILOS_DIR = REPO_ROOT / "data" / "silos"
 
 SEED = 20260512
+
+
+def silo_seed(silo_id: str, base_seed: int = SEED) -> int:
+    """Deterministic per-silo seed derived from a stable hash.
+
+    Python's built-in hash() randomizes string hashes per-process
+    (PYTHONHASHSEED), which silently breaks reproducibility across
+    runs. Use SHA-256 instead so the pipeline is bit-deterministic.
+    """
+    h = hashlib.sha256(silo_id.encode("utf-8")).hexdigest()
+    return base_seed + int(h[:8], 16) % 1_000_000
 
 # Five-silo configuration:
 #   silo_id  : short name used in DB filename
@@ -264,7 +276,7 @@ def main() -> None:
     t0 = time.time()
     summary_rows = []
     for silo_cfg in SILOS:
-        silo_rng = np.random.default_rng(SEED + hash(silo_cfg["silo_id"]) % 10000)
+        silo_rng = np.random.default_rng(silo_seed(silo_cfg["silo_id"]))
         silo_tables = build_silo(silo_cfg, source_tables, cardiac_pids, silo_rng)
         db_path = write_sqlite(silo_cfg["silo_id"], silo_tables)
 

@@ -60,12 +60,30 @@ SILO_IDS = ["riverside", "lakeside", "summit", "fairview", "coastal"]
 # Update with ``python tests/test_data_checksum.py --update`` when you
 # intentionally change the data pipeline.
 # ---------------------------------------------------------------------------
-EXPECTED_FINGERPRINT_HASH = "3c05659ceab543592803b7a647c9ce28835db70c38a30e8323b5bbe8a1b0063e"
+EXPECTED_FINGERPRINT_HASH = "b9093e83bfc97e3fac35ebec30e3b58109a58776c553c36eac258ca2463259b5"
+
+
+def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
+    """Hash the full row-level content of a DataFrame, sorted for determinism.
+
+    Stronger than aggregate sums — catches drift in individual feature
+    values (e.g., wrong BMI for patient X) that an aggregate hash misses.
+    """
+    sorted_df = df.sort_values(sort_cols).reset_index(drop=True)
+    # Canonicalize column order too, so a column-reordering doesn't churn the hash
+    sorted_df = sorted_df.reindex(sorted(sorted_df.columns), axis=1)
+    text = sorted_df.to_csv(index=False, header=True, na_rep="<NA>")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def compute_fingerprint() -> dict:
-    """Return a JSON-serializable dict capturing the state of the dataset."""
-    out: dict = {"version": 1, "silos": {}}
+    """Return a JSON-serializable dict capturing the state of the dataset.
+
+    Version 2 adds row-level table hashes alongside the aggregate sums,
+    so the fingerprint detects drift in individual feature values and
+    condition_occurrence rows — not only changes in summary statistics.
+    """
+    out: dict = {"version": 2, "silos": {}}
     pooled = {
         "n_chf": 0,
         "readmit_sum": 0,
@@ -74,26 +92,42 @@ def compute_fingerprint() -> dict:
         "diabetes_sum": 0,
         "ckd_sum": 0,
         "los_sum": 0,
+        "n_dm_ckd_triple_pos": 0,
     }
     for sid in SILO_IDS:
         db = SILOS_DIR / f"{sid}.db"
         con = sqlite3.connect(str(db))
-        df = pd.read_sql("SELECT * FROM chf_cohort_features", con).sort_values("person_id")
+        chf = pd.read_sql("SELECT * FROM chf_cohort_features", con)
+        co = pd.read_sql(
+            "SELECT condition_occurrence_id, person_id, condition_concept_id, "
+            "condition_source_value, condition_start_date "
+            "FROM condition_occurrence",
+            con,
+        )
+        person = pd.read_sql("SELECT person_id, year_of_birth, gender_concept_id FROM person", con)
         con.close()
 
-        los = pd.to_numeric(df["los_index"], errors="coerce").fillna(0).astype(int)
+        los = pd.to_numeric(chf["los_index"], errors="coerce").fillna(0).astype(int)
 
-        # A small per-silo summary; the hash captures everything below.
+        triple_pos = int(((chf["has_diabetes"] == 1) & (chf["has_ckd"] == 1)).sum())
+
         silo_stats = {
-            "n_chf": int(len(df)),
-            "person_ids_sha": hashlib.sha256(
-                ",".join(str(p) for p in df["person_id"].tolist()).encode()
-            ).hexdigest()[:16],
-            "readmit_sum": int(df["readmit_30d"].sum()),
-            "gdmt_sum": int(df["gdmt_adherence"].sum()),
-            "amyloid_sum": int(df["has_amyloid"].sum()),
-            "diabetes_sum": int(df["has_diabetes"].sum()),
-            "ckd_sum": int(df["has_ckd"].sum()),
+            "n_chf": int(len(chf)),
+            "n_total_persons": int(len(person)),
+            "n_condition_occurrence": int(len(co)),
+            # Row-level hashes (the strong fingerprints):
+            "chf_features_rows_sha": _table_row_hash(chf, ["person_id"]),
+            "condition_occurrence_rows_sha": _table_row_hash(
+                co, ["person_id", "condition_concept_id", "condition_start_date"]
+            ),
+            "person_demographics_sha": _table_row_hash(person, ["person_id"]),
+            # Aggregate sums (kept for human inspection on failure):
+            "readmit_sum": int(chf["readmit_30d"].sum()),
+            "gdmt_sum": int(chf["gdmt_adherence"].sum()),
+            "amyloid_sum": int(chf["has_amyloid"].sum()),
+            "diabetes_sum": int(chf["has_diabetes"].sum()),
+            "ckd_sum": int(chf["has_ckd"].sum()),
+            "n_dm_ckd_triple_pos": triple_pos,
             "los_sum": int(los.sum()),
         }
         out["silos"][sid] = silo_stats
@@ -105,6 +139,7 @@ def compute_fingerprint() -> dict:
         pooled["diabetes_sum"] += silo_stats["diabetes_sum"]
         pooled["ckd_sum"] += silo_stats["ckd_sum"]
         pooled["los_sum"] += silo_stats["los_sum"]
+        pooled["n_dm_ckd_triple_pos"] += triple_pos
 
     out["pooled"] = pooled
     return out

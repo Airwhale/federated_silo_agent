@@ -53,6 +53,12 @@ Each silo's SQLite database contains a subset of OMOP CDM v5.4 clinical tables (
 | coastal | 363 | 51 | 12.3 MB |
 | **Pooled across all 5** | **1,815** | **251** | — |
 
+### A note on statistical independence
+
+The 1,815 "patient-instances" across silos come from a shared underlying pool of 363 unique cardiac source patients. From the federation engine's perspective the silos are independent — they each hold their own data and contribute their own sufficient statistics through their own egress controls. From a *statistical* perspective the silos are not independent samples, so pooled CIs computed on this data are tighter than what would obtain on five genuinely-distinct hospital populations.
+
+**This demo proves federated-computation correctness and the privacy/governance story, not real multi-site statistical inference.** Honest framing: the architecture, the DP composition, and the Lobster Trap policies behave identically when this synthetic data is replaced by real OMOP-formatted data from distinct hospitals. The replacement is a `data/` swap; the rest of the system needs no changes.
+
 ---
 
 ## How the data was generated
@@ -117,8 +123,8 @@ For each CHF patient, we derived an analytical features table:
 | `index_bmi` | most recent BMI within 365 days of index (LOINC 39156-5); sampled from `N(28, 5)` when no real measurement available |
 | `index_ef` | most recent ejection fraction within 365 days (LOINC 10230-1 / 8806-2 / 18043-0); sampled from `N(42, 12)` when no real measurement available |
 | `prior_chf_admissions_12mo` | count of inpatient visits in 12 months before index |
-| `has_diabetes` | from `condition_occurrence` matching diabetes concept; or sampled at 35% when source data is sparse |
-| `has_ckd` | from `condition_occurrence` matching CKD concept; or sampled at 20% when source data is sparse |
+| `has_diabetes` | from `condition_occurrence` matching diabetes concept; or sampled at 55% when source data is sparse |
+| `has_ckd` | from `condition_occurrence` matching CKD concept; or sampled at 40% when source data is sparse |
 | `gdmt_adherence` | binary composite (any ACE/ARB drug AND any beta-blocker AND any diuretic); sampled at 45% when source drug data is sparse |
 | `has_amyloid` | binary; populated by `apply_scenarios.py` for the planted amyloid cohort |
 | `readmit_30d` | any inpatient visit within 30 days of index discharge; sampled at ~25% baseline when source data is sparse |
@@ -132,10 +138,10 @@ Four scenarios are applied to `chf_cohort_features` (and the underlying `conditi
 
 | # | Scenario | Implementation | Target effect | Actual (pooled) |
 |---|---|---|---|---|
-| 1 | **GDMT protective effect on readmission** | Among GDMT-adherent CHF patients currently `readmit_30d=1`, flip 30% to `0`. | ≥15% relative reduction | non-adherent **27.0%** vs adherent **18.4%** = **31.8% relative reduction** |
-| 2 | **Diabetes + CKD heterogeneity** | Among CHF+DM+CKD patients, bump readmit rate to ~40% via random `0→1` flips. | Triple-positive readmit > baseline | Triple-positive **33.3%** vs baseline **22.7%** (n=3 — sparse but directional) |
-| 3 | **Hospital-level LOS variation** | Add `+1.3 ± 0.5` days to every Riverside CHF patient's `los_index`. | Riverside LOS bias 0.7–2.0d | Riverside **6.22d** vs other silos **5.07d** = **+1.15d** |
-| 4 | **Cardiac amyloidosis rare subtype (the headline)** | Mark 2 CHF patients per silo with `has_amyloid=1`; insert amyloid `condition_occurrence` rows; bump their `readmit_30d` rate. | 8–12 pooled; ≥1.5× baseline readmit | n=**10 pooled** (2 per silo); amyloid readmit **70.0%** vs baseline **22.7%** = **3.08× ratio** |
+| 1 | **GDMT protective effect on readmission** | Among GDMT-adherent CHF patients currently `readmit_30d=1`, flip 30% to `0`. | ≥15% relative reduction | non-adherent **32.6%** vs adherent **16.4%** = **49.7% relative reduction** |
+| 2 | **Diabetes + CKD heterogeneity** | Among CHF+DM+CKD patients, bump readmit rate to ~40% via random `0→1` flips. Comorbidity rates raised to 55% DM / 40% CKD for adequate triple-positive sample. | Triple-positive readmit > baseline, n≥10 | Triple-positive **50.0%** vs baseline **24.7%** (n=14 pooled, clean interaction signal) |
+| 3 | **Hospital-level LOS variation** | Add `+1.3 ± 0.5` days to every Riverside CHF patient's `los_index`. | Riverside LOS bias 0.7–2.0d | Riverside **6.04d** vs other silos **4.95d** = **+1.09d** |
+| 4 | **Cardiac amyloidosis rare subtype (the headline)** | Mark 2 CHF patients per silo with `has_amyloid=1`; insert amyloid `condition_occurrence` rows; bump their `readmit_30d` rate. | 8–12 pooled; ≥1.5× baseline readmit | n=**10 pooled** (2 per silo); amyloid readmit **60.0%** vs baseline **24.7%** = **2.43× ratio** |
 
 ### 7. Validation
 
@@ -292,7 +298,7 @@ What's real vs. what's synthetic, summarized:
 | OMOP concept_ids used for conditions, drugs, measurements | Real (mapped via `vocab.py`) |
 | Source patient demographics (age, sex, race), visit history, prescription patterns, lab measurements | Synthetic (from Synthea — realistic distributions, not real people) |
 | CHF cohort assignment (which patients have heart failure) | **Synthetic injection** — the 1k source pool has no native CHF patients |
-| Diabetes / CKD comorbidity labels | Mixed — real where Synthea generated them; synthetic backfill at 35% / 20% rates where it didn't |
+| Diabetes / CKD comorbidity labels | Mixed — real where Synthea generated them; synthetic backfill at 55% / 40% rates where it didn't (rates tuned to give ~14 triple-positive CHF+DM+CKD patients pooled, enough for the interaction-term scenario) |
 | GDMT adherence labels | Mixed — real where the drug_exposure data contained the GDMT ingredients; synthetic at 45% otherwise |
 | BMI and ejection fraction values for CHF patients | Real where Synthea measured them; synthetic from `N(28, 5)` and `N(42, 12)` otherwise |
 | 30-day readmission outcomes | Mixed — real where inpatient visit_occurrence data supported them; synthetic at ~25% baseline otherwise |

@@ -17,6 +17,7 @@ Run:
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import sys
 import time
@@ -34,6 +35,25 @@ SILOS_DIR = REPO_ROOT / "data" / "silos"
 
 SEED = 20260512
 SILO_IDS = ["riverside", "lakeside", "summit", "fairview", "coastal"]
+
+# Comorbidity prevalence used when Synthea's source data is too sparse to
+# populate has_diabetes / has_ckd from real condition_occurrence rows.
+# Calibrated so the DM + CKD triple-positive cohort is large enough to
+# support the planned interaction-term story in apply_scenarios.py.
+SYNTH_DM_RATE = 0.55  # bumped from 0.35
+SYNTH_CKD_RATE = 0.40  # bumped from 0.20
+SYNTH_GDMT_RATE = 0.45
+SYNTH_BASE_READMIT_RATE = 0.25
+
+
+def silo_seed(silo_id: str, base_seed: int = SEED) -> int:
+    """Deterministic per-silo seed derived from a stable hash.
+
+    Python's built-in hash() randomizes string hashes per-process; use
+    SHA-256 instead so the pipeline is bit-deterministic.
+    """
+    h = hashlib.sha256(silo_id.encode("utf-8")).hexdigest()
+    return base_seed + int(h[:8], 16) % 1_000_000
 
 
 def compute_features_for_silo(db_path: Path, rng: np.random.Generator) -> pd.DataFrame:
@@ -158,11 +178,13 @@ def compute_features_for_silo(db_path: Path, rng: np.random.Generator) -> pd.Dat
         cond[cond["condition_concept_id"] == ckd_cid]["person_id"]
     ).astype(int)
     # If Synthea didn't generate any DM or CKD in our cardiac pool, sprinkle them
-    # synthetically so the demo's comorbidity scenarios have signal.
+    # synthetically. Rates are tuned so the joint DM+CKD cohort has enough
+    # members for the planned interaction-term scenario in apply_scenarios.py
+    # (target: ~10 triple-positive per silo, ~50 pooled).
     if chf_pts["has_diabetes"].sum() == 0:
-        chf_pts["has_diabetes"] = rng.binomial(1, 0.35, size=len(chf_pts))
+        chf_pts["has_diabetes"] = rng.binomial(1, SYNTH_DM_RATE, size=len(chf_pts))
     if chf_pts["has_ckd"].sum() == 0:
-        chf_pts["has_ckd"] = rng.binomial(1, 0.20, size=len(chf_pts))
+        chf_pts["has_ckd"] = rng.binomial(1, SYNTH_CKD_RATE, size=len(chf_pts))
 
     # ---- GDMT adherence ----
     # Check drug_exposure for any of ACE/ARB/beta-blocker/diuretic
@@ -258,14 +280,13 @@ def compute_features_for_silo(db_path: Path, rng: np.random.Generator) -> pd.Dat
 
 
 def main() -> None:
-    rng = np.random.default_rng(SEED)
     print("Deriving chf_cohort_features per silo...\n")
     t0 = time.time()
     summary = []
     for silo_id in SILO_IDS:
         db = SILOS_DIR / f"{silo_id}.db"
         print(f"=== {silo_id} ===")
-        silo_rng = np.random.default_rng(SEED + hash(silo_id) % 10000)
+        silo_rng = np.random.default_rng(silo_seed(silo_id))
         df = compute_features_for_silo(db, silo_rng)
         if len(df):
             summary.append({
