@@ -325,9 +325,31 @@ In progress. The plan is decomposed into 40 self-contained build parts (`P0`–`
 
 ---
 
+## Configuring the API key
+
+The planner and narrator (and the benign smoke-test case) call Gemini through LiteLLM. You need a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) — free tier is generous, no credit card required.
+
+```bash
+# From the repo root
+cp .env.example .env
+# Then edit .env and set GEMINI_API_KEY=<your-key>
+```
+
+`.env` is gitignored. Three entry points read it:
+
+| Entry point | How it picks up `.env` |
+|---|---|
+| `uv run python scripts/smoke_proxy.py` | `python-dotenv` loads `.env` automatically |
+| `docker compose up` (from repo root) | Docker Compose auto-loads `.env` for `${GEMINI_API_KEY}` substitution |
+| `scripts/start_litellm.ps1` (native Windows) | Parses `.env` and sets `$env:GEMINI_API_KEY` before launching LiteLLM |
+
+If you'd rather set the key in your shell directly: `export GEMINI_API_KEY=...` (bash) or `$env:GEMINI_API_KEY = "..."` (PowerShell) also works for any entry point.
+
+---
+
 ## How to use
 
-> **Not yet runnable.** This section will be filled out as build parts P0 (repo scaffold + proxy-chain smoke) and downstream parts land.
+> **Not yet runnable end-to-end.** P0 (proxy chain) is wired and the LT side is verified; the benign Gemini round-trip requires the API key above. Downstream parts (P1 schemas, P3 silo runtime, etc.) will fill out this section as they land.
 >
 > P0 proxy-chain notes live in [`docs/p0_proxy_chain.md`](docs/p0_proxy_chain.md).
 >
