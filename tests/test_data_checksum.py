@@ -77,17 +77,14 @@ SILO_IDS = ["bank_alpha", "bank_beta", "bank_gamma"]
 # Update with ``python tests/test_data_checksum.py --update`` when you
 # intentionally change the data pipeline.
 # ---------------------------------------------------------------------------
-# Reset to None after the AML pivot. Will be regenerated once the bank
-# SQLite databases exist and ``compute_fingerprint`` is rewritten for the
-# AML schema. Until then the test skips.
-EXPECTED_FINGERPRINT_HASH: str | None = None
+EXPECTED_FINGERPRINT_HASH = "3a87870c1d58a50a6f0df69bf95e6b92a9cfe38297cba2c849e9297a4a13b45e"
 
 
 def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
     """Hash the full row-level content of a DataFrame, sorted for determinism.
 
-    Stronger than aggregate sums — catches drift in individual feature
-    values (e.g., wrong BMI for patient X) that an aggregate hash misses.
+    Stronger than aggregate sums — catches drift in individual values
+    (e.g., one transaction's amount changing) that an aggregate hash misses.
     """
     sorted_df = df.sort_values(sort_cols).reset_index(drop=True)
     # Canonicalize column order too, so a column-reordering doesn't churn the hash
@@ -97,69 +94,69 @@ def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
 
 
 def compute_fingerprint() -> dict:
-    """Return a JSON-serializable dict capturing the state of the dataset.
+    """Return a JSON-serializable dict capturing the AML dataset state.
 
-    Version 2 adds row-level table hashes alongside the aggregate sums,
-    so the fingerprint detects drift in individual feature values and
-    condition_occurrence rows — not only changes in summary statistics.
+    Version 3 — AML schema (post-pivot from clinical). Captures bank-level
+    row-level hashes of customers + accounts + transactions +
+    suspicious_signals + ground_truth_entities plus aggregate counts.
     """
-    out: dict = {"version": 2, "silos": {}}
+    out: dict = {"version": 3, "silos": {}}
     pooled = {
-        "n_chf": 0,
-        "readmit_sum": 0,
-        "gdmt_sum": 0,
-        "amyloid_sum": 0,
-        "diabetes_sum": 0,
-        "ckd_sum": 0,
-        "los_sum": 0,
-        "n_dm_ckd_triple_pos": 0,
+        "n_customers": 0,
+        "n_accounts": 0,
+        "n_transactions": 0,
+        "n_signals": 0,
+        "n_shell_entities": 0,
+        "n_pep": 0,
+        "amount_sum_cents": 0,
     }
     for sid in SILO_IDS:
         db = SILOS_DIR / f"{sid}.db"
         con = sqlite3.connect(str(db))
-        chf = pd.read_sql("SELECT * FROM chf_cohort_features", con)
-        co = pd.read_sql(
-            "SELECT condition_occurrence_id, person_id, condition_concept_id, "
-            "condition_source_value, condition_start_date "
-            "FROM condition_occurrence",
+        customers = pd.read_sql("SELECT * FROM customers", con)
+        accounts = pd.read_sql("SELECT * FROM accounts", con)
+        # Hash the columns that are demo-relevant for content drift.
+        # Skip raw transaction-id strings since they're already part of the row.
+        txns = pd.read_sql(
+            "SELECT transaction_id, account_id, counterparty_account_id_hashed, "
+            "amount, currency, transaction_type, timestamp, channel "
+            "FROM transactions",
             con,
         )
-        person = pd.read_sql("SELECT person_id, year_of_birth, gender_concept_id FROM person", con)
+        signals = pd.read_sql("SELECT * FROM suspicious_signals", con)
+        gt = pd.read_sql("SELECT * FROM ground_truth_entities", con)
         con.close()
 
-        los = pd.to_numeric(chf["los_index"], errors="coerce").fillna(0).astype(int)
-
-        triple_pos = int(((chf["has_diabetes"] == 1) & (chf["has_ckd"] == 1)).sum())
+        amount_sum_cents = int(round(txns["amount"].sum() * 100))
 
         silo_stats = {
-            "n_chf": int(len(chf)),
-            "n_total_persons": int(len(person)),
-            "n_condition_occurrence": int(len(co)),
+            "n_customers": int(len(customers)),
+            "n_accounts": int(len(accounts)),
+            "n_transactions": int(len(txns)),
+            "n_signals": int(len(signals)),
+            "n_shell_entities": int(len(gt)),
+            "n_pep": int(gt["is_pep"].sum()) if len(gt) else 0,
+            "amount_sum_cents": amount_sum_cents,
             # Row-level hashes (the strong fingerprints):
-            "chf_features_rows_sha": _table_row_hash(chf, ["person_id"]),
-            "condition_occurrence_rows_sha": _table_row_hash(
-                co, ["person_id", "condition_concept_id", "condition_start_date"]
+            "customers_rows_sha": _table_row_hash(customers, ["customer_id"]),
+            "accounts_rows_sha": _table_row_hash(accounts, ["account_id"]),
+            "transactions_rows_sha": _table_row_hash(
+                txns, ["transaction_id"]
             ),
-            "person_demographics_sha": _table_row_hash(person, ["person_id"]),
-            # Aggregate sums (kept for human inspection on failure):
-            "readmit_sum": int(chf["readmit_30d"].sum()),
-            "gdmt_sum": int(chf["gdmt_adherence"].sum()),
-            "amyloid_sum": int(chf["has_amyloid"].sum()),
-            "diabetes_sum": int(chf["has_diabetes"].sum()),
-            "ckd_sum": int(chf["has_ckd"].sum()),
-            "n_dm_ckd_triple_pos": triple_pos,
-            "los_sum": int(los.sum()),
+            "signals_rows_sha": _table_row_hash(signals, ["signal_id"]),
+            "ground_truth_rows_sha": _table_row_hash(
+                gt, ["entity_id", "customer_id"]
+            ),
         }
         out["silos"][sid] = silo_stats
 
-        pooled["n_chf"] += silo_stats["n_chf"]
-        pooled["readmit_sum"] += silo_stats["readmit_sum"]
-        pooled["gdmt_sum"] += silo_stats["gdmt_sum"]
-        pooled["amyloid_sum"] += silo_stats["amyloid_sum"]
-        pooled["diabetes_sum"] += silo_stats["diabetes_sum"]
-        pooled["ckd_sum"] += silo_stats["ckd_sum"]
-        pooled["los_sum"] += silo_stats["los_sum"]
-        pooled["n_dm_ckd_triple_pos"] += triple_pos
+        pooled["n_customers"] += silo_stats["n_customers"]
+        pooled["n_accounts"] += silo_stats["n_accounts"]
+        pooled["n_transactions"] += silo_stats["n_transactions"]
+        pooled["n_signals"] += silo_stats["n_signals"]
+        pooled["n_shell_entities"] += silo_stats["n_shell_entities"]
+        pooled["n_pep"] += silo_stats["n_pep"]
+        pooled["amount_sum_cents"] += silo_stats["amount_sum_cents"]
 
     out["pooled"] = pooled
     return out
@@ -243,7 +240,7 @@ def _update_expected_hash() -> None:
     # Rewrite this file
     me = Path(__file__).read_text(encoding="utf-8")
     updated = re.sub(
-        r'EXPECTED_FINGERPRINT_HASH = ".*"',
+        r'EXPECTED_FINGERPRINT_HASH = "3a87870c1d58a50a6f0df69bf95e6b92a9cfe38297cba2c849e9297a4a13b45e"',
         f'EXPECTED_FINGERPRINT_HASH = "{new_hash}"',
         me,
         count=1,

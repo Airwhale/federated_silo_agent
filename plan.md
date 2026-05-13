@@ -359,39 +359,64 @@ Same pattern as the prior clinical data layer: deterministic seed (`SEED=2026051
 
 ---
 
-## 11. Build Plan — 3-day execution *(Develop)*
+## 11. Build Plan — deliverable milestones *(Develop)*
 
-### Day 1: Data layer + agent scaffolding
+Submission deadline: May 19, 2026. Target ship: May 17 (two days of buffer for rehearsal and polish before demo day). The work below is sequenced as discrete deliverables rather than hour-by-hour buckets because AI-assisted coding makes hour estimates misleading — some tasks land in minutes, others in iterations.
 
-| Hour | Task |
-|---|---|
-| 0–2 | Plan/README migration ✓ (done as part of the pivot) |
-| 2–4 | Write `data/scripts/build_banks.py` — generate 3 banks with ~5K customers + 50K transactions each |
-| 4–6 | Write `data/scripts/plant_ring.py` — embed the 5-entity structuring ring |
-| 6–8 | Write `data/scripts/validate_banks.py` + new checksum test; verify ring is centrally detectable |
+### Milestone M1: Data layer
 
-### Day 2: Agent implementation
+- `data/scripts/build_banks.py` — generate three banks with calibrated synthetic data:
+  - **Bank Alpha** ~8,000 customers, ~80,000 transactions, national bank profile
+  - **Bank Beta** ~5,000 customers, ~40,000 transactions, regional community bank
+  - **Bank Gamma** ~3,000 customers, ~25,000 transactions, credit union
+  - Calibrated to FFIEC BSA Examination Manual thresholds, FinCEN SAR statistics, published industry channel-mix distributions
+- `data/scripts/plant_scenarios.py` — embed four scenarios:
+  - S1: 5-entity structuring ring spanning all three banks (the demo's lead beat, contains the PEP)
+  - S2: 3-entity smaller structuring ring spanning Alpha + Beta only
+  - S3: 4-entity layering chain Alpha → Beta → Gamma → Alpha (closed loop)
+  - S4: PEP entity inside S1 (synthetic PEP relation, triggers F3 sanctions agent)
+- `data/scripts/validate_banks.py` — confirm each scenario is centrally detectable on the pooled data AND undetectable per single bank
+- Regenerated `tests/test_data_checksum.py` with new canonical fingerprint hash
 
-| Hour | Task |
-|---|---|
-| 0–2 | Define Pydantic message schemas in `shared/messages.py` (Alert, Sec314bQuery, Sec314bResponse, GraphPatternRequest, SanctionsCheckRequest, SARDraft, AuditEvent) |
-| 2–4 | Implement A1 (transaction monitoring) — rule-based + LLM-scoring helper |
-| 4–6 | Implement A2 (investigator) — orchestrates §314(b) queries |
-| 6–8 | Implement F1 (coordinator) + F3 (sanctions) — the simpler federation agents |
+### Milestone M2: Message contracts + bank-local agents
 
-### Day 3: Federation + demo + polish
+- `shared/messages.py` — Pydantic v2 schemas for `Alert`, `Sec314bQuery`, `Sec314bResponse`, `GraphPatternRequest`, `SanctionsCheckRequest`, `SARDraft`, `AuditEvent`
+- `backend/agents/a1_monitoring.py` — A1 transaction-monitoring agent (rule-based + LLM-scoring for ambiguous cases)
+- `backend/agents/a2_investigator.py` — A2 investigator agent (the protagonist; orchestrates §314(b) queries)
+- Unit tests for both agents
 
-| Hour | Task |
-|---|---|
-| 0–2 | Implement F2 (graph analysis) — aggregate-only ring detection |
-| 2–4 | Implement F4 (SAR drafter) + F5 (compliance auditor) |
-| 4–5 | AML-specific Lobster Trap policy pack — §314(b) rules, role authentication, customer-name redaction |
-| 5–7 | End-to-end demo dry-run; record screencast |
-| 7–8 | Update README + pitch deck |
+### Milestone M3: Federation-layer agents
 
-### Buffer
+- `backend/agents/f1_coordinator.py` — F1 cross-bank coordinator
+- `backend/agents/f3_sanctions.py` — F3 sanctions screening (with mock OFAC SDN list)
+- `backend/agents/f2_graph_analysis.py` — F2 graph analyst (aggregate-only ring detection)
+- `backend/agents/f4_sar_drafter.py` — F4 SAR drafter
+- `backend/agents/f5_compliance_auditor.py` — F5 compliance auditor
 
-Day 4 is the explicit buffer day before May 18 onsite + May 19 demo. Day 3 should end with a working demo; Day 4 is for polish, slipped tasks, and rehearsal.
+### Milestone M4: Policy + integration
+
+- AML-specific Lobster Trap policy pack at `infra/lobstertrap/packs/aml_pack.yaml` — §314(b) purpose declarations, role authentication, customer-name redaction
+- End-to-end smoke test for the canonical demo flow (one full investigation through all 6 agents)
+- Demo-quality console / UI for the federation timeline + audit panel
+
+### Milestone M5: Demo polish + submission
+
+- Demo dry-run × 3 (consistent outcomes, under 3 minutes)
+- Screencast recording as live-demo backup
+- README + mermaid diagrams updated for AML
+- Pitch deck (8–10 slides) including the Verafin $2.75B comp slide
+- Hackathon submission form completed
+
+### Cut order if something runs hot
+
+In rough priority order, the things that can drop without killing the demo:
+
+1. F5 (compliance auditor) → replace with a simpler audit-log dump
+2. F4 (SAR drafter) → pre-draft a SAR for the demo and present it as agent output
+3. S2 / S3 secondary scenarios → keep only S1 + S4 (the headline + PEP)
+4. Custom demo UI → use a terminal-based output for the federation timeline
+
+Do not cut: F1, F2, F3, A1, A2, M1 (data layer), the AML LT policy pack. These are the demo's spine.
 
 ---
 
