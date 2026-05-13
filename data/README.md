@@ -123,8 +123,8 @@ For each CHF patient, we derived an analytical features table:
 | `index_bmi` | most recent BMI within 365 days of index (LOINC 39156-5); sampled from `N(28, 5)` when no real measurement available |
 | `index_ef` | most recent ejection fraction within 365 days (LOINC 10230-1 / 8806-2 / 18043-0); sampled from `N(42, 12)` when no real measurement available |
 | `prior_chf_admissions_12mo` | count of inpatient visits in 12 months before index |
-| `has_diabetes` | from `condition_occurrence` matching diabetes concept; or sampled at 55% when source data is sparse |
-| `has_ckd` | from `condition_occurrence` matching CKD concept; or sampled at 40% when source data is sparse |
+| `has_diabetes` | from `condition_occurrence` matching diabetes concept_id; if the source pool has zero observed diabetic cases in the cardiac cohort, the entire `has_diabetes` column is overwritten with synthetic samples at rate 55%. **In the current build, real DM cases are detected (sparse) so the fallback does not trigger. Observed pooled rate: 14.7% (37 of 251 CHF).** |
+| `has_ckd` | from `condition_occurrence` matching CKD concept_id; same fallback semantics. **In the current build, zero real CKD cases are detected in the cardiac subset, so the fallback triggers and samples at rate 40%. Observed pooled rate: 40.2% (101 of 251 CHF).** |
 | `gdmt_adherence` | binary composite (any ACE/ARB drug AND any beta-blocker AND any diuretic); sampled at 45% when source drug data is sparse |
 | `has_amyloid` | binary; populated by `apply_scenarios.py` for the planted amyloid cohort |
 | `readmit_30d` | any inpatient visit within 30 days of index discharge; sampled at ~25% baseline when source data is sparse |
@@ -139,7 +139,7 @@ Four scenarios are applied to `chf_cohort_features` (and the underlying `conditi
 | # | Scenario | Implementation | Target effect | Actual (pooled) |
 |---|---|---|---|---|
 | 1 | **GDMT protective effect on readmission** | Among GDMT-adherent CHF patients currently `readmit_30d=1`, flip 30% to `0`. | ≥15% relative reduction | non-adherent **32.6%** vs adherent **16.4%** = **49.7% relative reduction** |
-| 2 | **Diabetes + CKD heterogeneity** | Among CHF+DM+CKD patients, bump readmit rate to ~40% via random `0→1` flips. Comorbidity rates raised to 55% DM / 40% CKD for adequate triple-positive sample. | Triple-positive readmit > baseline, n≥10 | Triple-positive **50.0%** vs baseline **24.7%** (n=14 pooled, clean interaction signal) |
+| 2 | **Diabetes + CKD heterogeneity** | Among CHF+DM+CKD patients, bump readmit rate to ~40% via random `0→1` flips. Synthetic-fallback comorbidity prevalences (used only when the source pool has zero observed cases of that condition — see note below) tuned to 55% DM / 40% CKD so the joint cohort is large enough for the interaction signal. | Triple-positive readmit > baseline, n≥10 | Triple-positive **50.0%** vs baseline **24.7%** (n=14 pooled, clean interaction signal) |
 | 3 | **Hospital-level LOS variation** | Add `+1.3 ± 0.5` days to every Riverside CHF patient's `los_index`. | Riverside LOS bias 0.7–2.0d | Riverside **6.04d** vs other silos **4.95d** = **+1.09d** |
 | 4 | **Cardiac amyloidosis rare subtype (the headline)** | Mark 2 CHF patients per silo with `has_amyloid=1`; insert amyloid `condition_occurrence` rows; bump their `readmit_30d` rate. | 8–12 pooled; ≥1.5× baseline readmit | n=**10 pooled** (2 per silo); amyloid readmit **60.0%** vs baseline **24.7%** = **2.43× ratio** |
 
@@ -298,7 +298,8 @@ What's real vs. what's synthetic, summarized:
 | OMOP concept_ids used for conditions, drugs, measurements | Real (mapped via `vocab.py`) |
 | Source patient demographics (age, sex, race), visit history, prescription patterns, lab measurements | Synthetic (from Synthea — realistic distributions, not real people) |
 | CHF cohort assignment (which patients have heart failure) | **Synthetic injection** — the 1k source pool has no native CHF patients |
-| Diabetes / CKD comorbidity labels | Mixed — real where Synthea generated them; synthetic backfill at 55% / 40% rates where it didn't (rates tuned to give ~14 triple-positive CHF+DM+CKD patients pooled, enough for the interaction-term scenario) |
+| Diabetes label | Real, sparse — Synthea source pool's diabetes condition_concept_id appears in the cardiac subset at low frequency. Fallback (overwrite at 55%) is **not triggered** because real cases exist. Observed pooled rate: 14.7% (37 of 251 CHF). |
+| CKD label | Synthetic — Synthea source pool has zero CKD concept_id occurrences in the cardiac subset, so the fallback triggers and samples the entire column at 40%. Observed pooled rate: 40.2% (101 of 251 CHF). Tuned alongside the 55% DM fallback to give ~14 triple-positive pooled (which materialized as DM ∩ CKD = 14, supporting the S2 interaction scenario). |
 | GDMT adherence labels | Mixed — real where the drug_exposure data contained the GDMT ingredients; synthetic at 45% otherwise |
 | BMI and ejection fraction values for CHF patients | Real where Synthea measured them; synthetic from `N(28, 5)` and `N(42, 12)` otherwise |
 | 30-day readmission outcomes | Mixed — real where inpatient visit_occurrence data supported them; synthetic at ~25% baseline otherwise |

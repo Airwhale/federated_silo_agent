@@ -137,7 +137,7 @@ A three-layer architecture. **Natural-language translation** at the edges (plann
 
 Three orthogonal mechanisms each doing what they're best at: **Lobster Trap polices NL channels • schema validation polices numerical channels • differential privacy polices aggregate leakage**. Defense in depth that's honest about each mechanism's limits.
 
-**Demo vertical:** a federated cohort-analytics flow over three Synthea-generated hospital silos focused on a CHF (congestive heart failure) study population. Hero query: federated logistic regression of 30-day readmission on patient features.
+**Demo vertical:** a federated cohort-analytics flow over five Synthea-derived hospital silos focused on a CHF (congestive heart failure) study population. Hero query: federated logistic regression of 30-day readmission on patient features.
 
 ---
 
@@ -182,13 +182,15 @@ Three orthogonal mechanisms each doing what they're best at: **Lobster Trap poli
 
 ### 7.3 Demo experience design
 
-The demo is a single coherent act focused on a CHF cohort study across three hospital silos:
+The demo is a single coherent act focused on a CHF cohort study across five hospital silos:
 
-- **Riverside General** — academic medical center, ~12K patient panel, complex case mix
-- **Lakeside Medical** — regional hospital, ~8K patients, mixed acuity
-- **Summit Community Health** — community hospital, ~6K patients, lower acuity average
+- **Riverside General** — academic medical center; older + higher acuity tilt; ~50 CHF patients
+- **Lakeside Medical** — regional referral; balanced; ~50 CHF patients
+- **Summit Community Health** — community hospital; younger + lower acuity; ~48 CHF patients
+- **Fairview Regional** — mid-size regional; slightly elevated diabetes; ~52 CHF patients
+- **Coastal Medical Center** — suburban; slightly higher BMI distribution; ~51 CHF patients
 
-All three are notional members of the "New England Outcomes Research Network." All run the `hipaa_pack.yaml` policy.
+All five are notional members of the "New England Outcomes Research Network." All run the `hipaa_pack.yaml` policy. Each silo holds 363 cardiac patients (the CHF cohort is a synthetic subset within them — see Section 9 and `data/README.md`).
 
 **Three minutes, four beats:**
 
@@ -309,35 +311,39 @@ Defense mapping: Lobster Trap closes NL extraction + injection. Schema validatio
 
 [Synthea](https://synthetichealth.github.io/synthea/) (MITRE) is an open-source synthetic patient generator. We use the pre-built [Synthea-OMOP datasets on AWS Open Data](https://registry.opendata.aws/synthea-omop/), already transformed into the OHDSI [OMOP CDM v5.4](https://ohdsi.github.io/CommonDataModel/cdm54.html) — the standard clinical-research schema used by 500+ hospitals worldwide. No IRB or PhysioNet credentialing needed; the system is plug-compatible with real OMOP hospital data post-hackathon.
 
-### 9.2 Five silos × 1,000 patients — a small hospital network
+### 9.2 Five silos × 363 cardiac patients — a small hospital network
 
-| Silo | Patients | Profile |
-|---|---|---|
-| **Riverside General** | 1,000 | Academic medical center; older + higher acuity tilt |
-| **Lakeside Medical** | 1,000 | Regional referral hospital; balanced |
-| **Summit Community Health** | 1,000 | Community hospital; younger + lower acuity |
-| **Fairview Regional** | 1,000 | Mid-size regional; slightly elevated diabetes prevalence |
-| **Coastal Medical Center** | 1,000 | Suburban; slightly higher BMI distribution |
+Each silo holds **363 cardiac patients** drawn from the Synthea-OMOP 1k source pool (all source patients with at least one cardiac condition: CHF, CAD, AFib, post-MI, hypertensive heart disease, or valve disease). The same 363 source patients appear in all five silos with per-silo `person_id` offsets and small demographic perturbations — see Section 9.5 for the honest framing of inter-silo independence.
 
-**Cohort restriction:** each silo's 1,000 patients are filtered to those with **at least one cardiac diagnosis** (CHF, CAD, AFib, post-MI, hypertensive heart disease, or valve disease). Of those 1,000:
+| Silo | Cardiac patients | CHF (synthetic injection) | Profile |
+|---|---:|---:|---|
+| **Riverside General** | 363 | 50 | Academic medical center; older + higher acuity tilt |
+| **Lakeside Medical** | 363 | 50 | Regional referral hospital; balanced |
+| **Summit Community Health** | 363 | 48 | Community hospital; younger + lower acuity |
+| **Fairview Regional** | 363 | 52 | Mid-size regional; slightly elevated diabetes prevalence |
+| **Coastal Medical Center** | 363 | 51 | Suburban; slightly higher BMI distribution |
 
-- **~50 CHF patients** (ICD-10 I50.x / SNOMED 84114007) — the study cohort
-- **~950 other heart-disease** — the comparison/control group (CAD, AFib, post-MI, etc.)
-- **~2 cardiac amyloidosis** patients embedded within the 50 CHF — rare subtype, synthetically labeled
+Of each silo's 363 cardiac patients:
 
-**Pooled across all 5 silos:**
+- **~50 are synthetically labeled CHF** (the Synthea 1k pool has zero native heart-failure patients; we inject `condition_occurrence` rows with concept_id 316139 — the OMOP schema and concept_id are real, the label assignment is synthetic).
+- **~313 are non-CHF cardiac** (CAD, AFib, post-MI, hypertensive heart disease) — the comparison/control group.
+- **~2 are also flagged as cardiac amyloidosis** (rare subtype, synthetic label, scenario S4).
+
+**Pooled across all 5 silos** (with honest caveats about replication — see 9.5):
 
 | Group | Single silo | Pooled (×5) | Statistical implication |
 |---|---|---|---|
-| CHF cases | ~50 | ~250 | Single-silo logistic on ~10 events is underpowered; pooled (~50 events) is borderline-adequate for 5 predictors |
-| Other heart disease | ~950 | ~4,750 | Plenty of comparison-group power |
-| Amyloid subtype | ~2 | ~10 | "Useless case series" → "directional finding" |
+| CHF cases | ~50 | ~251 | Single-silo logistic on ~12 events is underpowered; pooled (~62 events) is borderline-adequate for 5 predictors — *but the silos share an underlying source pool, so this isn't true multi-site power* |
+| Non-CHF cardiac comparison | ~313 | ~1,562 | Comparison-group depth |
+| Amyloid subtype | ~2 | ~10 | Per-silo useless; pooled directional |
 
 ### 9.3 Why this volume design makes the demo land
 
-The 5×1,000 structure is deliberate, not a side effect of dataset size. With ~10 readmission events per silo's CHF cohort, single-site logistic regression has confidence intervals so wide the coefficients are functionally uninterpretable. Pooled across 5 silos (~50 events), CIs tighten meaningfully — and the **visible CI shrinkage during the federated logistic demo is the moneyshot for AI judges.**
+The 363-cardiac / 50-CHF-per-silo structure is calibrated so the demo's signature visual — the confidence-interval shrinkage from single-silo to federated logistic — is mathematically real. With ~12 readmission events per silo's CHF cohort, single-site logistic regression has confidence intervals wide enough to be visually striking; the pooled estimate from 5 silos produces visibly tighter CIs. **The visual CI tightening during the federated logistic demo is the AI-judge moneyshot.**
 
-The amyloid sub-cohort gives a secondary federation beat: 2 cases per silo is *literally* a useless sample, while 10 cases pooled is enough to make a directional statement about elevated severity. *"We can do A, and even harder, B"* is the narrative rhythm.
+The amyloid sub-cohort gives a secondary federation beat: 2 cases per silo is *literally* a useless sample (per-silo CIs unbounded), while 10 cases pooled is enough to make a directional statement about elevated readmission risk. *"We can do A, and even harder, B"* is the narrative rhythm.
+
+See Section 9.5 below for the honest caveat about what this demonstrates statistically.
 
 ### 9.4 OMOP CDM schema (subset used)
 
@@ -759,18 +765,18 @@ If a single area runs hot (e.g., the proxy chain takes 2 days instead of 1), the
 > *Purpose: name the things most likely to derail the build, with mitigations decided upfront.*
 
 - **LiteLLM ↔ Lobster Trap shape compatibility** — biggest schedule risk. Validate Day 1 (P0). Fallback: swap Claude for an OAI-native model.
-- **Synthea generation slowness** — Synthea is a Java application and can take minutes to generate populations of 10K+. Mitigation: cache generated CSVs after first run; commit a small fixture for tests. Don't regenerate during normal development.
-- **Synthea data quirks** — Synthea's CHF prevalence and feature distributions may not match real-world epidemiology perfectly; planted scenarios are how we ensure the demo lands regardless. Mitigation: validate cohort sizes early (Day 1–2); adjust Synthea config or post-processing if necessary.
+- **Synthea source-pool quirks** — the prebuilt AWS Synthea-OMOP 1k pool has zero native heart-failure patients and sparse comorbidity overlap. Mitigation: handled — we synthetically inject CHF labels and fall back to seeded sampling for DM/CKD when source data is empty. All documented in `data/README.md` and `data/scripts/feature_engineering.py`.
+- **Source-pool replication** — same 363 cardiac source patients appear in all five silos with per-silo `person_id` offsets. Mitigation: framed honestly on stage as a federated-computation correctness demo (see Section 9.5), not a real multi-site independent-inference demo.
 - **DP-OLS sensitivity calibration** — getting L2 sensitivity right requires bounded covariates. Mitigation: declare clip ranges in `ComputationPlan` (age ∈ [0, 120], BMI ∈ [10, 80], EF ∈ [10, 80], etc.); clip before computing. Document the small bias clipping introduces.
 - **Composition accounting tightness** — naive ε-summation is loose. Mitigation: OpenDP zCDP/RDP combinators with tooltip explanation in UI.
-- **Aggregator concurrency** — 3 silo round-trips per query. Mitigation: asyncio parallel dispatch.
-- **Lobster Trap YAML expressiveness** — no semantic match. Mitigation: HIPAA Safe Harbor identifiers are mostly pattern-matchable (SSN regex, MRN patterns, date formats, name lists from Synthea); real privacy work is in DP/schema/budget anyway.
+- **Aggregator concurrency** — 5 silo round-trips per query. Mitigation: asyncio parallel dispatch; total per-query latency dominated by the slowest single silo, not the sum.
+- **Lobster Trap YAML expressiveness** — no semantic match. Mitigation: HIPAA Safe Harbor identifiers are mostly pattern-matchable (SSN regex, MRN patterns, date formats, name lists derivable from the data source); real privacy work is in DP/schema/budget anyway.
 - **OpenDP integration time** — could eat >1.5 days. Mitigation: timebox to Day 5; if fragile, ship DP on closed-form aggregates only.
 - **Differencing auditor false positives** — naive shape-hash matches misfire. Mitigation: stage the differencing demo deliberately; production-grade detector is out of scope.
 - **"Just access control with extra steps" critique** — possible judge pushback. Mitigation: rehearse the threat-model + defense-mapping tables. DP composition is the moat; access-control systems can't claim it.
 - **HIPAA Safe Harbor completeness** — we won't implement all 18 identifier categories at production quality. Mitigation: demo the most-vivid categories (names, MRN, dates) and acknowledge the remaining categories as "next-pass policy enrichment."
 - **OLS numerical instability** — singular `XᵀX` on small silos with wide design matrices. Mitigation: `np.linalg.lstsq` (SVD-based); refuse if `n_total < p + 10`.
-- **Planted scenario calibration** — effect sizes might be off after Synthea generation. Mitigation: P23 (validation suite) catches this early; tune scenarios post-generation if needed.
+- **Planted scenario calibration** — effect sizes might drift if upstream data or rates change. Mitigation: `data/scripts/validate.py` plus the row-level fingerprint test in `tests/test_data_checksum.py` catch any regression instantly.
 - **Multi-step plan complexity in the planner** — asking the planner LLM to emit DAGs reliably is harder than single-primitive plans. Mitigation: provide 5–10 worked clinical examples in the planner system prompt; validate the DAG against schema before dispatch.
 - **Fuzzy filter LLM injection** — silo-side LLM exposed to user-authored fuzzy filter strings could be manipulated. Mitigation: silo-LLM system prompt enforces "output only structured filter tuples referencing the provided schema columns and code enumerations"; output validated against known column/value sets; LT rules on the silo-LLM channel as backstop. Crucially, the silo-LLM never reads row data.
 - **P37 mixed-effects implementation complexity** — iterative REML across silos is significantly more involved than Newton-Raphson logistic; numerical instability around variance-component estimation is real. Mitigation: validate the REML loop on a known-good synthetic case before integrating with the federated dispatch; use OLS-style cluster-robust SEs (P34) as the fallback story if mixed-effects doesn't converge cleanly by Day 7; both address the multi-site clustering question, mixed-effects is "right," cluster-robust is "robust."
@@ -855,7 +861,9 @@ Same engine extends to:
 - **Frontend stack:** Next.js (visual polish, ~1.5 days more) vs. Streamlit (faster, less polished). Decide Day 1.
 - **Hosting:** localhost (safest) vs. Vercel + Fly.io (live URL strengthens pitch). Decide Day 6.
 - **Disease cohort beyond CHF:** Demo focuses on CHF. Stretch goal: add diabetes cohort for demo flexibility. Decide based on Phase 2 timing.
-- **Project directory:** suggest `~/Projects/federated-clinical-stats/`. Confirm at scaffold time.
 - **Anthropic models:** Sonnet for narrator, Opus 4.7 for planner. Revisit if cost or latency becomes an issue.
 - **Solo or paired:** if paired, parallelize frontend (Days 5–7) with backend hardening; if solo, lean toward Streamlit.
-- **Synthea generation strategy:** Java CLI vs. Python wrapper (e.g., `synthea-python`)? Decide Day 1 based on what works on the dev machine.
+
+*Resolved during data-layer build:*
+- ~~Synthea generation strategy~~ — settled: we use prebuilt Synthea-OMOP CSVs from AWS Open Data (no Java, no R, no Synthea CLI).
+- ~~Project directory~~ — settled: `~/Projects/federated_silo_agent/`.
