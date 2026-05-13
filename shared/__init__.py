@@ -4,6 +4,7 @@ from shared.enums import (
     AgentRole,
     AuditEventKind,
     BankId,
+    MessageType,
     PatternClass,
     PrivacyUnit,
     QueryShape,
@@ -14,6 +15,7 @@ from shared.enums import (
 )
 from shared.messages import (
     AggregateActivityPayload,
+    AgentMessage,
     Alert,
     AuditEvent,
     AuditPayload,
@@ -53,6 +55,7 @@ from shared.messages import (
 __all__ = [
     "AgentRole",
     "AggregateActivityPayload",
+    "AgentMessage",
     "Alert",
     "AuditEvent",
     "AuditEventKind",
@@ -78,6 +81,7 @@ __all__ = [
     "LtVerdictPayload",
     "Message",
     "MessageSentPayload",
+    "MessageType",
     "PatternClass",
     "PrimitiveCallRecord",
     "PrivacyUnit",

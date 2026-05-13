@@ -2,7 +2,7 @@
 
 **Multi-agent cross-bank AML investigation system with privacy-preserving federation.**
 
-Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist federation agents coordinate cross-bank queries, graph analysis, sanctions or PEP screening, SAR drafting, and compliance audit. **Every cross-bank conversation is policed by Veea Lobster Trap. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data crosses bank boundaries.**
+Three synthetic banks each run a transaction-monitoring agent, an outside-TEE investigator agent, and an inside-bank silo responder agent. When suspicious activity surfaces at one bank, the investigator agent asks the federation coordinator to query peer banks. Peer-bank evidence is answered by each bank's silo responder inside that bank's trusted boundary, using deterministic stats primitives rather than exposing raw data to the investigator. Specialist federation agents coordinate graph analysis, sanctions or PEP screening, SAR drafting, and compliance audit. **Every cross-bank conversation is policed by Veea Lobster Trap plus an AML policy adapter. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data crosses bank boundaries.**
 
 Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11 to 19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: **Gemini** powers the LLM agents through Google services; **Veea Lobster Trap** is the policy substrate. Pitch comp: **Verafin to Nasdaq, $2.75B in 2020** for the non-private version of this market.
 
@@ -12,9 +12,9 @@ Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab
 
 A multi-agent federated AML investigation platform:
 
-1. **7 agent roles, 11 running agent instances.** Three A1 transaction-monitoring instances, three A2 investigator instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor.
+1. **8 agent roles, 14 running agent instances.** Three A1 transaction-monitoring instances, three outside-TEE A2 investigator instances, three inside-bank A3 silo responder instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor.
 2. **Lobster Trap polices inter-agent messages.** The P0 policy already blocks prompt injection, jailbreaks, obfuscation, private-data extraction, data exfiltration, dangerous commands, and sensitive path access. The AML-specific policy pack comes later in P14.
-3. **Privacy enforcement is layered.** Hash-based entity linkage is the primary cross-bank correlation mechanism. Deterministic stats primitives keep raw transaction data inside each bank. Schema validation limits what can leave a silo. Differential privacy applies to aggregate-count and histogram-style primitives where it provides useful protection.
+3. **Privacy enforcement is layered.** Hash-based entity linkage is the primary cross-bank correlation mechanism. A2 has no raw database or stats-primitive handle. A3 invokes deterministic stats primitives inside each bank boundary. Schema validation limits what can leave a silo. Differential privacy applies to aggregate-count and histogram-style primitives where it provides useful protection.
 
 The demo scenario is a planted structuring ring spanning Bank Alpha, Bank Beta, and Bank Gamma. Each entity holds accounts at two banks. Per-bank activity stays noisy and sub-threshold; the pooled cross-bank pattern reveals the ring. One entity has a synthetic PEP relation for the sanctions agent to flag.
 
@@ -29,6 +29,25 @@ This project does not remove legal review. It lowers the technical friction:
 - Policy enforcement and audit logs for every cross-bank message
 - Differential privacy budgets for repeated aggregate queries
 - A reproducible multi-agent demo that shows why federation detects what a single bank misses
+
+## Workflow
+
+The core path is deliberately not a single headless model call:
+
+```text
+User or analyst
+  -> A2 outside-TEE investigator
+  -> Lobster Trap + AML policy adapter
+  -> F1 federation coordinator in the assumed federation TEE
+  -> Lobster Trap + AML policy adapter
+  -> peer A3 silo responders inside each bank trusted boundary
+  -> P7 stats primitives inside each bank boundary
+  -> A3 signed/provenance-backed response
+  -> F1 aggregation
+  -> A2 synthesis back to the user
+```
+
+`A2` is human-facing and decides what to ask. `F1` validates, routes, aggregates, and audits. `A3` independently re-checks purpose, routing, allowed primitive shape, and DP budget before touching local data. The data returned to `A2` is bounded signal: booleans, counts, histograms, hash lists, refusal reasons, and provenance records. Raw transactions and customer names do not return to `A2`.
 
 ## Current Build State
 
@@ -75,31 +94,34 @@ uv run pytest tests/test_data_checksum.py
 flowchart TB
     subgraph BA["Bank Alpha"]
         A1A["A1 monitor"]
-        A2A["A2 investigator"]
+        A2A["A2 investigator, outside TEE"]
+        A3A["A3 silo responder, bank boundary"]
         DBA["SQLite silo"]
         SPA["Stats primitives"]
         A1A --> A2A
-        A2A --> SPA
+        A3A --> SPA
         SPA --> DBA
     end
 
     subgraph BB["Bank Beta"]
         A1B["A1 monitor"]
-        A2B["A2 investigator"]
+        A2B["A2 investigator, outside TEE"]
+        A3B["A3 silo responder, bank boundary"]
         DBB["SQLite silo"]
         SPB["Stats primitives"]
         A1B --> A2B
-        A2B --> SPB
+        A3B --> SPB
         SPB --> DBB
     end
 
     subgraph BG["Bank Gamma"]
         A1G["A1 monitor"]
-        A2G["A2 investigator"]
+        A2G["A2 investigator, outside TEE"]
+        A3G["A3 silo responder, bank boundary"]
         DBG["SQLite silo"]
         SPG["Stats primitives"]
         A1G --> A2G
-        A2G --> SPG
+        A3G --> SPG
         SPG --> DBG
     end
 
@@ -123,12 +145,16 @@ flowchart TB
     A2B <--> LT
     A2G <--> LT
     LT <--> F1
+    LT <--> A3A
+    LT <--> A3B
+    LT <--> A3G
 ```
 
-Two paths matter:
+Three paths matter:
 
 - **LLM path:** agent to Lobster Trap to LiteLLM to Gemini. This is where natural-language reasoning and structured-output agent calls happen.
-- **Data path:** A2 to stats primitives to local SQLite. This is deterministic and bank-local. The LLM composes responses but does not directly read raw transactions on the cross-bank response path.
+- **Coordinator path:** A2 sends approved cross-bank questions only to F1. F1 routes to peer A3 responders and aggregates responses back to A2.
+- **Cross-bank response data path:** A3 to stats primitives to local SQLite. This is deterministic and bank-local. A2 has no raw database or P7 stats-primitive handle.
 
 ## Privacy Model
 
@@ -142,6 +168,22 @@ Two paths matter:
 | Audit stream | Records cross-bank messages, policy verdicts, primitive provenance, and privacy-budget debits. |
 
 DP is intentionally scoped. It is useful for aggregate counts and flow histograms. It is not the right tool for binary entity-presence queries, where noise would destroy the signal; those rely on hash linkage and audit controls.
+
+## Security Envelope
+
+The design assumes a possible man-in-the-middle attacker on inter-agent network paths. Lobster Trap is necessary for content and policy governance, but it is not the cryptographic integrity layer.
+
+Planned message-security controls:
+
+- **mTLS service identity** between A2, F1, A3, Lobster Trap, LiteLLM, and supporting services.
+- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `Sec314bResponse`, SAR contributions, and audit events.
+- **Request/response binding** through `message_id`, `query_id`, `in_reply_to`, route approval metadata, and a hash of the exact approved query body.
+- **Replay protection** through timestamp, expiration, nonce, and an idempotency cache.
+- **Silo-side re-validation** where A3 treats F1 approval as necessary but not sufficient. A3 still checks role, purpose, target bank, query shape, primitive allowlist, and DP budget.
+- **Audit hash chain** so deleted or modified audit events are detectable.
+- **TEE attestation hook** for deployments that claim the federation layer or silo responder is running inside a specific trusted execution environment.
+
+The practical rule is: F1 may approve and route, but each silo remains sovereign over whether it can answer. A3 can return a refusal such as `invalid_purpose`, `unsupported_query_shape`, `route_violation`, or `budget_exhausted`.
 
 ## P0 Proxy Chain
 

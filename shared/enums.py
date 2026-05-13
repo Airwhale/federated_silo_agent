@@ -27,6 +27,22 @@ class BankId(StrEnum):
     FEDERATION = "federation"
 
 
+class MessageType(StrEnum):
+    """Serialized top-level message type discriminators."""
+
+    ALERT = "alert"
+    SEC314B_QUERY = "sec314b_query"
+    SEC314B_RESPONSE = "sec314b_response"
+    SANCTIONS_CHECK_REQUEST = "sanctions_check_request"
+    SANCTIONS_CHECK_RESPONSE = "sanctions_check_response"
+    GRAPH_PATTERN_REQUEST = "graph_pattern_request"
+    GRAPH_PATTERN_RESPONSE = "graph_pattern_response"
+    SAR_CONTRIBUTION = "sar_contribution"
+    SAR_DRAFT = "sar_draft"
+    AUDIT_EVENT = "audit_event"
+    DISMISSAL_RATIONALE = "dismissal_rationale"
+
+
 class SignalType(StrEnum):
     """Local alert signal types surfaced by A1."""
 

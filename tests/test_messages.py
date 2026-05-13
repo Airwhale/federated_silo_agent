@@ -4,12 +4,13 @@ from datetime import date
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from shared.enums import (
     AgentRole,
     AuditEventKind,
     BankId,
+    MessageType,
     PatternClass,
     PrivacyUnit,
     QueryShape,
@@ -20,6 +21,7 @@ from shared.enums import (
 )
 from shared.messages import (
     AggregateActivityPayload,
+    AgentMessage,
     Alert,
     AuditEvent,
     BankAggregate,
@@ -259,6 +261,34 @@ def test_public_message_models_export_json_schema(model_cls: type[BaseModel]) ->
 
     assert schema["type"] == "object"
     assert "properties" in schema
+    assert "message_type" in schema["properties"]
+    assert isinstance(schema["properties"]["message_type"]["const"], str)
+
+
+@pytest.mark.parametrize("model", valid_models(), ids=lambda model: type(model).__name__)
+def test_top_level_message_type_serializes_as_string(model: BaseModel) -> None:
+    dumped = model.model_dump(mode="json")
+
+    assert isinstance(dumped["message_type"], str)
+    assert dumped["message_type"] == model.message_type
+
+
+def test_agent_message_discriminated_union_uses_message_type() -> None:
+    query = valid_query()
+    adapter = TypeAdapter(AgentMessage)
+
+    parsed = adapter.validate_json(query.model_dump_json())
+
+    assert isinstance(parsed, Sec314bQuery)
+    assert parsed.message_type == MessageType.SEC314B_QUERY.value
+
+
+def test_wrong_top_level_message_type_fails() -> None:
+    payload = valid_query().model_dump(mode="json")
+    payload["message_type"] = MessageType.ALERT.value
+
+    with pytest.raises(ValidationError):
+        Sec314bQuery.model_validate(payload)
 
 
 def test_extra_fields_are_forbidden() -> None:
@@ -305,6 +335,34 @@ def test_query_shape_must_match_payload_shape() -> None:
             query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
             purpose_declaration=purpose(),
             requested_rho_per_primitive=0.02,
+        )
+
+
+def test_query_defaults_to_peer_bank_targets() -> None:
+    query = Sec314bQuery(
+        **message_header(),
+        requesting_investigator_id="investigator-alpha-1",
+        requesting_bank_id=BankId.BANK_ALPHA,
+        query_shape=QueryShape.ENTITY_PRESENCE,
+        query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
+        purpose_declaration=purpose(),
+        requested_rho_per_primitive=0.0,
+    )
+
+    assert query.target_bank_ids == [BankId.BANK_BETA, BankId.BANK_GAMMA]
+
+
+def test_query_targets_must_not_include_requesting_bank() -> None:
+    with pytest.raises(ValidationError):
+        Sec314bQuery(
+            **message_header(),
+            requesting_investigator_id="investigator-alpha-1",
+            requesting_bank_id=BankId.BANK_ALPHA,
+            target_bank_ids=[BankId.BANK_ALPHA, BankId.BANK_BETA],
+            query_shape=QueryShape.ENTITY_PRESENCE,
+            query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
+            purpose_declaration=purpose(),
+            requested_rho_per_primitive=0.0,
         )
 
 

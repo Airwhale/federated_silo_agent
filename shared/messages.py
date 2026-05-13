@@ -23,6 +23,7 @@ from shared.enums import (
     AgentRole,
     AuditEventKind,
     BankId,
+    MessageType,
     PatternClass,
     PrivacyUnit,
     QueryShape,
@@ -72,7 +73,7 @@ Sha256Hex: TypeAlias = Annotated[
 # Production deployments would replace this with a NER model or a per-bank
 # customer-name dictionary loaded from the bank's own KYC tables; this regex
 # is a demo-grade defensive check, not the primary privacy mechanism. The
-# primary mechanisms are LT egress redaction, schema validation, and the
+# primary mechanisms are AML-adapter redaction, schema validation, and the
 # stats-primitives layer's provenance enforcement.
 _DEMO_CUSTOMER_NAME_RE = re.compile(
     r"\b(?:"
@@ -160,6 +161,7 @@ class EvidenceItem(StrictModel):
 class Alert(Message):
     """A1 alert delivered to a local A2 investigator."""
 
+    message_type: Literal["alert"] = MessageType.ALERT.value
     alert_id: UUID = Field(default_factory=uuid4)
     transaction_id: NonEmptyStr
     account_id: NonEmptyStr
@@ -244,13 +246,11 @@ QueryPayload: TypeAlias = Annotated[
 class Sec314bQuery(Message):
     """A Section 314(b) query routed from one A2 to peer-bank A2s via F1."""
 
+    message_type: Literal["sec314b_query"] = MessageType.SEC314B_QUERY.value
     query_id: UUID = Field(default_factory=uuid4)
     requesting_investigator_id: NonEmptyStr
     requesting_bank_id: BankId
-    target_bank_ids: list[BankId] = Field(
-        default_factory=lambda: [BankId.BANK_ALPHA, BankId.BANK_BETA, BankId.BANK_GAMMA],
-        min_length=1,
-    )
+    target_bank_ids: list[BankId] = Field(default_factory=list)
     query_shape: QueryShape
     query_payload: QueryPayload
     purpose_declaration: PurposeDeclaration
@@ -261,8 +261,18 @@ class Sec314bQuery(Message):
         payload_shape = QueryShape(self.query_payload.query_shape)
         if payload_shape != self.query_shape:
             raise ValueError("query_shape must match query_payload.query_shape")
+        if self.requesting_bank_id == BankId.FEDERATION:
+            raise ValueError("requesting_bank_id must be a bank")
+        if not self.target_bank_ids:
+            self.target_bank_ids = [
+                bank_id
+                for bank_id in (BankId.BANK_ALPHA, BankId.BANK_BETA, BankId.BANK_GAMMA)
+                if bank_id != self.requesting_bank_id
+            ]
         if BankId.FEDERATION in self.target_bank_ids:
             raise ValueError("target_bank_ids must contain only peer banks")
+        if self.requesting_bank_id in self.target_bank_ids:
+            raise ValueError("target_bank_ids must not include the requesting bank")
         return self
 
 
@@ -343,6 +353,7 @@ class PrimitiveCallRecord(StrictModel):
 class Sec314bResponse(Message):
     """Peer-bank response to a Section 314(b) query."""
 
+    message_type: Literal["sec314b_response"] = MessageType.SEC314B_RESPONSE.value
     in_reply_to: UUID
     responding_bank_id: BankId
     fields: dict[str, ResponseValue] = Field(default_factory=dict)
@@ -386,6 +397,9 @@ class Sec314bResponse(Message):
 class SanctionsCheckRequest(Message):
     """Request to screen hashed entities against the mock sanctions and PEP list."""
 
+    message_type: Literal["sanctions_check_request"] = (
+        MessageType.SANCTIONS_CHECK_REQUEST.value
+    )
     entity_hashes: list[HashString] = Field(min_length=1)
     requesting_context: MediumText
 
@@ -405,6 +419,9 @@ class SanctionsResult(StrictModel):
 class SanctionsCheckResponse(Message):
     """Sanctions response keyed by hashed entity, with no list contents disclosed."""
 
+    message_type: Literal["sanctions_check_response"] = (
+        MessageType.SANCTIONS_CHECK_RESPONSE.value
+    )
     in_reply_to: UUID
     results: dict[HashString, SanctionsResult]
 
@@ -427,6 +444,9 @@ class BankAggregate(StrictModel):
 class GraphPatternRequest(Message):
     """Request for F2 graph-pattern analysis."""
 
+    message_type: Literal["graph_pattern_request"] = (
+        MessageType.GRAPH_PATTERN_REQUEST.value
+    )
     pattern_aggregates: list[BankAggregate] = Field(min_length=1)
     window_start: date
     window_end: date
@@ -440,6 +460,9 @@ class GraphPatternRequest(Message):
 class GraphPatternResponse(Message):
     """F2 graph-pattern analysis result."""
 
+    message_type: Literal["graph_pattern_response"] = (
+        MessageType.GRAPH_PATTERN_RESPONSE.value
+    )
     pattern_class: PatternClass
     confidence: float = Field(ge=0.0, le=1.0)
     suspect_entity_hashes: list[HashString] = Field(default_factory=list)
@@ -468,6 +491,7 @@ class ContributorAttribution(StrictModel):
 class SARContribution(Message):
     """A2 contribution sent to F4 for SAR drafting."""
 
+    message_type: Literal["sar_contribution"] = MessageType.SAR_CONTRIBUTION.value
     contributing_bank_id: BankId
     contributing_investigator_id: NonEmptyStr
     contributed_evidence: list[EvidenceItem] = Field(min_length=1)
@@ -482,6 +506,7 @@ class SARContribution(Message):
 class SARDraft(Message):
     """Structured SAR draft emitted by F4."""
 
+    message_type: Literal["sar_draft"] = MessageType.SAR_DRAFT.value
     sar_id: UUID = Field(default_factory=uuid4)
     filing_institution: NonEmptyStr | None = None
     suspicious_amount_range: tuple[NonNegativeInt, NonNegativeInt] | None = None
@@ -613,6 +638,7 @@ AuditPayload: TypeAlias = Annotated[
 class AuditEvent(Message):
     """Normalized audit event emitted by runtime, policy, and DP layers."""
 
+    message_type: Literal["audit_event"] = MessageType.AUDIT_EVENT.value
     event_id: UUID = Field(default_factory=uuid4)
     kind: AuditEventKind
     actor_agent_id: NonEmptyStr
@@ -629,6 +655,7 @@ class AuditEvent(Message):
 class DismissalRationale(Message):
     """A2 dismissal rationale emitted for F5 audit review."""
 
+    message_type: Literal["dismissal_rationale"] = MessageType.DISMISSAL_RATIONALE.value
     alert_id: UUID
     reason: MediumText
     evidence_considered: list[UUID] = Field(default_factory=list)
@@ -652,3 +679,19 @@ PUBLIC_MESSAGE_MODELS: tuple[type[BaseModel], ...] = (
     AuditEvent,
     DismissalRationale,
 )
+
+
+AgentMessage: TypeAlias = Annotated[
+    Alert
+    | Sec314bQuery
+    | Sec314bResponse
+    | SanctionsCheckRequest
+    | SanctionsCheckResponse
+    | GraphPatternRequest
+    | GraphPatternResponse
+    | SARContribution
+    | SARDraft
+    | AuditEvent
+    | DismissalRationale,
+    Field(discriminator="message_type"),
+]

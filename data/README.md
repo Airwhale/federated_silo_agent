@@ -58,6 +58,16 @@ Current canonical build:
 
 The intended product claim is specific: pooled cross-bank analysis can recover the planted network, while any single bank sees only noisy local business activity and cannot identify the complete ring.
 
+## Runtime Data Access Model
+
+The generated SQLite files are bank-local silos. In the planned runtime:
+
+- A1 reads local signals and transactions only to create alerts for its own bank.
+- A2 is the outside-TEE investigator and does not receive a raw database or P7 stats-primitive handle.
+- A3 is the inside-bank silo responder. It answers approved F1-routed queries by invoking P7 stats primitives against its own bank database.
+- F1 and the federation agents never read these SQLite files directly.
+- Ground-truth tables are for validation and tests only. They are not part of the federation runtime path.
+
 ## Reproducibility
 
 - Deterministic seed: `SEED=20260512`
