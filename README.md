@@ -114,7 +114,7 @@ flowchart TB
         LT_A["Lobster Trap<br/>(NL channel policy)"]
     end
 
-    subgraph Silos["Five Hospital Silos (private, isolated) — 1,000 cardiac patients each"]
+    subgraph Silos["Five Hospital Silos (private, isolated) — 363 cardiac patients each, ~50 synthetic CHF"]
         S1["Riverside General<br/>(academic)"]
         S2["Lakeside Medical<br/>(regional)"]
         S3["Summit Community<br/>(community)"]
