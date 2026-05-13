@@ -178,30 +178,107 @@ Re-running any of the build scripts with the same seed produces bit-identical SQ
 
 ---
 
-## Regenerating the data
+## Reconstructing the dataset from scratch
 
-From the repo root, in order:
+Everything in `data/silos/` and `data/raw/` is reproducible. The `.db` files and downloaded CSVs are gitignored; the five Python scripts under `data/scripts/` plus the fixed random seed (`20260512`) are the source of truth.
+
+### Prerequisites
+
+| Tool | Minimum version | Verify | Install |
+|---|---|---|---|
+| Python | 3.11 | `python --version` | https://www.python.org/downloads/ |
+| `uv` (package manager) | recent | `uv --version` | `pip install uv` or https://github.com/astral-sh/uv |
+| Internet access | — | — | Required for the source-pool download (~28 MB, one time) |
+
+Nothing else is needed — no Java, no R, no Docker, no AWS credentials, no PhysioNet credentialing.
+
+### Step-by-step
+
+From a fresh clone of this repository:
 
 ```bash
-# 1. Download the source pool (~28 MB, takes ~20s on a reasonable connection)
+# 1. Get the code
+git clone https://github.com/Airwhale/federated_silo_agent.git
+cd federated_silo_agent
+
+# 2. Set up the Python environment (creates .venv/, installs all deps)
+uv sync
+
+# 3. Download the Synthea-OMOP source pool from AWS Open Data
+#    (~28 MB across 10 CSVs; ~20 seconds on a normal connection)
+#    Idempotent — skips files already present in data/raw/
 uv run python data/scripts/download_synthea_omop.py
 
-# 2. Build the five silo databases (~5s)
+# 4. Build the five hospital silo SQLite databases
+#    (filters to cardiac patients, replicates with per-silo perturbations,
+#     synthetically injects CHF labels; ~5 seconds)
 uv run python data/scripts/build_silos.py
 
-# 3. Derive chf_cohort_features per silo (~2s)
+# 5. Derive the chf_cohort_features table per silo
+#    (age, BMI, EF, comorbidities, GDMT, readmit_30d, LOS; ~2 seconds)
 uv run python data/scripts/feature_engineering.py
 
-# 4. Apply the four planted scenarios (~1s)
+# 6. Apply the four planted demo scenarios deterministically
+#    (GDMT effect, DM+CKD heterogeneity, Riverside LOS bias, amyloid; ~1 second)
 uv run python data/scripts/apply_scenarios.py
 
-# 5. Verify everything (~1s)
+# 7. Verify the build (PASS/FAIL battery; ~1 second)
 uv run python data/scripts/validate.py
+
+# 8. Confirm the dataset matches the canonical expected fingerprint
+#    (cryptographic regression check; should print "1 passed")
+uv run pytest tests/test_data_checksum.py
 ```
 
-End-to-end wall-clock from cold: ~30 seconds (mostly the download).
+**Total wall-clock from fresh clone: under 1 minute** (mostly the download). On a previously-downloaded `data/raw/`, steps 4–8 run in under 10 seconds combined.
 
-If you've already downloaded `data/raw/synthea_omop_1k/`, steps 1 is skipped automatically (the download script is idempotent on already-present files).
+### What gets created
+
+| Path | Contents | Size | In git? |
+|---|---|---|---|
+| `.venv/` | Python virtual environment | ~200 MB | No |
+| `data/raw/synthea_omop_1k/` | Source CSVs from AWS Synthea-OMOP | ~28 MB | No (gitignored) |
+| `data/silos/riverside.db` | Riverside General OMOP CDM database | ~12 MB | No (gitignored) |
+| `data/silos/lakeside.db` | Lakeside Medical OMOP CDM database | ~12 MB | No (gitignored) |
+| `data/silos/summit.db` | Summit Community OMOP CDM database | ~12 MB | No (gitignored) |
+| `data/silos/fairview.db` | Fairview Regional OMOP CDM database | ~12 MB | No (gitignored) |
+| `data/silos/coastal.db` | Coastal Medical Center OMOP CDM database | ~12 MB | No (gitignored) |
+
+### Verifying you got the same data
+
+The checksum test compares a content-based fingerprint of all five silos to a canonical SHA-256 baked into the test file. Run from the repo root:
+
+```bash
+uv run pytest tests/test_data_checksum.py
+```
+
+Expected output:
+
+```
+tests/test_data_checksum.py::test_data_checksum PASSED
+```
+
+If you see PASSED, your reconstructed dataset is **bit-identical at the content level** to the canonical build that ships in this repo's commit history. You can confidently use it to develop / test the rest of the system.
+
+If the test **fails**, it prints the full fingerprint dict plus the expected and actual hashes side-by-side. The most common causes are:
+
+1. **You ran the scripts out of order.** Re-run them in the order shown above (build → features → scenarios → validate → test).
+2. **You changed a script.** That's intentional and you'll need to update the expected hash: `uv run python tests/test_data_checksum.py --update` rewrites the canonical value in the test file. Commit the updated hash in your PR.
+3. **A library version updated and changed numerical output** (rare but possible with `pandas` / `numpy` upgrades). Check whether the change is acceptable; if so, regenerate the hash as above.
+
+### Rebuilding only part of the pipeline
+
+The scripts are idempotent and ordered. You can rerun just the downstream stages without re-downloading or re-splitting:
+
+| If you changed... | Re-run from... |
+|---|---|
+| nothing (just want to verify) | `uv run pytest tests/test_data_checksum.py` |
+| `apply_scenarios.py` | `apply_scenarios.py` → `validate.py` → checksum test |
+| `feature_engineering.py` or the OMOP feature definitions in `vocab.py` | `feature_engineering.py` → `apply_scenarios.py` → `validate.py` → checksum test |
+| `build_silos.py` or silo identity / perturbation logic | `build_silos.py` → all subsequent steps |
+| `download_synthea_omop.py` or the source dataset | delete `data/raw/` and run the full pipeline |
+
+The canonical fingerprint hash in `tests/test_data_checksum.py` corresponds to running the **full pipeline** in the order above. Partial reruns from intermediate state may yield different hashes; always run the full pipeline before committing data-pipeline changes.
 
 ---
 
