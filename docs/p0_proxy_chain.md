@@ -15,6 +15,7 @@ smoke_proxy.py
 - Python environment installed with `uv sync`
 - Go 1.22+ for building Lobster Trap
 - `GEMINI_API_KEY` in your shell or `.env`
+- `OPENROUTER_API_KEY` in your shell or `.env` only for the OpenRouter fallback smoke
 
 Docker is optional. The verified Windows path is local-first because Docker is
 not required for P0.
@@ -60,6 +61,39 @@ Run the full proxy-chain smoke:
 
 ```powershell
 uv run python scripts/smoke_proxy.py
+```
+
+## OpenRouter Fallback Smoke
+
+OpenRouter is useful for development if direct Gemini routing is blocked. It
+still runs through the same local path:
+
+```text
+smoke_openrouter.py
+  -> http://127.0.0.1:8080/v1/chat/completions
+  -> Lobster Trap
+  -> LiteLLM
+  -> OpenRouter Gemini route
+```
+
+Start LiteLLM with the OpenRouter config:
+
+```powershell
+$env:OPENROUTER_API_KEY = "<your key>"
+.\scripts\start_litellm.ps1 -OpenRouter
+```
+
+Then start Lobster Trap in a second terminal and run:
+
+```powershell
+.\scripts\start_lobstertrap.ps1
+uv run python scripts/smoke_openrouter.py
+```
+
+To test only the blocked prompts without spending provider quota:
+
+```powershell
+uv run python scripts/smoke_openrouter.py --no-include-benign
 ```
 
 ## Expected Results

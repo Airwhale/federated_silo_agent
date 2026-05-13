@@ -8,7 +8,7 @@
 
 ## 0. TL;DR
 
-A multi-agent cross-bank Anti-Money-Laundering investigation system. Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist agents (graph analyst, sanctions screener, SAR drafter, compliance auditor) compose investigations across the network. **Every cross-bank conversation is policed by Lobster Trap; aggregate transaction patterns are shared under differential privacy; no customer data ever crosses bank boundaries.**
+A multi-agent cross-bank Anti-Money-Laundering investigation system. Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist agents (graph analyst, sanctions screener, SAR drafter, compliance auditor) compose investigations across the network. **Every cross-bank conversation is governed by Lobster Trap plus an AML policy adapter; aggregate transaction patterns are shared under differential privacy; no raw customer identifiers or raw transactions cross bank boundaries.**
 
 Pitch comp: **Verafin → Nasdaq $2.75B (2020)** for the non-private version of exactly this.
 
@@ -104,8 +104,8 @@ Total addressable: ~$1–3B / year for federation + AI tooling in the US large-b
 
 1. Demonstrate **7 agent roles across 11 running agent instances** talking to each other across an enforced trust boundary.
 2. Demonstrate **federated detection of a planted cross-bank ring** that no single bank could surface alone.
-3. Demonstrate **Lobster Trap policing every cross-bank message** (no customer names leaking, sanctions hits not exposing list details, audit trail complete).
-4. Demonstrate **layered silo privacy**: (a) hash-based cross-bank entity linkage as the primary mechanism, (b) a deterministic stats-primitives layer in each bank enforcing data-plane isolation, (c) differential privacy applied to aggregate-count primitives via OpenDP with per-investigator ε budget tracked via zCDP composition. DP is scoped where it earns its keep (aggregate counts and histograms); binary presence queries rely on hash linkage instead.
+3. Demonstrate **Lobster Trap plus AML policy policing every cross-bank message** (no customer names leaking, sanctions hits not exposing list details, audit trail complete).
+4. Demonstrate **layered silo privacy**: (a) hash-based cross-bank entity linkage as the primary mechanism, (b) a deterministic stats-primitives layer in each bank enforcing data-plane isolation, (c) differential privacy applied to aggregate-count primitives via one explicit accounting policy in P7. DP is scoped where it earns its keep (aggregate counts and histograms); binary presence queries rely on hash linkage instead.
 5. Win or place at TechEx (Track 4 + Gemini partner award + Veea partner award).
 
 ### 4.2 Non-goals
@@ -120,7 +120,7 @@ Total addressable: ~$1–3B / year for federation + AI tooling in the US large-b
 
 - All 11 running agent instances wired and exchanging structured messages through the LT proxy
 - A live demo successfully detects the planted ring within 3 minutes
-- Every cross-bank message passes through LT policy enforcement and lands in the audit log
+- Every cross-bank message passes through the AML policy adapter and LT inspection path, then lands in the audit log
 - Single-bank investigation of the same ring fails (the federation is what makes detection possible)
 - Submission complete by May 19 with README + pitch deck + screencast
 
@@ -132,9 +132,9 @@ Three banks each run two persistent agents (transaction-monitoring + investigato
 
 - **Hash-based cross-bank entity linkage.** Banks share stable `name_hash` tokens, never customer identifiers. This is the primary privacy mechanism — it's what makes the federation work at all. Same input, same hash, everywhere; different banks holding accounts for the same shell entity can correlate without disclosing identity.
 - **Bank-local stats-primitives layer.** A deterministic, non-LLM module in each bank that exposes a fixed set of declared query shapes over local data (e.g., `count_entities_by_name_hash`, `alert_count_for_entity`, `flow_histogram`). Every cross-bank-bound numeric value traces to a primitive call with recorded provenance. The LLM has no syscall to raw transactions on the cross-bank-response path; data-plane isolation is structural, not policy-based. This is the structural enforcement of design principle #6 ("agents reason about signals, not transactions").
-- **Lobster Trap on NL channels.** What one agent can say to another about a third party's customers: customer-name redaction at egress, role-based authorization (A1 cannot send to peer-bank channels; only A2 and F-agents can), purpose-declaration enforcement on every §314(b) query, audit-event emission on every cross-bank message.
+- **Lobster Trap plus AML policy adapter on NL channels.** Lobster Trap provides generic prompt inspection, blocking, response metadata, and audit logging. Our Python AML policy adapter enforces the domain-specific rules that the current LT policy language does not natively express: customer-name redaction, role-based routing (A1 cannot send to peer-bank channels; only A2 and F-agents can), purpose-declaration checks on every §314(b) query, and normalized audit-event emission on every cross-bank message.
 - **Schema validation.** Only pre-declared message shapes leave a bank; the schema is the trust contract.
-- **Differential privacy on aggregate-count primitives.** Gaussian mechanism with σ calibrated to sensitivity; per-(investigator, peer-bank) ε budget tracked via zCDP composition; the channel refuses when the budget is exhausted. Applied where it earns its keep (alert counts, flow histograms, F2 input aggregates) — not applied to binary presence queries where noise would eat the signal (those rely on hash linkage instead). DP's specific job here is bounding sustained insider-abuse leakage: an authorized investigator using the channel for routine surveillance is bounded to ε bits of information per peer bank, then the channel closes.
+- **Differential privacy on aggregate-count primitives.** Gaussian mechanism with σ calibrated from one explicit privacy ledger; per-(investigator, peer-bank) budget tracked consistently inside P7; the channel refuses when the budget is exhausted. Applied where it earns its keep (alert counts, flow histograms, F2 input aggregates) — not applied to binary presence queries where noise would eat the signal (those rely on hash linkage instead). DP's specific job here is bounding sustained insider-abuse leakage in aggregate activity queries, not claiming perfect anonymity for entity-presence lookups.
 
 Honest note on what DP doesn't do: it doesn't protect entity-presence binary queries (sensitivity-1 question with magnitude-1 answer means noise eats the signal); it isn't the protagonist of the headline demo (the protagonist is the cross-bank graph cycle that no single bank can see); it isn't what Verafin uses (Verafin's privacy model is contractual). DP earns its keep against a specific threat — multi-query inference about aggregate activity — and that's the role it plays here.
 
@@ -143,9 +143,9 @@ Honest note on what DP doesn't do: it doesn't protect entity-presence binary que
 ## 6. Design Principles *(Define)*
 
 1. **Privacy-by-default.** No raw transactions leave a bank. Schema validation enforces this structurally.
-2. **§314(b)-shaped disclosure rules.** Cross-bank information sharing is allowed for suspected ML/TF only; LT policy enforces declared-purpose checks.
+2. **§314(b)-shaped disclosure rules.** Cross-bank information sharing is allowed for suspected ML/TF only; the AML policy adapter enforces declared-purpose checks and LT logs the decision path.
 3. **Honest about guarantees.** The federation provides bounded leakage and full audit; it does not provide perfect anonymity (a determined adversary could potentially infer individual customers from many queries; DP budget bounds this).
-4. **Agent roles are typed and enforced.** Each agent has a declared role; LT enforces what messages each role can send and receive.
+4. **Agent roles are typed and enforced.** Each agent has a declared role; the message envelope and AML adapter enforce what messages each role can send and receive.
 5. **Audit is product.** Every cross-bank message lands in a structured, regulator-readable audit log. SAR drafts are auditable down to which agent contributed which finding.
 6. **No LLM in the transaction data plane.** Agents reason about *signals*, not *transactions*. Transaction-level access is deterministic SQL at the bank's local agent; aggregate signals are what travel.
 7. **Reproducibility.** Deterministic seeds in synthetic data + structured agent message schemas = bit-equivalent reruns for the canonical demo.
@@ -221,7 +221,7 @@ The demo is a 3-minute four-beat run:
    │     ↕        │ │     ↕        │ │     ↕        │
    │  Stats       │ │  Stats       │ │  Stats       │
    │  primitives  │ │  primitives  │ │  primitives  │
-   │  (DP + ε     │ │  (DP + ε     │ │  (DP + ε     │
+   │  (DP + rho   │ │  (DP + rho   │ │  (DP + rho   │
    │   budget)    │ │   budget)    │ │   budget)    │
    │     ↕        │ │     ↕        │ │     ↕        │
    │  SQLite      │ │  SQLite      │ │  SQLite      │
@@ -231,18 +231,18 @@ The demo is a 3-minute four-beat run:
 Two wire paths inside each bank:
 
 - **LLM wire path:** `agent → Lobster Trap (port 8080) → LiteLLM (port 4000) → Gemini API`. All agent roles share this path; each running instance is identified by an agent_id and role in the LT request metadata.
-- **Data wire path:** `A2 → stats-primitives layer → SQLite`. Deterministic, non-LLM, raw-SQL inside the bank. The stats layer is the only component allowed to read raw transactions in service of a cross-bank response; A1 reads raw signals for *local* monitoring only. Every cross-bank-response numeric value in a `Sec314bResponse` traces to a primitive call with a recorded ε debit (zero for non-DP primitives).
+- **Data wire path:** `A2 → stats-primitives layer → SQLite`. Deterministic, non-LLM, raw-SQL inside the bank. The stats layer is the only component allowed to read raw transactions in service of a cross-bank response; A1 reads raw signals for *local* monitoring only. Every cross-bank-response numeric value in a `Sec314bResponse` traces to a primitive call with a recorded privacy-budget debit (zero for non-DP primitives).
 
 ### 8.2 Message flow (canonical demo case)
 
 ```
 [t=0] Bank α's A1 flags suspicious sub-$10K transfer pattern → alert to Bank α's A2
 [t=1] Bank α's A2 evaluates alert; declares §314(b) suspicion; queries F1
-       (LT: verifies §314(b) purpose declaration is valid; passes)
+       (AML adapter verifies §314(b) purpose declaration; LT inspects and logs)
 [t=2] F1 broadcasts anonymized signal pattern to Banks β and γ investigators
-       (LT: enforces customer-name redaction in outbound query)
+       (AML policy adapter redacts customer names; LT logs and inspects the outbound query)
 [t=3] Banks β and γ's A2 agents each respond with anonymized signals (matches found)
-       (LT: enforces no raw transactions in response)
+       (response schema and AML adapter enforce no raw transactions; LT inspects and logs)
 [t=4] F1 forwards aggregated signals to F2 (graph analyst) for ring inference
 [t=5] F2 returns: "high probability cross-bank structuring ring spanning 3 nodes"
 [t=6] Investigators submit anonymized entity hashes to F3 (sanctions)
@@ -252,7 +252,7 @@ Two wire paths inside each bank:
 [t=10] F5 audits the full conversation; confirms §314(b) compliance; surfaces audit summary
 ```
 
-Every arrow is policed by Lobster Trap. Every message is logged in the audit channel.
+Every NL arrow passes through Lobster Trap and the AML adapter. Every message is logged in the audit channel.
 
 ### 8.3 Agent roles and instances
 
@@ -285,13 +285,13 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Role:** Receives alerts from local A1. Decides whether to investigate, dismiss, or escalate cross-bank. When cross-bank, drafts §314(b) queries; receives peer-bank responses; synthesizes investigation findings; recommends SAR / dismiss to F4 / F5. **Also receives incoming `Sec314bQuery` from F1 originating at other banks, and answers via the local stats-primitives layer.**
 - **Inputs:** `Alert` from local A1; `Sec314bResponse` from F1; incoming `Sec314bQuery` relayed by F1 from peer banks
 - **Outputs:** `Sec314bQuery` to F1 (outbound to peers); `Sec314bResponse` to F1 (answering incoming peer queries); `SARContribution` to F4; `DismissalRationale` to F5
-- **Reasoning:** Gemini call. A2 reasons about alert credibility given local context, decides what cross-bank signals would be informative, drafts queries that comply with §314(b) purpose declarations. When answering an *incoming* peer query, A2 reasons about credibility ("is this a credible federation cue or a fishing expedition?") and decides which stats-primitives to invoke; it never reads raw transactions in service of the cross-bank-response path. All numeric/list fields in an outbound `Sec314bResponse` come from primitive calls (with recorded provenance and ε debits where applicable); the LLM's role is to compose, not to compute.
+- **Reasoning:** Gemini call. A2 reasons about alert credibility given local context, decides what cross-bank signals would be informative, drafts queries that comply with §314(b) purpose declarations. When answering an *incoming* peer query, A2 reasons about credibility ("is this a credible federation cue or a fishing expedition?") and decides which stats-primitives to invoke; it never reads raw transactions in service of the cross-bank-response path. All numeric/list fields in an outbound `Sec314bResponse` come from primitive calls (with recorded provenance and privacy-budget debits where applicable); the LLM's role is to compose, not to compute.
 - **Rule constraints (LLM cannot override):**
-  - Cannot include customer names in outbound `Sec314bQuery` or `Sec314bResponse` (LT redacts at egress; A2 cannot opt out)
+  - Cannot include customer names in outbound `Sec314bQuery` or `Sec314bResponse` (AML adapter redacts at egress; A2 cannot opt out)
   - Cannot send `Sec314bQuery` without a structured purpose declaration (rejected by F1 if missing)
   - Cannot escalate to SAR without a peer-bank corroborating signal (rule prevents single-bank speculation from becoming a SAR)
   - **Every numeric/list value in an outbound `Sec314bResponse` must trace to a stats-primitives call** (provenance enforced structurally; LLM cannot fabricate aggregate values)
-  - **Cannot answer a `Sec314bResponse` when the per-(investigator, peer-bank) ε budget for the requesting investigator is exhausted** (deterministic refusal; LLM cannot override)
+  - **Cannot answer a `Sec314bResponse` when the per-(investigator, peer-bank) rho budget for the requesting investigator is exhausted** (deterministic refusal; LLM cannot override)
 - **Rule bypasses (override LLM):**
   - 3+ correlated alerts on the same `name_hash` within 30 days → MUST send `Sec314bQuery` regardless of LLM judgment
   - Alert tied to a known SDN match → MUST escalate to SAR
@@ -300,12 +300,12 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 
 **Agent F1: Cross-bank coordinator agent**
 
-- **Role:** Receives `Sec314bQuery` from any bank's A2. Validates purpose declaration. Broadcasts the (LT-redacted) query to peer banks' A2 agents. Collects responses. Forwards anonymized aggregates to F2.
+- **Role:** Receives `Sec314bQuery` from any bank's A2. Validates purpose declaration. Broadcasts the AML-adapter-redacted query to peer banks' A2 agents. Collects responses. Forwards anonymized aggregates to F2.
 - **Reasoning:** Gemini call. F1 reasons about which peer banks the query is relevant to (not every query needs every bank), how to phrase the query for peer A2s, how to aggregate responses for the requesting A2.
 - **Rule constraints (LLM cannot override):**
-  - Cannot retain customer identifiers between queries (stateless; LT-enforced)
+  - Cannot retain customer identifiers between queries (stateless by orchestrator design; adapter rejects identifier-bearing payloads)
   - Cannot forward a query without a valid `Sec314bQuery.purpose` field
-  - Cannot send the same query body to peers that contains customer-name strings (LT redacts at the channel)
+  - Cannot send the same query body to peers that contains customer-name strings (AML adapter redacts at the channel)
 - **Rule bypasses (override LLM):**
   - Quota exceeded (e.g., 20+ queries from one investigator in 1 hour) → MUST escalate to F5 for compliance review
   - Query references a known SDN entity → MUST also route through F3 in parallel
@@ -315,7 +315,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Role:** Receives anonymized cross-bank transaction-pattern aggregates from F1. Identifies ring structures (closed cycles, structuring rings, layering chains). Returns suspected-pattern reports with confidence scores.
 - **Reasoning:** Gemini call. F2 reasons about whether observed aggregate patterns are consistent with known typologies, what the most likely structure is, how confident to be.
 - **Rule constraints (LLM cannot override):**
-  - Cannot see raw transactions (input is DP-noised aggregates only; LT-enforced)
+  - Cannot see raw transactions (input is DP-noised aggregates only; F2 has no DB handle)
   - Cannot output individual-customer identifiers (output schema restricts to entity-hash IDs)
 - **Rule bypasses (override LLM):**
   - Closed cycle with ≥3 entities spanning ≥3 banks → MUST surface as high-confidence structuring ring (regardless of LLM uncertainty)
@@ -339,14 +339,14 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Rule constraints (LLM cannot override):**
   - Must include `purpose_declaration` field linking back to §314(b) authority
   - Must include per-bank attribution for each piece of evidence
-  - Cannot include customer-name strings (LT redacts; uses `name_hash` references instead)
+  - Cannot include customer-name strings (AML adapter redacts; uses `name_hash` references instead)
 - **Rule bypasses (override LLM):**
   - Mandatory SAR fields (filing-institution, filing-date, suspicious-amount-range, typology-code) MUST be populated — LLM can word them but cannot omit them
   - If any contributor included a sanctions match → MUST set `sar_priority = high` regardless of LLM judgment
 
 **Agent F5: Compliance auditor agent**
 
-- **Role:** Subscribes to the live LT audit stream. Reasons about whether each cross-agent message exceeds §314(b) authorization or pattern-matches a "fishing expedition." Emits compliance annotations to the audit panel.
+- **Role:** Subscribes to the normalized audit stream, including LT verdicts and AML adapter events. Reasons about whether each cross-agent message exceeds §314(b) authorization or pattern-matches a "fishing expedition." Emits compliance annotations to the audit panel.
 - **Reasoning:** Gemini call. F5 reasons about whether a query series is investigating a legitimate suspicion or trolling for general information about a peer bank's customers. Flags anomalies in NL form.
 - **Rule constraints (LLM cannot override):**
   - Read-only on the audit stream (cannot block or modify agent behavior)
@@ -362,13 +362,13 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 | Each bank's own data + local A1/A2 agents | Other banks' raw data (never shared) |
 | Federation layer process (assumed in TEE) | Operator/cloud (production assumes TEE) |
 | Lobster Trap (NL channel + role-auth) | Compromised bank agent (defended by schema + LT) |
-| Schema validator (numerical channel) | Curious investigator at a peer bank (defended by DP + LT redaction) |
-| OpenDP composition | Malicious investigator running fishing expeditions (defended by §314(b) purpose checks + budget) |
+| Schema validator (numerical channel) | Curious investigator at a peer bank (defended by DP + AML redaction adapter) |
+| P7 privacy ledger | Malicious investigator running fishing expeditions (defended by §314(b) purpose checks + budget) |
 
 Defense mapping:
-- **Lobster Trap** closes NL extraction (customer names in queries/responses) + role abuse (A1 trying to act as A2) + injection
+- **Lobster Trap + AML adapter** closes NL extraction (customer names in queries/responses), role abuse (A1 trying to act as A2), and injection
 - **Schema validation** ensures no raw transactions leave a bank
-- **DP composition** bounds how much an investigator can learn about peer-bank customers across many queries
+- **DP budget accounting** bounds how much an investigator can learn about peer-bank customers across many queries
 - **§314(b) purpose declarations** create a per-query justification that's logged for regulator review
 
 ---
@@ -440,14 +440,14 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap → LiteLLM → Gemini) is scaffolded. Lobster Trap policy behavior and blocked proxy ingress are smoke-tested locally; benign Gemini pass-through still requires a provider API key. The pivot to AML preserves the generic proxy chain; what changes is the data layer, the agent code, the stats-primitives layer, and the LT policy pack. The data layer for AML is complete.
+The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer and shared message schemas are complete.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
 - **P2** Bank data layer + planted scenarios ✓
 - **P3** Bank data validation + checksum test ✓
-- **P4** Shared message schemas →
-- **P5** Agent runtime base class ·
+- **P4** Shared message schemas ✓
+- **P5** Agent runtime base class →
 - **P6** A1 transaction-monitoring agent ·
 - **P7** Bank-local stats-primitives layer + DP ·
 - **P8** A2 investigator agent ·
@@ -456,7 +456,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini) is scaffolded. Lobster Tra
 - **P11** F2 graph-analysis agent ·
 - **P12** F4 SAR drafter agent ·
 - **P13** F5 compliance auditor agent ·
-- **P14** AML Lobster Trap policy pack ·
+- **P14** AML policy adapter + Lobster Trap overlay ·
 - **P15** Agent orchestrator / message bus ·
 - **P16** Canonical demo flow script ·
 - **P17** End-to-end smoke test ·
@@ -468,15 +468,15 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini) is scaffolded. Lobster Tra
 
 ---
 
-### Done parts (P0–P3)
+### Done parts (P0–P4)
 
 **P0 — Repo scaffold + proxy chain smoke** ✓
 
-- *Goal:* repo skeleton, the governance proxy chain (Lobster Trap → LiteLLM → Gemini), and a local smoke harness that exercises both proxies end to end. Domain-agnostic governance substrate that survives the AML pivot unchanged.
-- *Files:* `pyproject.toml` (uv-managed Python deps), `.env.example` (`GEMINI_API_KEY` placeholder), `.gitignore`, `infra/litellm_config.yaml` (OpenAI-compatible routing to `gemini/gemini-2.5-pro` and `gemini/gemini-2.5-flash`), `infra/docker-compose.yml` (LiteLLM + LT containers), `infra/lobstertrap/{Dockerfile,base_policy.yaml}` (universal LT policies: prompt injection, jailbreaks, obfuscation, private-data extraction, dangerous commands), `scripts/{start_litellm.ps1,start_lobstertrap.ps1,bootstrap_lobstertrap.ps1}` (Windows-native start scripts), `scripts/{smoke_proxy.py,smoke_lobstertrap.py,p0_cases.py}` (P0 smoke harness), `tests/test_p0_cases.py` (pytest binding of the smoke cases).
-- *What was built:* LiteLLM proxy listening on port 4000 with OpenAI-shaped `/v1/chat/completions` calling Gemini; Lobster Trap listening on port 8080 with the base policy pack enforced; a P0 case file declaring known-allowed and known-blocked prompts; an opt-in benign pass-through case that calls live Gemini through the full chain (skipped if `GEMINI_API_KEY` unset).
-- *Acceptance (current):* `uv run pytest tests/test_p0_cases.py` passes the offline cases; `scripts/smoke_lobstertrap.py` confirms LT blocks the negative cases. Live Gemini pass-through remains gated on a user-supplied API key — this is by design (no hosted key in repo).
-- *Notes for future readers:* The proxy chain is intentionally minimal — LT enforces the base policy and the AML-specific pack (P14) is layered on top. LT runs as a sidecar to LiteLLM so swapping LLM providers (e.g., to Anthropic) only touches the LiteLLM config.
+- *Goal:* repo skeleton, the governance proxy chain (Lobster Trap → LiteLLM → Gemini), and a local smoke harness that exercises LT policy and the blocked-prompt proxy path. Domain-agnostic governance substrate that survives the AML pivot unchanged.
+- *Files:* `pyproject.toml` (uv-managed Python deps), `.env.example` (`GEMINI_API_KEY` and `OPENROUTER_API_KEY` placeholders), `.gitignore`, `infra/litellm_config.yaml` (OpenAI-compatible routing to `gemini/gemini-2.5-pro` and `gemini/gemini-2.5-flash`), `infra/litellm_openrouter_config.yaml` (OpenRouter fallback routing to Gemini models), `infra/docker-compose.yml` (LiteLLM + LT containers), `infra/lobstertrap/{Dockerfile,base_policy.yaml}` (universal LT policies: prompt injection, jailbreaks, obfuscation, private-data extraction, dangerous commands), `scripts/{start_litellm.ps1,start_lobstertrap.ps1,bootstrap_lobstertrap.ps1}` (Windows-native start scripts), `scripts/{smoke_proxy.py,smoke_openrouter.py,smoke_lobstertrap.py,p0_cases.py}` (P0 smoke harness), `tests/test_p0_cases.py` (pytest binding of the smoke cases).
+- *What was built:* launch/config files for LiteLLM on port 4000 with OpenAI-shaped `/v1/chat/completions`; launch/config files for Lobster Trap on port 8080 with the base policy enforced; a P0 case file declaring known-allowed and known-blocked prompts; a blocked-prompt proxy smoke path that does not need a provider key; a benign pass-through case that calls live provider routing through the full chain when a valid provider key is available; an OpenRouter fallback smoke path that uses the same LT/LiteLLM chain with `OPENROUTER_API_KEY`.
+- *Acceptance (current):* `uv run pytest tests/test_p0_cases.py` passes the offline cases; `scripts/smoke_lobstertrap.py` confirms LT blocks the negative cases; blocked prompts pass through the live LT proxy with `scripts/smoke_proxy.py --no-include-benign`; OpenRouter fallback pass-through passes with `scripts/smoke_openrouter.py`. Direct Gemini pass-through remains gated on a valid user-supplied `GEMINI_API_KEY`.
+- *Notes for future readers:* The proxy chain is intentionally minimal. LT enforces the base policy. AML-specific routing, redaction, and purpose-declaration checks are handled in P14 by our Python policy adapter, with any LT YAML overlay limited to what current LT supports. LT runs as a sidecar to LiteLLM so swapping LLM providers primarily touches the LiteLLM config.
 
 **P1 — Pivot migration (clinical → AML)** ✓
 
@@ -529,7 +529,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini) is scaffolded. Lobster Tra
 
 The agent build follows the canonical demo's call order: alert origination (A1) → investigator (A2) → coordinator (F1) → sanctions (F3) → graph analyst (F2) → SAR drafter (F4) → compliance auditor (F5). F3 ships before F2 because it's the simpler agent and shakes out the agent base class first; F5 ships last because it depends on the live audit stream. P7 (stats-primitives layer) ships before A2 because A2's cross-bank response path calls into it.
 
-**P4 — Shared message schemas**
+**P4 — Shared message schemas** ✓
 
 - *Goal:* Pydantic v2 boundary objects for every cross-agent message in the canonical flow. The schemas are the trust contract between agents — every cross-agent value lives inside a typed envelope. Gemini structured-output targets the JSON-schema export of each model.
 - *Files:* `shared/__init__.py`, `shared/messages.py` (one module, all models), `shared/enums.py` (typology codes, query shapes, audit-event kinds), `tests/test_messages.py` (round-trip + invalid-example tests for every model).
@@ -542,20 +542,21 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - `created_at: datetime` (UTC)
 - *Models to define:*
   - **`Alert`** (A1 → A2): `alert_id`, `transaction_id`, `account_id`, `signal_type` (enum), `severity ∈ [0,1]`, `rationale` (LLM-authored, ≤300 chars), `evidence` (list of correlated transaction summaries with hashed identifiers only — no customer names).
-  - **`Sec314bQuery`** (A2 → F1 → peer A2): `query_id`, `requesting_investigator_id`, `requesting_bank_id`, `target_bank_ids` (default: all peers), `query_shape ∈ {"entity_presence","aggregate_activity","counterparty_linkage"}` (discriminated union), `query_payload` (typed by `query_shape`), `purpose_declaration: PurposeDeclaration`, `requested_eps_per_primitive: float`. `PurposeDeclaration` is a structured object: `{authority: "USA_PATRIOT_314b", typology_code: TypologyCode, suspicion_rationale: str (≤500 chars), supporting_alert_ids: list[UUID]}`.
-  - **`Sec314bResponse`** (peer A2 → F1 → requesting A2): `in_reply_to: UUID` (the query_id), `responding_bank_id`, `fields: dict[str, ResponseValue]` (`ResponseValue` is a small union: `{"int":int}|{"float":float}|{"bool":bool}|{"histogram":list[int]}|{"hash_list":list[str]}`), `provenance: list[PrimitiveCallRecord]` (one entry per field), `eps_debited_total: float`, `refusal_reason: str | None`. **Invariant enforced by validator: each key in `fields` has a corresponding `PrimitiveCallRecord` in `provenance`.**
-  - **`PrimitiveCallRecord`**: `primitive_name`, `args_hash` (SHA-256 of canonicalized args; for audit-replay), `eps_debited` (0.0 for non-DP primitives), `sigma_applied: float | None`, `sensitivity: float`, `returned_value_kind`, `timestamp`.
+  - **`Sec314bQuery`** (A2 → F1 → peer A2): `query_id`, `requesting_investigator_id`, `requesting_bank_id`, `target_bank_ids` (default: all peers), `query_shape ∈ {"entity_presence","aggregate_activity","counterparty_linkage"}` (discriminated union), `query_payload` (typed by `query_shape`), `purpose_declaration: PurposeDeclaration`, `requested_rho_per_primitive: float`. `PurposeDeclaration` is a structured object: `{authority: "USA_PATRIOT_314b", typology_code: TypologyCode, suspicion_rationale: str (≤500 chars), supporting_alert_ids: list[UUID]}`.
+  - **`Sec314bResponse`** (peer A2 → F1 → requesting A2): `in_reply_to: UUID` (the query_id), `responding_bank_id`, `fields: dict[str, ResponseValue]` (`ResponseValue` is a small union: `{"int":int}|{"float":float}|{"bool":bool}|{"histogram":list[int]}|{"hash_list":list[str]}`), `provenance: list[PrimitiveCallRecord]` (one entry per field), `rho_debited_total: float`, `refusal_reason: str | None`. **Invariant enforced by validator: each key in `fields` has a corresponding `PrimitiveCallRecord.field_name` in `provenance`.**
+  - **`PrimitiveCallRecord`**: `field_name`, `primitive_name`, `args_hash` (SHA-256 of canonicalized args; for audit-replay), `privacy_unit` (`"transaction"` for the hackathon P7 build unless explicitly upgraded), `rho_debited` (0.0 for non-DP primitives), `eps_delta_display: tuple[float, float] | None`, `sigma_applied: float | None`, `sensitivity: float`, `returned_value_kind`, `timestamp`.
   - **`SanctionsCheckRequest`** (A2 or F1 → F3): `entity_hashes: list[str]`, `requesting_context: str`.
   - **`SanctionsCheckResponse`** (F3 → caller): `results: dict[hash → {sdn_match: bool, pep_relation: bool}]`. **No list contents disclosed.**
   - **`GraphPatternRequest`** (F1 → F2): `pattern_aggregates: list[BankAggregate]` (per-bank DP-noised tuples: `bank_id`, `edge_count_distribution`, `bucketed_flow_histogram`), `window_start`, `window_end`.
   - **`GraphPatternResponse`** (F2 → caller): `pattern_class ∈ {"structuring_ring","layering_chain","none"}`, `confidence ∈ [0,1]`, `suspect_entity_hashes: list[str]`, `narrative: str (≤500 chars)`.
   - **`SARContribution`** (A2 → F4): `contributing_bank_id`, `contributing_investigator_id`, `contributed_evidence: list[EvidenceItem]` (hashed identifiers only), `local_rationale`.
   - **`SARDraft`** (F4 → orchestrator): `sar_id`, `filing_institution`, `suspicious_amount_range: tuple[int,int]` (cents), `typology_code: TypologyCode`, `narrative` (LLM-authored, regulator-quality), `contributors: list[ContributorAttribution]`, `sar_priority ∈ {"standard","high"}`, `mandatory_fields_complete: bool`, `related_query_ids: list[UUID]`.
-  - **`AuditEvent`** (any → audit channel): `event_id`, `kind ∈ {"message_sent","lt_verdict","constraint_violation","bypass_triggered","eps_debited","budget_exhausted","human_review","rate_limit"}`, `actor_agent_id`, `payload: AuditPayload` (typed by `kind`).
+  - **`AuditEvent`** (any → audit channel): `event_id`, `kind ∈ {"message_sent","lt_verdict","constraint_violation","bypass_triggered","rho_debited","budget_exhausted","human_review","rate_limit"}`, `actor_agent_id`, `payload: AuditPayload` (typed by `kind`).
   - **`DismissalRationale`** (A2 → F5): `alert_id`, `reason`, `evidence_considered`.
 - *Approach:* Pydantic v2 `BaseModel` with strict mode and `model_config = ConfigDict(extra="forbid")`. Field validators where the constraint is structural: `Sec314bQuery.purpose_declaration.suspicion_rationale` non-empty; `Sec314bResponse.fields.keys()` ⊆ `{p.field_name for p in provenance}`; `SARDraft.mandatory_fields_complete=True` only if all of `filing_institution`, `suspicious_amount_range`, `typology_code`, `narrative` are populated. Discriminated unions on `query_shape` and `AuditEvent.kind` so Gemini's structured-output can target each variant.
 - *Out of scope for this part:* no agent code, no LT integration, no DP arithmetic, no SQLite reads. Pure schema + tests.
-- *Acceptance:* every model passes a JSON round-trip test (`Model(**json.loads(model.model_dump_json())) == model`); every model exports a JSON schema via `model.model_json_schema()` that validates against the JSON Schema Draft 2020-12 spec; at least one valid + one invalid example per model in `tests/test_messages.py` (missing purpose, fields without matching provenance, customer-name string in `evidence` — all raise `ValidationError`); a single opt-in test calls Gemini with `Sec314bQuery.model_json_schema()` as the response schema and confirms Gemini produces a valid `Sec314bQuery` object.
+- *What was built:* `shared/enums.py` defines the stable enum surface for roles, banks, query shapes, typologies, audit event kinds, privacy units, and response value kinds. `shared/messages.py` defines strict Pydantic v2 models for every P4 contract, including typed `Sec314bQuery` payload unions, `Sec314bResponse` provenance invariants, SAR completeness checks, customer-name guardrails for safe text fields, and normalized `AuditEvent` payload unions. `tests/test_messages.py` covers round trips, JSON-schema export, and invalid examples.
+- *Acceptance (current):* `uv run pytest tests/test_messages.py` passes 36 schema tests. Every public message model round-trips through JSON and exports JSON schema. Invalid cases fail for extra fields, missing purpose rationale, query-shape mismatch, response fields without matching provenance, response kind/rho mismatches, refusal responses with fields, customer-name strings in evidence, incomplete SAR drafts marked complete, audit kind/payload mismatch, federation-origin bank aggregates, and reversed date windows. Live Gemini schema generation remains optional and is not required for the local P4 contract gate.
 - *Risks specific to this part:* (a) Pydantic v2's strict mode + discriminated unions can be finicky with Gemini's occasional JSON output drift — mitigation: write the schemas with Gemini JSON-mode quirks in mind (avoid deeply nested unions; document known Gemini-output limitations in module docstrings). (b) `Sec314bResponse.fields` is open-ended by design (different query shapes return different field sets); mitigation: schema permits arbitrary string keys but every key must have matching provenance.
 - *Depends on:* P0.
 - *Scope check:* one focused session — write models, write validators, write tests, run the opt-in Gemini round-trip. Stops at "schemas validated, no live agent code."
@@ -566,7 +567,10 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Files:* `backend/__init__.py`, `backend/agents/__init__.py`, `backend/agents/base.py`, `backend/agents/llm_client.py` (thin wrapper around the LT-proxied OpenAI-compatible Gemini endpoint), `tests/test_agent_base.py`.
 - *Class shape:*
   ```python
-  class Agent[InT: BaseModel, OutT: BaseModel]:
+  InT = TypeVar("InT", bound=BaseModel)
+  OutT = TypeVar("OutT", bound=BaseModel)
+
+  class Agent(Generic[InT, OutT]):
       role: AgentRole
       bank_id: str | Literal["federation"]
       system_prompt: str
@@ -585,7 +589,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Bypass and constraint rule shape:*
   - `BypassRule`: `name`, `trigger(input) -> bool`, `force_output(input) -> OutT`, `reason` (human-readable).
   - `ConstraintRule`: `name`, `check(input, output) -> bool` (True = ok), `violation_msg(input, output) -> str`.
-- *LLM client:* talks to `http://127.0.0.1:8080/v1/chat/completions` (Lobster Trap front-end). Carries headers identifying the agent role and bank in `X-Agent-Role` and `X-Agent-Bank` (or `X-Agent-Bank: federation`) so LT can route policy rules by role. Falls back to a deterministic stub if `LLM_STUB_MODE=1` env var is set (for unit tests without API calls).
+- *LLM client:* talks to `http://127.0.0.1:8080/v1/chat/completions` (Lobster Trap front-end). Carries agent role, bank, and declared intent in the request body's `_lobstertrap` field because current LT reads declared metadata from that field. The application-level message envelope still carries `sender_role`, `sender_bank_id`, and `recipient_agent_id`; P14's Python AML policy adapter uses those fields for role routing and redaction. Falls back to a deterministic stub if `LLM_STUB_MODE=1` env var is set (for unit tests without API calls).
 - *Out of scope for this part:* no concrete agents yet, no Lobster Trap policy authoring (that's P14), no orchestrator (P15). The base class is exercised by a `TrivialEchoAgent` in the test.
 - *Acceptance:* `tests/test_agent_base.py` defines a `TrivialEchoAgent` with one bypass rule (force-echo input if input contains "FORCE") and one constraint rule (output length ≤ 100 chars), runs it against the LLM stub. Tests cover: (a) normal LLM path returns Pydantic-valid output, (b) bypass triggers without LLM call, (c) constraint violation triggers retry, (d) audit channel records every event with correct kind.
 - *Risks specific to this part:* (a) Gemini's structured-output mode occasionally returns invalid JSON — mitigation: one retry with `response_format` re-asserted; on second failure raise rather than half-parse. (b) LT may rate-limit during retry storms — mitigation: exponential backoff on LLM-side errors, not on constraint-side errors. (c) The generics typing (`Agent[InT, OutT]`) needs Pydantic v2's `TypeAdapter` to validate at runtime — mitigation: explicit `output_schema.model_validate(raw_json)` rather than relying on TypeVar resolution.
@@ -620,28 +624,28 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P7 — Bank-local stats-primitives layer + DP**
 
-- *Goal:* A deterministic (non-LLM) module per bank that exposes a fixed set of declared query primitives over the bank's SQLite database, applies Gaussian DP noise where appropriate, and tracks a per-(investigator, peer-bank) ε budget via zCDP composition. **This is the structural enforcement of design principle #6** — the data plane is severed from the cross-bank-LLM path. A2's `Sec314bResponse` can only quote numbers that come out of here.
-- *Files:* `backend/silos/__init__.py`, `backend/silos/stats_primitives.py` (the five primitives), `backend/silos/dp.py` (Gaussian mechanism + zCDP composition wrappers around OpenDP), `backend/silos/budget.py` (per-investigator ε ledger), `backend/silos/local_reader.py` (the bank's own DB connector, also reused by A1), `tests/test_stats_primitives.py`, `tests/test_dp_composition.py`, `tests/test_budget.py`.
+- *Goal:* A deterministic (non-LLM) module per bank that exposes a fixed set of declared query primitives over the bank's SQLite database, applies Gaussian DP noise where appropriate, and tracks a per-(investigator, peer-bank) budget using one internally consistent zCDP ledger. **This is the structural enforcement of design principle #6** — the data plane is severed from the cross-bank-LLM path. A2's `Sec314bResponse` can only quote numbers that come out of here.
+- *Files:* `backend/silos/__init__.py`, `backend/silos/stats_primitives.py` (the five primitives), `backend/silos/dp.py` (Gaussian mechanism + zCDP accounting helpers around OpenDP where practical), `backend/silos/budget.py` (per-investigator privacy ledger), `backend/silos/local_reader.py` (the bank's own DB connector, also reused by A1), `tests/test_stats_primitives.py`, `tests/test_dp_composition.py`, `tests/test_budget.py`.
 - *Primitive signatures (each returns `(value, PrimitiveCallRecord)`):*
-  - `count_entities_by_name_hash(name_hashes: list[str], requester: RequesterKey, eps: float = 0.0) -> (int, rec)` — Binary presence ish (count over a small set). **No DP applied** by default (the value is sensitivity 1 with magnitude 1; DP would eat the signal). Routes through the layer for provenance and budget accounting only. Hash lookup is constant-time via the `name_hash` index.
-  - `alert_count_for_entity(name_hash: str, window: tuple[date,date], signal_type: SignalType, requester: RequesterKey, eps: float = 0.2) -> (int, rec)` — **DP applied.** Sensitivity 1 (one transaction added/removed changes count by 1). Gaussian mechanism with σ = sensitivity · sqrt(2 · ln(1.25 / δ)) / ε; δ = 1e-6 fixed.
-  - `flow_histogram(name_hashes: list[str], window, buckets: list[tuple[float,float]], requester, eps: float = 0.3) -> (list[int], rec)` — **DP applied per bucket.** Sensitivity 1 per bucket (assuming each transaction lands in exactly one bucket). ε split equally across buckets via parallel composition; σ per bucket calibrated from per-bucket ε.
-  - `counterparty_edge_existence(counterparty_hashes: list[str], window, requester, eps: float = 0.0) -> (dict[hash → bool], rec)` — Binary edge existence per hash. **No DP applied.** Hash lookup over `transactions.counterparty_account_id_hashed`.
-  - `pattern_aggregate_for_f2(window, requester, eps: float = 0.4) -> (BankAggregate, rec)` — **DP applied.** Returns a `BankAggregate` of `edge_count_distribution` (histogram of edge counts on hashed counterparties) and `bucketed_flow_histogram`. Sensitivity calibrated per-component; ε split between components. This is the input to F2.
+  - `count_entities_by_name_hash(name_hashes: list[str], requester: RequesterKey, rho: float = 0.0) -> (int, rec)` — Binary presence ish (count over a small set). **No DP applied** by default (the value is sensitivity 1 with magnitude 1; DP would eat the signal). Routes through the layer for provenance and budget accounting only. Hash lookup is constant-time via the `name_hash` index.
+  - `alert_count_for_entity(name_hash: str, window: tuple[date,date], signal_type: SignalType, requester: RequesterKey, rho: float = 0.02) -> (int, rec)` — **DP applied.** Hackathon privacy unit is a clipped transaction contribution, not a full customer-level guarantee. Sensitivity is 1 after enforcing the contribution cap for the queried entity/window. Gaussian mechanism uses σ = sensitivity / sqrt(2ρ). Provenance displays the equivalent ε for fixed δ = 1e-6.
+  - `flow_histogram(name_hashes: list[str], window, buckets: list[tuple[float,float]], requester, rho: float = 0.03) -> (list[int], rec)` — **DP applied per bucket.** Each transaction lands in exactly one bucket after clipping. ρ is split across buckets; σ per bucket is calibrated from per-bucket ρ.
+  - `counterparty_edge_existence(counterparty_hashes: list[str], window, requester, rho: float = 0.0) -> (dict[hash → bool], rec)` — Binary edge existence per hash. **No DP applied.** Hash lookup over `transactions.counterparty_account_id_hashed`.
+  - `pattern_aggregate_for_f2(window, requester, rho: float = 0.04) -> (BankAggregate, rec)` — **DP applied.** Returns a `BankAggregate` of `edge_count_distribution` (histogram of edge counts on hashed counterparties) and `bucketed_flow_histogram`. Sensitivity is calibrated per component after contribution clipping; ρ is split between components. This is the input to F2.
 - *`RequesterKey`:* `{requesting_investigator_id, requesting_bank_id}`. The budget ledger keys debits by this pair so a single investigator can't drain budget across multiple banks' allowances independently.
 - *Budget ledger:*
-  - Default ε = 1.0 per `(requesting_investigator, this_bank, peer_bank_destination)` triple per session.
-  - zCDP composition via OpenDP: each Gaussian-mechanism call debits ρ = ε²/2 (zCDP units); the ledger sums ρ values and refuses when cumulative ρ would exceed ρ_max corresponding to ε_max=1.0.
+  - Internal budget unit is ρ, not ε. The default session cap is `rho_max` per `(requesting_investigator, this_bank, peer_bank_destination)` triple. The UI converts cumulative ρ to an approximate `(ε, δ)` display value using fixed δ = 1e-6.
+  - Each Gaussian-mechanism call debits its declared ρ. The ledger sums ρ values and refuses when cumulative ρ would exceed `rho_max`. Do not mix the approximate-DP σ formula with this ledger; the zCDP Gaussian calibration is σ = sensitivity / sqrt(2ρ).
   - On exhaustion: every primitive call from that requester returns `(None, rec_with_refusal_reason="budget_exhausted")`. The refusal is structural; A2 cannot retry around it.
   - Budget is per-session by default (resets when the orchestrator restarts) but the ledger has a persistence hook for production use.
-- *Provenance:* every `PrimitiveCallRecord` carries `primitive_name`, `args_hash` (SHA-256 of canonical JSON of the args — for audit-replay if needed), `eps_debited`, `sigma_applied` (None for non-DP primitives), `sensitivity`, `returned_value_kind`, `timestamp`. A2 attaches the records to its outbound `Sec314bResponse.provenance`.
-- *Approach:* OpenDP for the actual noise calibration and zCDP arithmetic (one line each, the rest is plumbing). Composition tracked via `make_zCDP_to_approxDP` for any final ε,δ accounting we want to display. The SQLite reads are plain parameterized SQL — never LLM-generated.
+- *Provenance:* every `PrimitiveCallRecord` carries `field_name`, `primitive_name`, `args_hash` (SHA-256 of canonical JSON of the args — for audit-replay if needed), `privacy_unit`, `rho_debited`, approximate `(ε, δ)` display value, `sigma_applied` (None for non-DP primitives), `sensitivity`, `returned_value_kind`, `timestamp`. A2 attaches the records to its outbound `Sec314bResponse.provenance`.
+- *Approach:* OpenDP where it gives us stable helpers for Gaussian noise and zCDP-to-approx-DP display conversion; otherwise a small hand-rolled Gaussian sampler is acceptable for the hackathon as long as the accounting is explicit and tested. The SQLite reads are plain parameterized SQL — never LLM-generated.
 - *Out of scope for this part:* no LLM, no agent code, no LT integration, no cross-bank messaging. Pure deterministic primitives. The "binary presence" primitives still route through this layer because we want every cross-bank-bound numeric value to carry provenance.
 - *Acceptance:*
-  - **`tests/test_stats_primitives.py`** instantiates against `data/silos/bank_alpha.db`. For each primitive: call it with a known input 200 times; verify (a) the empirical mean of the noised output matches the analytical true value within 3σ tolerance, (b) the empirical variance matches σ² within 20% tolerance, (c) non-DP primitives return identical values across calls.
-  - **`tests/test_dp_composition.py`** debits a fixed ε across N primitive calls; verifies the ledger sums via zCDP composition (not naïve linear addition); the (N+1)th call after budget exhaustion returns the refusal record.
+  - **`tests/test_stats_primitives.py`** instantiates against `data/silos/bank_alpha.db`. For each primitive: call it with a known input 200 times; verify (a) the empirical mean of the noised output matches the analytical true value within 3 standard errors, (b) the empirical variance matches σ² within a statistically reasonable tolerance, (c) non-DP primitives return identical values across calls, (d) contribution clipping is enforced before noise is applied.
+  - **`tests/test_dp_composition.py`** debits a fixed ρ across N primitive calls; verifies the ledger sums via zCDP composition; the (N+1)th call after budget exhaustion returns the refusal record.
   - **`tests/test_budget.py`** verifies (a) different `RequesterKey` values share no budget, (b) the same investigator querying two banks debits each bank's allowance independently, (c) persistence-hook is exercised by a round-trip serialize/deserialize.
-- *Risks specific to this part:* (a) OpenDP installation can be heavy (compiles Rust); mitigation: pin to a binary wheel in pyproject; document the fallback to hand-rolled Gaussian + simple ε-counter (the "cut order" knob in Section 11). (b) Calibration mistakes (wrong sensitivity) silently leak privacy; mitigation: hardcode sensitivity per primitive, test it analytically rather than declaring it. (c) Float-precision drift in σ across calls makes audit-replay non-deterministic; mitigation: round σ to 6 decimal places for provenance records.
+- *Risks specific to this part:* (a) OpenDP installation can be heavy (compiles Rust); mitigation: pin to a binary wheel in pyproject; document the fallback to hand-rolled Gaussian + simple rho-counter (the "cut order" knob in Section 11). (b) Calibration mistakes (wrong sensitivity) silently leak privacy; mitigation: hardcode sensitivity per primitive, test it analytically rather than declaring it. (c) Float-precision drift in σ across calls makes audit-replay non-deterministic; mitigation: round σ to 6 decimal places for provenance records.
 - *Depends on:* P3 (data), and the `opendp` Python package (new dependency, added to `pyproject.toml`).
 - *Scope check:* one to two focused sessions. The DP arithmetic is short but the test suite is the bulk of the work — get the empirical-σ tolerances right.
 
@@ -664,7 +668,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Cannot send `Sec314bQuery` without a populated `PurposeDeclaration`.
   - Cannot escalate to SAR without a peer-bank corroborating signal (specifically: `SARContribution.contributed_evidence` must reference at least one `Sec314bResponse` with non-empty `fields`).
   - Every numeric/list value in `Sec314bResponse.fields` must have a matching entry in `Sec314bResponse.provenance` (provenance enforcement).
-  - When the per-(investigator, peer-bank) ε budget for the requesting investigator is exhausted, A2 cannot answer — deterministic refusal returned as `Sec314bResponse { refusal_reason: "budget_exhausted", fields: {}, provenance: [] }`.
+  - When the per-(investigator, peer-bank) rho budget for the requesting investigator is exhausted, A2 cannot answer — deterministic refusal returned as `Sec314bResponse { refusal_reason: "budget_exhausted", fields: {}, provenance: [] }`.
 - *Approach (Gemini calls):* `gemini-2.5-pro` for the cross-bank-query drafting + synthesize steps (structured output reliability matters); `gemini-2.5-flash` for the answer-incoming-peer-query step (faster, A2 is just picking primitives). Each state's system prompt is in a separate Markdown file under `backend/agents/prompts/`. The agent base class's retry plumbing handles structured-output JSON errors.
 - *Out of scope for this part:* no F1 routing (P9), no actual P7 primitive *implementation* (P7), no orchestrator state management (P15) — A2 is a state machine that takes one input and returns one output per turn; the orchestrator drives state transitions.
 - *Acceptance:* `tests/test_a2.py`:
@@ -686,7 +690,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   1. **Purpose-declaration validation** — Gemini reads the `PurposeDeclaration` and returns `{valid: bool, reason}`. The bypass on missing-or-empty `suspicion_rationale` short-circuits this (deterministic refusal before LLM call).
   2. **Target-bank selection** — LLM reasons about which peer banks the query is relevant to (e.g., a S2-shaped query about Alpha+Beta need not broadcast to Gamma). Returns `target_bank_ids` (must be a subset of the requester's stated targets — constraint).
   3. **Redaction** — LLM rewrites the query body for peer consumption. Customer names should already be absent (constraint at A2 + LT redaction in transit); F1 also strips any `requesting_investigator_id` that isn't strictly necessary for the peer to answer.
-  4. **Aggregation** — when peer responses arrive, F1 composes a single `Sec314bResponse` to the requester. Provenance from each peer is preserved verbatim; aggregate `eps_debited_total` is the sum across peer responses.
+  4. **Aggregation** — when peer responses arrive, F1 composes a single `Sec314bResponse` to the requester. Provenance from each peer is preserved verbatim; aggregate `rho_debited_total` is the sum across peer responses.
 - *Rule bypasses (override LLM):*
   - Missing or empty `PurposeDeclaration.suspicion_rationale` → MUST refuse the query before any LLM call.
   - Quota exceeded for this requester (e.g., 20+ queries in 1 hour) → MUST escalate to F5 for compliance review.
@@ -701,7 +705,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Given a valid `Sec314bQuery` from Bank Alpha targeting both peers, F1 emits two redacted queries (one each to Beta and Gamma) with the customer-name-redaction check passing on both.
   - Given a query with empty `PurposeDeclaration.suspicion_rationale`, F1 returns a refusal — LLM is never called.
   - Given a query referencing an SDN-equivalent hash, F1 emits a `SanctionsCheckRequest` to F3 in parallel (asserted via orchestrator stub).
-  - Given two peer `Sec314bResponse` objects, F1 returns an aggregated `Sec314bResponse` whose `provenance` is the concatenation of the inputs' provenance and `eps_debited_total` is the sum.
+  - Given two peer `Sec314bResponse` objects, F1 returns an aggregated `Sec314bResponse` whose `provenance` is the concatenation of the inputs' provenance and `rho_debited_total` is the sum.
 - *Risks specific to this part:* (a) the LLM may broadcast more widely than needed ("when in doubt, ask everyone") — mitigation: prompt says minimize peers; constraint caps at requester-stated targets. (b) Aggregation logic could lose provenance — mitigation: strict Pydantic validation of the aggregated response.
 - *Depends on:* P5, P8.
 - *Scope check:* one focused session.
@@ -743,7 +747,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Rule bypasses (override LLM) — typology pattern matchers:*
   - **Closed-cycle structuring ring** — if ≥3 entity hashes appear in ≥3 banks' aggregates with elevated edge counts forming a cycle (each hash's transactions both flow in from and out to other hashes in the set) → MUST surface as `pattern_class="structuring_ring"`, `confidence >= 0.85` regardless of LLM uncertainty.
   - **Fee-shaped layering chain** — if a sequence of hashes shows decreasing flow amounts across 4+ hops with attenuation 2–5% per hop → MUST surface as `pattern_class="layering_chain"`, `confidence >= 0.85`.
-  - These pattern matchers run on the DP-noised aggregates; calibration is loose enough to survive Gaussian noise at the planted-ring scale. (Verified by the data layer's structural design — ring's signal is much larger than σ at default ε.)
+  - These pattern matchers run on the DP-noised aggregates; calibration is loose enough to survive Gaussian noise at the planted-ring scale. (Verified by the data layer's structural design — ring's signal is much larger than σ at the default rho budget.)
 - *Rule constraints:*
   - Cannot see raw transactions (input is DP-noised aggregates only; structurally enforced — F2 has no DB handle).
   - Cannot output customer-name strings (output schema is hash-only).
@@ -753,8 +757,8 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **Test 1 (S1 detection):** synthesize a `GraphPatternRequest` matching the planted S1 ring's actual aggregate shape (computed offline from the data layer); F2 returns `pattern_class="structuring_ring"`, `confidence >= 0.85`, with `suspect_entity_hashes` covering the 5 S1 entities.
   - **Test 2 (S3 layering):** synthesize S3's aggregate; F2 returns `pattern_class="layering_chain"`, `confidence >= 0.85`.
   - **Test 3 (negative):** synthesize a random-noise aggregate (no planted ring); F2 returns `pattern_class="none"` or `confidence < 0.4`.
-  - **Test 4 (DP noise robustness):** run test 1 with 50 different DP-noise draws; ≥45 of 50 still detect the ring. (The planted ring's signal is well above σ at default ε; if this test is flaky, the data-layer ring needs to be larger or ε needs to be relaxed.)
-- *Risks specific to this part:* (a) the LLM may hallucinate patterns in pure noise — mitigation: explicit "if you don't see a clear cross-bank pattern, return none" instruction; bypass thresholds are conservative. (b) DP noise at low ε could mask the S2 smaller ring — mitigation: the data layer's S2 is sized so it survives default σ; if not, surface it only when targeted (S2 isn't the demo's hero — S1 is).
+  - **Test 4 (DP noise robustness):** run test 1 with 50 different DP-noise draws; ≥45 of 50 still detect the ring. (The planted ring's signal is well above σ at the default rho budget; if this test is flaky, the data-layer ring needs to be larger or rho needs to be relaxed.)
+- *Risks specific to this part:* (a) the LLM may hallucinate patterns in pure noise — mitigation: explicit "if you don't see a clear cross-bank pattern, return none" instruction; bypass thresholds are conservative. (b) DP noise at low rho could mask the S2 smaller ring — mitigation: the data layer's S2 is sized so it survives default σ; if not, surface it only when targeted (S2 isn't the demo's hero — S1 is).
 - *Depends on:* P5, P9.
 - *Scope check:* one to two focused sessions — the typology matchers and the prompt engineering are the bulk of the work.
 
@@ -791,7 +795,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 - *Goal:* Full LLM agent that subscribes to the live audit stream and reasons about whether agent behavior pattern-matches a fishing expedition, a §314(b) purpose mismatch, or a sustained-abuse pattern. Emits compliance annotations and `HUMAN_REVIEW` escalations.
 - *Files:* `backend/agents/f5_compliance_auditor.py`, `backend/agents/prompts/f5_system.md`, `tests/test_f5.py`.
-- *Inputs:* a streaming sequence of `AuditEvent` records from the orchestrator's audit channel (P15). F5 reads asynchronously; the orchestrator runs F5 as a separate task that consumes from a queue.
+- *Inputs:* a streaming sequence of `AuditEvent` records from any object implementing an `AuditSource` protocol (`subscribe() -> AsyncIterator[AuditEvent]`). Unit tests use an in-memory source; P15 later wires F5 to the orchestrator's real audit channel.
 - *Outputs:* `AuditEvent` records of kind `human_review` or `rate_limit`, plus a periodic `AuditSummary` digest (every N events or every 30 seconds, whichever first).
 - *Approach (Gemini call):*
   - F5 batches incoming events into windows (e.g., the last 60 seconds of activity). For each window, it sends the structured event list to Gemini with a prompt asking "does anything here exceed §314(b) authorization or pattern-match a fishing expedition?"
@@ -812,32 +816,36 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **Test 3 (LLM-judgment fishing pattern):** synthesize 5 queries from one investigator referencing 5 unrelated `name_hash` values without any follow-up SAR contributions; F5 emits a `human_review` with the LLM-authored rationale.
   - **Test 4 (no false alarms):** synthesize a normal canonical-flow audit stream; F5 emits no `human_review` annotations.
 - *Risks specific to this part:* (a) the LLM may over-flag (every query looks like a fishing expedition to a cautious model) — mitigation: prompt explicitly says "normal investigative behavior is not a fishing expedition; only flag specific anomalies." Test 4 catches over-flagging. (b) F5's batching window introduces latency in the demo; mitigation: tune window to 5–10 seconds for demo runs; document the tradeoff.
-- *Depends on:* P5, P15 (consumes the orchestrator's audit channel).
+- *Depends on:* P4, P5. P15 later wires the already-built F5 listener into the live orchestrator audit channel.
 - *Scope check:* one to two focused sessions.
 
 ---
 
 ### Integration parts (P14–P18)
 
-**P14 — AML Lobster Trap policy pack**
+**P14 — AML policy adapter + Lobster Trap overlay**
 
-- *Goal:* Layer an AML-specific LT policy pack on top of the P0 base policies. Enforces role-based routing, customer-name redaction at egress, structured purpose-declaration requirements, and audit-event emission on every cross-bank message.
-- *Files:* `infra/lobstertrap/packs/aml_pack.yaml`, `infra/lobstertrap/packs/aml_dictionaries/` (lists of customer-name surface patterns, typology codes, ML/TF keyword dictionary used by the policy), `scripts/aml_pack_smoke.py` (extends `smoke_lobstertrap.py` with AML-specific cases), `tests/test_aml_lt_pack.py`.
-- *Policy rules (YAML, on top of `base_policy.yaml`):*
-  - **Role-based routing**: an `X-Agent-Role: A1` request whose target message recipient is anything other than the local A2 → block (HTTP 403, audit event `role_violation`). Only `X-Agent-Role: A2|F1|F2|F3|F4|F5` permitted to send cross-bank or cross-trust-zone messages.
-  - **Egress customer-name redaction**: on any outbound `Sec314bQuery` or `Sec314bResponse` payload, replace any substring matching the `customer_name_patterns` dictionary with `[REDACTED_NAME]`; emit a `redaction_applied` audit event. (The dictionary is broad — first/last/organization-name common patterns; the synthetic dataset uses obviously fictional names like "Acme Holdings LLC" so this is straightforward.)
-  - **Purpose-declaration check**: outbound `Sec314bQuery` without `purpose_declaration.suspicion_rationale` non-empty → block; without a valid `typology_code` from the enum → block.
-  - **Audit emission**: every cross-bank message (and every block/redaction event) emits a structured `AuditEvent` to the audit channel.
-  - **Rate limiting** (advisory, not blocking): >20 `Sec314bQuery` events from one `requesting_investigator_id` in 1 hour → emit an advisory `rate_limit_warning` audit event. F1's bypass rule still enforces blocking; this is the LT-side belt-and-suspenders.
-- *Approach:* LT pack is declarative YAML; each rule specifies a trigger pattern, a verdict (allow/redact/block), and an audit-event template. Composition with the base pack uses LT's built-in `extends` directive. Test harness drives positive (allowed messages pass through with no redaction) and negative (blocked or redacted) cases.
-- *Out of scope for this part:* no automatic remediation (F5 does that at the LLM-reasoning layer); no policy compilation tooling beyond the existing `compose-policy.py` if needed; no new LT features (we use what LT already supports).
-- *Acceptance:* `tests/test_aml_lt_pack.py`:
-  - Positive: a well-formed `Sec314bQuery` from A2 with valid purpose passes; the proxy logs a normal audit event.
-  - Negative (role): an A1 trying to send to a peer bank gets HTTP 403 + `role_violation` audit event.
-  - Negative (redaction): a `Sec314bQuery` body containing the literal string `"Acme Holdings LLC"` is rewritten to `"[REDACTED_NAME]"` before egress; `redaction_applied` audit event is logged with the original-substring redacted from the log itself.
-  - Negative (purpose): a `Sec314bQuery` with empty `suspicion_rationale` → HTTP 403 + audit event.
-  - Rate limit: 21 `Sec314bQuery` events from one investigator within 60 minutes → advisory audit event on the 21st.
-- *Risks specific to this part:* (a) name-pattern regex is fragile — too broad redacts legitimate text, too narrow misses names. Mitigation: keep the dictionary scoped to the synthetic dataset's exact fictional name forms; document this as a demo-grade pattern and the production path (NER-based redaction) in the pitch deck. (b) LT's audit-emission format must match P4's `AuditEvent` schema — mitigation: include a small adapter in `backend/audit.py` if LT's native format differs.
+- *Goal:* Add AML-specific governance without assuming unsupported LT behavior. Current LT gives us generic prompt inspection, block/allow/HUMAN_REVIEW decisions, `_lobstertrap` response metadata, and JSONL audit logs. The AML-specific behavior lives in our Python policy adapter unless and until LT grows first-class support for that rule type.
+- *Files:* `backend/policy/__init__.py`, `backend/policy/aml.py` (message-level policy adapter), `backend/policy/redaction.py` (demo-grade synthetic-name redactor), `backend/policy/dictionaries/aml_terms.json` (typology codes, ML/TF keywords, synthetic customer-name surface patterns), `infra/lobstertrap/aml_overlay_policy.yaml` (optional LT overlay limited to supported LT fields/actions), `scripts/aml_policy_smoke.py`, `tests/test_aml_policy.py`.
+- *Division of responsibility:*
+  - **Lobster Trap:** generic prompt injection, jailbreak, obfuscation, exfiltration, credential/PII leakage, sensitive path, and response metadata/audit logging.
+  - **Python AML policy adapter:** role-based message routing, customer-name redaction, §314(b) purpose-declaration validation, cross-bank rate-limit advisory events, and normalization of LT JSONL records into P4 `AuditEvent` objects.
+- *Policy rules in the Python adapter:*
+  - **Role-based routing:** an A1 message whose `recipient_agent_id` is anything other than the local A2 is rejected with `PolicyDecision(action="deny", reason="role_violation")`. Only A2 and F1-F5 may send cross-bank or cross-trust-zone messages.
+  - **Customer-name redaction:** any outbound `Sec314bQuery`, `Sec314bResponse`, or SAR narrative field is scanned against the synthetic-name dictionary and simple organization-name patterns. Matches are replaced with `[REDACTED_NAME]`; the audit event records that redaction occurred but never logs the original substring.
+  - **Purpose-declaration check:** outbound `Sec314bQuery` without non-empty `purpose_declaration.suspicion_rationale` or without a valid `typology_code` from the enum is denied before any LLM call.
+  - **Audit normalization:** every cross-bank message, redaction, denial, LT verdict, and rate-limit advisory emits a P4 `AuditEvent`.
+  - **Rate-limit advisory:** >20 `Sec314bQuery` events from one `requesting_investigator_id` in 1 hour emits a `rate_limit` advisory event. F1 still performs any deterministic blocking decision.
+- *LT overlay:* if useful, add extra LT YAML rules for generic AML keyword logging or malformed-purpose prompts using currently supported fields/actions only. Do not depend on LT `MODIFY`, header-aware routing, `extends`, or audit-event templates unless those capabilities are verified in the checked-out LT version.
+- *Out of scope for this part:* no upstream LT feature work; no production NER redactor; no automatic remediation (F5 annotates, humans act).
+- *Acceptance:* `tests/test_aml_policy.py`:
+  - Positive: a well-formed `Sec314bQuery` from A2 with valid purpose passes and emits a normalized audit event.
+  - Negative (role): an A1 trying to send to a peer bank is denied by the Python adapter before the LLM/proxy call; audit event kind is `constraint_violation` or `role_violation`.
+  - Negative (redaction): a `Sec314bQuery` body containing the literal string `"Acme Holdings LLC"` is rewritten to `"[REDACTED_NAME]"`; the normalized audit event does not contain the original string.
+  - Negative (purpose): a `Sec314bQuery` with empty `suspicion_rationale` is denied by the adapter.
+  - LT normalization: a captured LT `_lobstertrap` response and a JSONL audit entry convert into P4 `AuditEvent` without losing request_id, verdict, action, or rule_name.
+  - Rate limit: 21 `Sec314bQuery` events from one investigator within 60 minutes emits an advisory audit event on the 21st.
+- *Risks specific to this part:* (a) name-pattern regex is fragile — too broad redacts legitimate text, too narrow misses names. Mitigation: keep the dictionary scoped to the synthetic dataset's exact fictional name forms; document this as demo-grade and name production NER as future work. (b) LT's native audit format may differ from P4's `AuditEvent` schema — mitigation: normalization lives in `backend/policy/aml.py` or `backend/audit.py`, not in the LT process.
 - *Depends on:* P4 (message schemas).
 - *Scope check:* one focused session.
 
@@ -853,16 +861,16 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Audit channel (in `audit.py`):*
   - Ringbuffer of `AuditEvent` records (default 10,000 entries).
   - Subscriber API (`audit.subscribe() -> AsyncIterator[AuditEvent]`) for the terminal UI to consume live.
-  - Every message routed by the bus is copied to the audit channel as kind `message_sent`; constraint violations, bypass triggers, ε debits, LT verdicts all produce additional events.
+  - Every message routed by the bus is copied to the audit channel as kind `message_sent`; constraint violations, bypass triggers, rho debits, LT verdicts all produce additional events.
 - *Bank↔primitives wiring:* on init, the orchestrator constructs each bank's `StatsPrimitivesLayer` (from P7) and passes a handle to that bank's A2. A2's `answer_incoming_peer_query` state uses this handle; A2's other states (which only access local data, not cross-bank-response data) use `local_reader` directly.
-- *F5 wiring:* F5 subscribes to the audit channel via `audit.subscribe()`. F5's findings are themselves AuditEvents (kind `human_review` or `rate_limit`).
+- *F5 wiring:* F5 is optional at construction time. When enabled, it subscribes to the audit channel via `audit.subscribe()`. F5's findings are themselves AuditEvents (kind `human_review` or `rate_limit`). This avoids a build-order cycle: P13 is tested against an `AuditSource` protocol first, then P15 wires it into the real orchestrator.
 - *Out of scope for this part:* no HTTP/WebSocket API (this is single-process); no distributed deployment; no persistence beyond the audit channel's ringbuffer; no agent hot-reload.
 - *Acceptance:* `tests/test_orchestrator.py`:
   - Instantiate the orchestrator (with stubbed LLM agents that return canned outputs for predictability); drop a hand-crafted `Alert` into Bank Alpha's A2 inbox; call `run_until_idle()`; verify the audit channel contains at least: the original alert routed, A2's `Sec314bQuery`, F1's broadcasts to peer banks, peer A2s' responses, F1's aggregated response, A2's `SARContribution`, F4's `SARDraft`, and F5's audit annotations.
-  - Verify each cross-bank message audit event includes the ε debit from the corresponding primitive call (chained correctly through provenance).
+  - Verify each cross-bank message audit event includes the rho debit from the corresponding primitive call (chained correctly through provenance).
   - Verify `step()` is deterministic given stubbed LLM outputs (same sequence of events across runs).
 - *Risks specific to this part:* (a) `asyncio` orchestration is easy to deadlock if priorities are wrong — mitigation: priority queue with explicit ordering; test exhaustively. (b) The audit channel's ringbuffer may overflow during long runs — mitigation: 10K entries is well over the demo's ~50 events; UI handles ringbuffer reads gracefully. (c) Wiring 11 agents + 3 primitives layers is mostly plumbing — keep `__init__` clean by extracting a `bank_setup(bank_id) -> BankRuntime` helper.
-- *Depends on:* P5, P7, P12 (F4 emits the terminal `SARDraft` event), P13 (F5 subscribes to the audit channel — depends on P15 for the channel itself, so circular; resolve by building the channel as part of P15 and having F5's listener wired in during orchestrator init).
+- *Depends on:* P5, P7, P8, P9, P10, P11, P12, P14. P13 is optional for the first orchestrator pass; when present, it plugs into the `AuditSource` interface built here.
 - *Scope check:* one to two focused sessions. Mostly plumbing once the agent contracts are stable.
 
 **P16 — Canonical demo flow script**
@@ -901,7 +909,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
     - Suspect entity hashes overlap with S1's planted name_hashes (loaded from `ground_truth_entities` for the test)
   - Asserts on the audit stream:
     - At least 10 events
-    - At least one `eps_debited` event with non-zero ε
+    - At least one `rho_debited` event with non-zero rho
     - At least one `lt_verdict` event with verdict=allow
     - Zero `constraint_violation` events on the happy path
     - Zero customer-name strings in any event payload (regex scan)
@@ -914,8 +922,8 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P18 — Federation timeline + audit panel (terminal UI)**
 
-- *Goal:* A terminal UI that shows the federation timeline beat-by-beat with LT verdicts and ε debits overlaid. Designed for the screen-recording aspect ratio; the demo's signature visual.
-- *Files:* `backend/ui/__init__.py`, `backend/ui/timeline.py`, `backend/ui/components.py` (reusable Rich components — agent badge, message bubble, ε meter), `backend/demo/canonical_flow.py` (extended to support `--ui` flag).
+- *Goal:* A terminal UI that shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid. Designed for the screen-recording aspect ratio; the demo's signature visual.
+- *Files:* `backend/ui/__init__.py`, `backend/ui/timeline.py`, `backend/ui/components.py` (reusable Rich components: agent badge, message bubble, privacy-budget meter with epsilon display), `backend/demo/canonical_flow.py` (extended to support `--ui` flag).
 - *Layout (Rich's `Layout` primitive, 1080p target):*
   ```
   ┌────────────────────────────────────────────────────────────────────┐
@@ -924,7 +932,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   ├──────────────────────────────────┬─────────────────────────────────┤
   │  FEDERATION TIMELINE (60% width) │  AUDIT PANEL (40% width)        │
   │                                  │                                 │
-  │  [00:00] α.A1 ──alert──> α.A2   │  ε meters:                      │
+  │  [00:00] α.A1 ──alert──> α.A2   │  Budget meters:                 │
   │  [00:01] α.A2 ──§314b──> F1     │   α→β: 0.4 / 1.0  ████░░░░░░    │
   │  [00:01] F1 ──redacted──> β.A2  │   α→γ: 0.2 / 1.0  ██░░░░░░░░    │
   │  [00:01] F1 ──redacted──> γ.A2  │                                 │
@@ -939,11 +947,11 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   │  [00:05] F4 ──SAR──> orch      │  Human-review flags: 0          │
   └──────────────────────────────────┴─────────────────────────────────┘
   ```
-- *Implementation notes:* Rich's `Live` context renders the layout; subscribes to the audit channel via `audit.subscribe()`; each event updates the relevant pane. ε meters use Rich's `ProgressBar`. Message bubbles are color-coded by agent role (A1=cyan, A2=green, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages truncate with ellipsis but the full payload is available on stdout.
+- *Implementation notes:* Rich's `Live` context renders the layout; subscribes to the audit channel via `audit.subscribe()`; each event updates the relevant pane. Privacy-budget meters use Rich's `ProgressBar` and display approximate epsilon values derived from the rho ledger. Message bubbles are color-coded by agent role (A1=cyan, A2=green, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages truncate with ellipsis but the full payload is available on stdout.
 - *Out of scope for this part:* no clickable / interactive elements (terminal UI only); no replay scrubbing; no web UI. The terminal UI is the demo's stage; web UI is post-hackathon.
 - *Acceptance:*
   - Running `uv run python -m backend.demo.canonical_flow --ui --live` shows the timeline rendering in real time; the canonical flow's ~30 events all surface in the correct panes within their actual timestamps.
-  - ε meter visibly debits per DP-applied query and stops debiting on non-DP primitives.
+  - Privacy-budget meter visibly debits per DP-applied query and stops debiting on non-DP primitives.
   - Layout readable at 1920×1080 resolution (the screen-recording target).
 - *Risks specific to this part:* (a) Rich's `Live` can flicker if the update rate is wrong — mitigation: throttle to ~10 fps; batch updates. (b) Long-running terminal display may overflow the ringbuffer — mitigation: a fixed-height "recent events" pane; full audit goes to a file.
 - *Depends on:* P16.
@@ -990,7 +998,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Goal:* An 8–10 slide deck for the hackathon submission. Sells the architecture honestly, names the friction stack, lands the Verafin comp, and aligns to partner awards (Gemini + Veea).
 - *Files:* `docs/pitch_deck.md` (source-of-truth markdown), `docs/pitch_deck.pdf` (rendered, submitted), `docs/pitch_deck_speaker_notes.md` (notes for the live presenter — fits in the 3-minute slot).
 - *Slide structure (9 slides):*
-  1. **Title + framing** — "Federated Cross-Bank AML Investigation". Sub-line: "Six agent roles. Three banks. One ring no single bank can see."
+  1. **Title + framing** — "Federated Cross-Bank AML Investigation". Sub-line: "7 agent roles. 3 banks. 1 ring no single bank can see."
   2. **Problem** — §314(b) friction stack (4 frictions, ordered). One-line claim: "the statute has been law for 25 years; banks barely use it." Cite the four frictions visually.
   3. **What we built** — architecture diagram (same as README's Architecture mermaid, exported as PNG). 3 banks × (A1 + A2 + stats-primitives + SQLite) + 5 federation agents + LT + LiteLLM + Gemini.
   4. **Demo walkthrough** — the 10-step canonical flow with screenshots from the terminal UI (taken from P21's screencast). Show LT verdicts overlaying each step. Land the moment where F2 identifies the structuring ring.
@@ -1011,13 +1019,13 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Goal:* Three consecutive successful canonical-flow runs; a polished screencast recorded as the live-demo backup; a beat-by-beat demo script the presenter can rehearse from.
 - *Files:* `docs/demo_script.md` (the spoken-words script for the 3-minute live demo), `docs/demo_screencast.mp4` (the recorded backup), `docs/demo_dry_run_log.md` (per-run outcomes, latencies, any anomalies — closed out after the third successful run).
 - *Demo script (3-minute beat structure):*
-  - **00:00–00:20 (Setup)** — "Three banks. Six agent roles. A planted structuring ring spanning all three. Each bank sees only their slice." Show the terminal UI initial state with all panes cleared. Mention the dataset is synthetic and calibrated to FinCEN typologies.
+  - **00:00–00:20 (Setup)** — "Three banks. Seven agent roles, eleven running instances. A planted structuring ring spanning all three. Each bank sees only their slice." Show the terminal UI initial state with all panes cleared. Mention the dataset is synthetic and calibrated to FinCEN typologies.
   - **00:20–01:00 (Single-bank failure)** — Show Bank Alpha's A1 alert. Show A2 attempting internal investigation. Pause the story: "no cross-bank context; the ring is invisible to Bank Alpha alone." This is the friction the demo addresses.
-  - **01:00–02:30 (Federation moment)** — Resume. A2 declares §314(b) suspicion; LT validates; F1 broadcasts; peer banks respond; F2 detects the ring; F3 flags PEP; F4 drafts SAR. Audit panel updates visibly throughout. Call out the LT verdicts and the ε meter debiting.
+  - **01:00–02:30 (Federation moment)** — Resume. A2 declares §314(b) suspicion; the AML adapter validates and LT logs; F1 broadcasts; peer banks respond; F2 detects the ring; F3 flags PEP; F4 drafts SAR. Audit panel updates visibly throughout. Call out the LT verdicts and the privacy-budget meter debiting.
   - **02:30–03:00 (Close)** — Final SAR draft visible. One-line market context: "Verafin → Nasdaq $2.75B for the contractual-trust version. We built the technical-trust version." End with partner alignment (Gemini + Veea).
 - *Dry-run protocol:*
   - Three full runs in sequence: each timed to <3 minutes wall-clock; each producing the expected SAR draft (typology code, PEP flag, contributor count); each audit stream's event count within ±10% of the expected ~30.
-  - Capture failures: if any run produces an unexpected outcome, log it in `demo_dry_run_log.md` with the diff vs. expected, and decide whether to (a) tune the data layer / DP epsilon / prompts, or (b) accept the variability and document it in the script.
+  - Capture failures: if any run produces an unexpected outcome, log it in `demo_dry_run_log.md` with the diff vs. expected, and decide whether to (a) tune the data layer / DP rho / prompts, or (b) accept the variability and document it in the script.
   - The third successful run becomes the basis for the screencast.
 - *Screencast specs:*
   - 1920×1080 resolution; 30 fps; H.264 mp4 codec; ≤50 MB target.
@@ -1061,9 +1069,9 @@ In rough priority order, the things that can drop without killing the demo:
 2. **P12 (F4 SAR drafter)** → pre-draft a SAR for the demo and present it as agent output (annotate the slide)
 3. **S2 / S3 secondary scenarios in P2 data** → already built; cost nothing to keep. If something downstream breaks because of them, narrow the demo to S1 + S4 (the headline + PEP) only
 4. **P18 terminal UI** → fall back to plain stdout printing of the audit stream
-5. **DP scope on P7** → fall back from real OpenDP composition to hand-rolled Gaussian + simple ε-counter if OpenDP integration eats more time than expected. The primitives layer itself stays; only the DP-rigor knob moves.
+5. **DP scope on P7** → fall back from OpenDP helpers to hand-rolled Gaussian + simple rho-counter if OpenDP integration eats more time than expected. The primitives layer itself stays; only the DP-rigor knob moves.
 
-Do not cut: A1, A2, F1, F2, F3, the **stats-primitives layer (P7)** (the architecture's structural privacy claim depends on it), the AML LT policy pack (P14), the orchestrator (P15), the canonical flow (P16). These are the demo's spine.
+Do not cut: A1, A2, F1, F2, F3, the **stats-primitives layer (P7)** (the architecture's structural privacy claim depends on it), the AML policy adapter plus LT overlay (P14), the orchestrator (P15), the canonical flow (P16). These are the demo's spine.
 
 ---
 

@@ -87,16 +87,24 @@ def build_request(case: PromptCase, model: str) -> ChatCompletionRequest:
                 role="system",
                 content=(
                     "You are a concise P0 smoke-test assistant. Reply briefly. "
-                    "Do not mention private patient data."
+                    "Do not mention private customer data."
                 ),
             ),
             ChatMessage(role="user", content=case.prompt),
         ],
         _lobstertrap={
             "agent_id": "p0-smoke",
-            "declared_intent": "clinical_analytics_smoke_test",
+            "declared_intent": "aml_federation_smoke_test",
         },
     )
+
+
+def infer_required_key_env(model: str) -> str:
+    """Infer the provider key environment variable from the LiteLLM model alias."""
+    normalized = model.lower()
+    if normalized.startswith("openrouter") or "/openrouter/" in normalized:
+        return "OPENROUTER_API_KEY"
+    return "GEMINI_API_KEY"
 
 
 def post_case(client: httpx.Client, url: str, case: PromptCase, model: str) -> ChatCompletionResponse:
@@ -120,16 +128,23 @@ def main(
     model: Annotated[str, typer.Option(help="LiteLLM model alias to call.")] = DEFAULT_MODEL,
     timeout_seconds: Annotated[float, typer.Option(help="HTTP timeout in seconds.")] = 30.0,
     include_benign: Annotated[bool, typer.Option(help="Run benign Gemini pass-through check.")] = True,
+    key_env: Annotated[
+        str | None,
+        typer.Option(help="Provider API-key environment variable. Inferred from model when omitted."),
+    ] = None,
 ) -> None:
     """Exercise benign and blocked prompts through the live P0 proxy chain."""
     load_dotenv(REPO_ROOT / ".env")
 
-    if include_benign and not os.environ.get("GEMINI_API_KEY"):
-        console.print("[yellow]GEMINI_API_KEY is not set. Benign pass-through may fail.[/yellow]")
+    required_key_env = key_env or infer_required_key_env(model)
+    if include_benign and not os.environ.get(required_key_env):
+        console.print(
+            f"[yellow]{required_key_env} is not set. Benign pass-through may fail.[/yellow]"
+        )
 
     cases = ([BENIGN_CASE] if include_benign else []) + list(BLOCKED_CASES)
     failures: list[str] = []
-    table = Table(title="P0 Proxy-Chain Smoke")
+    table = Table(title=f"P0 Proxy-Chain Smoke ({model})")
     table.add_column("case")
     table.add_column("expected")
     table.add_column("verdict")

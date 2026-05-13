@@ -1,7 +1,7 @@
 [project]
 name = "federated-silo-agent"
 version = "0.1.0"
-description = "Federated privacy-preserving clinical analytics platform"
+description = "Federated privacy-preserving cross-bank AML investigation platform"
 requires-python = ">=3.11"
 dependencies = [
     "duckdb>=1.5.2",

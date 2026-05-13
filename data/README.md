@@ -1,103 +1,86 @@
-# `data/` — Bank Silo Datasets (AML pivot, build pending)
+# `data/` Bank Silo Datasets
 
-This folder will contain the three synthetic bank SQLite databases used by the AML multi-agent demo. The data layer is currently **not built** — the project pivoted from clinical federated stats (Synthea-OMOP) to cross-bank AML mid-build, and the new data pipeline begins on Day 1 of the post-pivot build.
+This folder contains the synthetic bank data for the AML multi-agent demo. The active data pipeline builds three bank-local SQLite databases and plants cross-bank money-laundering scenarios that are visible only through federation.
 
-> **Status:** scripts not yet written; databases not yet generated. The clinical-archive subfolder preserves the prior Synthea-OMOP pipeline as historical reference.
+The prior clinical pipeline is preserved under `data/scripts/clinical-archive/` for history. It is not the active build.
 
----
+## What's In This Folder
 
-## What's in this folder
-
-```
+```text
 data/
-├── README.md                        # This file
-├── scripts/
-│   ├── __init__.py
-│   └── clinical-archive/            # Prior Synthea-OMOP pipeline (preserved for history)
-│       ├── download_synthea_omop.py
-│       ├── build_silos.py
-│       ├── feature_engineering.py
-│       ├── apply_scenarios.py
-│       ├── validate.py
-│       └── vocab.py
-├── raw/                             # (will hold synthetic source artifacts if any)
-└── silos/                           # (will hold three bank SQLite databases)
+  README.md
+  silos/
+    bank_alpha.db
+    bank_beta.db
+    bank_gamma.db
+  scripts/
+    __init__.py
+    build_banks.py
+    plant_scenarios.py
+    validate_banks.py
+    clinical-archive/
+      download_synthea_omop.py
+      build_silos.py
+      feature_engineering.py
+      apply_scenarios.py
+      validate.py
+      vocab.py
 ```
 
-The AML scripts coming on Day 1 (per [`../plan.md`](../plan.md) Section 11):
-
-- `data/scripts/build_banks.py` — generate three synthetic banks
-- `data/scripts/plant_ring.py` — embed the 5-entity structuring ring
-- `data/scripts/validate_banks.py` — confirm the ring is detectable centrally on the pooled data and undetectable per bank
-
----
-
-## What the AML data will look like (target shape)
+## Active AML Dataset
 
 Three SQLite databases, one per bank:
 
-```
+```text
 customers          (customer_id, name_hash, dob_year, kyc_risk_tier, account_open_date)
 accounts           (account_id, customer_id, account_type, open_date, status)
 transactions       (transaction_id, account_id, counterparty_account_id_hashed,
                     amount, currency, transaction_type, timestamp, channel)
 suspicious_signals (signal_id, transaction_id, signal_type, severity, computed_at)
+ground_truth_entities (entity_id, customer_id, name_hash, cover_business,
+                       scenario, role, is_pep)
 ```
 
-| Bank | Customers | Transactions (12-month window) |
-|---|---:|---:|
-| Bank Alpha | ~5,000 | ~50,000 |
-| Bank Beta | ~5,000 | ~50,000 |
-| Bank Gamma | ~5,000 | ~50,000 |
-| **Pooled** | **~15,000** | **~150,000** |
+Current canonical build:
 
-Total disk footprint: ~50 MB across three SQLite files.
+| Bank | Customers | Accounts | Transactions | Suspicious signals | Ground-truth rows |
+|---|---:|---:|---:|---:|---:|
+| Bank Alpha | 8,009 | 14,043 | 112,212 | 1,969 | 9 |
+| Bank Beta | 5,009 | 8,375 | 46,743 | 794 | 9 |
+| Bank Gamma | 3,005 | 4,836 | 22,961 | 313 | 5 |
 
-### Planted scenario: 5-entity structuring ring
+## Planted Scenarios
 
-- 5 shell entities, each with accounts at exactly two of the three banks
-- ~200 sub-$10K transfers across the ring over a 90-day window
-- Per-bank velocity stays just below the bank's individual structuring-alert threshold
-- Cross-bank pattern forms a closed cycle through all three banks
-- One entity has a PEP relation (will trigger F3 sanctions agent)
+- **S1 headline structuring ring:** 5 shell entities spanning all three banks. Each entity has accounts at exactly two banks. The ring generates 200 dual-booked sub-CTR transfer rows, counted as 100 debit-credit transfer pairs.
+- **S2 smaller structuring ring:** 3 entities spanning Bank Alpha and Bank Beta only. This tests partial-bank federation.
+- **S3 layering chain:** 4 entities moving funds through Alpha, Beta, Gamma, and back to Alpha.
+- **S4 PEP marker:** one S1 entity has a synthetic politically exposed person relation for the sanctions or PEP screening agent.
 
-The whole point: **federated detection succeeds; single-bank detection fails.**
+The intended product claim is specific: pooled cross-bank analysis can recover the planted network, while any single bank sees only noisy local business activity and cannot identify the complete ring.
 
-### Reproducibility
+## Reproducibility
 
-- Deterministic seed (`SEED=20260512`, same convention as the clinical pipeline)
-- Canonical fingerprint hash baked into `tests/test_data_checksum.py` once the data exists
-- Re-running `build_banks.py` + `plant_ring.py` will produce bit-identical SQLite databases
+- Deterministic seed: `SEED=20260512`
+- Bank-specific RNG seeds are derived through stable SHA-256 hashing.
+- `tests/test_data_checksum.py` stores a content-based fingerprint of the canonical generated databases.
+- The fingerprint hashes row content instead of SQLite bytes, so incidental SQLite page layout differences do not create false failures.
 
----
+## Regenerating The Dataset
 
-## Reconstructing the dataset (after Day 1 build)
+From the repo root:
 
-Once the AML scripts land, the regeneration workflow will be:
-
-```bash
-# 1. Set up Python env (already done if you've run prior pipeline)
+```powershell
 uv sync
-
-# 2. Generate three synthetic bank databases (no external download — purely synthetic)
 uv run python data/scripts/build_banks.py
-
-# 3. Embed the planted structuring ring
-uv run python data/scripts/plant_ring.py
-
-# 4. Verify the ring is centrally detectable AND single-bank invisible
+uv run python data/scripts/plant_scenarios.py
 uv run python data/scripts/validate_banks.py
-
-# 5. Run the checksum test to confirm bit-identical reconstruction
 uv run pytest tests/test_data_checksum.py
 ```
 
-No internet required, no API keys, no external data downloads. Pure local synthetic data generation.
+`build_banks.py` rebuilds the baseline databases. `plant_scenarios.py` inserts shell entities, dual-booked transactions, suspicious signals, and ground-truth labels. `validate_banks.py` confirms schema, planted scenario presence, cross-bank detectability, single-bank invisibility, PEP placement, layering-loop closure, and debit-credit balance closure.
 
----
+## Clinical Pipeline Archive
 
-## Clinical pipeline archive
+The prior clinical pipeline used Synthea-OMOP data and five hospital silos. It is preserved in `data/scripts/clinical-archive/` and documented in `docs/clinical-archive/plan.md`.
 
-The prior clinical pipeline (Synthea-OMOP, CHF cohort across five hospital silos) is preserved in [`data/scripts/clinical-archive/`](data/scripts/clinical-archive/). Each script is functional but won't run end-to-end without the OMOP CDM raw data that we don't preserve in the repo. The pipeline produced five hospital silo SQLite databases with ~50 synthetically-labeled CHF patients each (~251 pooled) over a 1,815-cardiac-patient population. The clinical work is documented in [`docs/clinical-archive/plan.md`](../docs/clinical-archive/plan.md).
-
-To reconstruct the clinical pipeline state, check out git commit `5bf0283` (the last clinical-state commit before the AML pivot).
+Those scripts are historical reference only. They will not run end-to-end from the current active AML dataset without reconstructing the old clinical raw-data inputs from git history.

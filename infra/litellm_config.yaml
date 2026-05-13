@@ -11,12 +11,8 @@ model_list:
 
 # Fallback option if direct LiteLLM-to-Gemini routing blocks during the demo.
 # Prefer the direct Gemini route above for Track 4 and Gemini award clarity.
-# Requires OPENROUTER_API_KEY and updating smoke_proxy.py --model accordingly.
-#
-#  - model_name: openrouter-gemini-narrator
-#    litellm_params:
-#      model: openrouter/google/gemini-2.5-flash
-#      api_key: os.environ/OPENROUTER_API_KEY
+# Use infra/litellm_openrouter_config.yaml with:
+#   scripts\start_litellm.ps1 -OpenRouter
 
 litellm_settings:
   drop_params: true

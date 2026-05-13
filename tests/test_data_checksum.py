@@ -1,18 +1,12 @@
 """Content-based fingerprint checksum of the bank silo datasets.
 
-**Status (post-AML pivot):** the canonical hash here references the prior
-clinical (Synthea-OMOP) build and will not match the new AML dataset.
-The test now skips when the new bank SQLite databases are not yet
-present at ``data/silos/``. Once the AML data pipeline (Day 1 build —
-see plan.md Section 11) produces three bank SQLite databases, the
-``compute_fingerprint`` body should be rewritten to fingerprint the
-bank-specific tables (customers, accounts, transactions, suspicious_signals)
-and the canonical hash regenerated with::
+The canonical hash references the active AML dataset produced by:
 
-    uv run python tests/test_data_checksum.py --update
+    uv run python data/scripts/build_banks.py
+    uv run python data/scripts/plant_scenarios.py
 
-The clinical fingerprint shape (chf_cohort_features + condition_occurrence
-+ person) is preserved in git history at commit 5bf0283.
+The prior clinical fingerprint shape is preserved in git history at
+commit 5bf0283.
 
 What this test does
 -------------------
@@ -35,7 +29,7 @@ When the test fails
    to recompute and overwrite ``EXPECTED_FINGERPRINT_HASH`` below, then
    commit the update with the same PR.
 
-2. **Regression** — the same scripts now produce different output
+2. **Regression**: the same scripts now produce different output
    despite identical inputs. Investigate before updating the hash.
 
 3. **The data hasn't been built yet**. The test skips in that case;
@@ -83,7 +77,7 @@ EXPECTED_FINGERPRINT_HASH = "3a87870c1d58a50a6f0df69bf95e6b92a9cfe38297cba2c849e
 def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
     """Hash the full row-level content of a DataFrame, sorted for determinism.
 
-    Stronger than aggregate sums — catches drift in individual values
+    Stronger than aggregate sums: catches drift in individual values
     (e.g., one transaction's amount changing) that an aggregate hash misses.
     """
     sorted_df = df.sort_values(sort_cols).reset_index(drop=True)
@@ -96,7 +90,7 @@ def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
 def compute_fingerprint() -> dict:
     """Return a JSON-serializable dict capturing the AML dataset state.
 
-    Version 3 — AML schema (post-pivot from clinical). Captures bank-level
+    Version 3: AML schema. Captures bank-level
     row-level hashes of customers + accounts + transactions +
     suspicious_signals + ground_truth_entities plus aggregate counts.
     """
@@ -182,9 +176,9 @@ def test_data_checksum() -> None:
     """The dataset fingerprint matches the canonical expected value."""
     if EXPECTED_FINGERPRINT_HASH is None:
         pytest.skip(
-            "EXPECTED_FINGERPRINT_HASH is None — the AML dataset is not yet "
-            "built. Day 1 of the post-pivot build adds data/scripts/build_banks.py "
-            "and data/scripts/plant_ring.py; once those exist and the SQLite "
+            "EXPECTED_FINGERPRINT_HASH is None. The AML dataset is not yet "
+            "built. Build with data/scripts/build_banks.py "
+            "and data/scripts/plant_scenarios.py; once those exist and the SQLite "
             "databases are produced, regenerate the hash with:\n"
             "    uv run python tests/test_data_checksum.py --update"
         )
@@ -193,7 +187,7 @@ def test_data_checksum() -> None:
         pytest.skip(
             "data/silos/*.db not present. Build first with:\n"
             "    uv run python data/scripts/build_banks.py\n"
-            "    uv run python data/scripts/plant_ring.py"
+            "    uv run python data/scripts/plant_scenarios.py"
         )
 
     fp = compute_fingerprint()
@@ -227,9 +221,8 @@ def _update_expected_hash() -> None:
     if not _databases_present():
         sys.exit(
             "data/silos/*.db not present. Build first with:\n"
-            "    uv run python data/scripts/build_silos.py\n"
-            "    uv run python data/scripts/feature_engineering.py\n"
-            "    uv run python data/scripts/apply_scenarios.py"
+            "    uv run python data/scripts/build_banks.py\n"
+            "    uv run python data/scripts/plant_scenarios.py"
         )
     fp = compute_fingerprint()
     new_hash = fingerprint_hash(fp)

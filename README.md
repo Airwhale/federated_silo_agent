@@ -2,424 +2,266 @@
 
 **Multi-agent cross-bank AML investigation system with privacy-preserving federation.**
 
-Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist agents (graph analyst, sanctions screener, SAR drafter, compliance auditor) compose investigations across the network. **Every cross-bank conversation is policed by Veea Lobster Trap. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data ever crosses bank boundaries.**
+Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist federation agents coordinate cross-bank queries, graph analysis, sanctions or PEP screening, SAR drafting, and compliance audit. **Every cross-bank conversation is policed by Veea Lobster Trap. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data crosses bank boundaries.**
 
-Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11–19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: **Gemini** powers all six agents (Google partner award); **Veea Lobster Trap** is the policy substrate (Veea partner award). Pitch comp: **Verafin → Nasdaq $2.75B (2020)** for the non-private version of exactly this. See [`plan.md`](./plan.md) for the full product design doc.
+Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11 to 19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: **Gemini** powers the LLM agents through Google services; **Veea Lobster Trap** is the policy substrate. Pitch comp: **Verafin to Nasdaq, $2.75B in 2020** for the non-private version of this market.
 
-> **Pivot note (May 12, 2026):** this project pivoted from clinical federated stats (Synthea-OMOP, CHF cohort) to cross-bank AML mid-build, when the AI-hackathon framing made the multi-agent texture of AML the better fit. Clinical work is preserved in [`docs/clinical-archive/`](docs/clinical-archive/) and [`data/scripts/clinical-archive/`](data/scripts/clinical-archive/). Mermaid diagrams below still reflect the prior clinical architecture and will be replaced with AML versions during Day 3 of the new build.
+> **Pivot note:** this project pivoted from clinical federated stats to cross-bank AML on May 12, 2026. The prior clinical work is preserved in [`docs/clinical-archive/`](docs/clinical-archive/) and [`data/scripts/clinical-archive/`](data/scripts/clinical-archive/). The active build is AML.
 
----
+## What This Is
 
-## What this is
+A multi-agent federated AML investigation platform:
 
-A multi-agent federated AML investigation platform. Three layers:
+1. **7 agent roles, 11 running agent instances.** Three A1 transaction-monitoring instances, three A2 investigator instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor.
+2. **Lobster Trap polices inter-agent messages.** The P0 policy already blocks prompt injection, jailbreaks, obfuscation, private-data extraction, data exfiltration, dangerous commands, and sensitive path access. The AML-specific policy pack comes later in P14.
+3. **Privacy enforcement is layered.** Hash-based entity linkage is the primary cross-bank correlation mechanism. Deterministic stats primitives keep raw transaction data inside each bank. Schema validation limits what can leave a silo. Differential privacy applies to aggregate-count and histogram-style primitives where it provides useful protection.
 
-1. **Six agents talking to each other.** Two bank-local agents (transaction monitoring + investigator) at each of three banks, plus four federation-layer agents (cross-bank coordinator, graph analyst, sanctions screener, SAR drafter, compliance auditor) in an assumed TEE. All agents are powered by Gemini.
-2. **Lobster Trap polices every inter-agent message.** §314(b) purpose-declaration enforcement, customer-name redaction on cross-bank queries, role-based authorization (only investigator agents can send cross-bank queries; transaction-monitoring agents can't).
-3. **Privacy enforcement at silo egress — layered.**
-   - **(a) Hash-based cross-bank entity linkage** — banks share stable `name_hash` tokens, never customer identifiers. This is the primary privacy mechanism and what makes the federation possible at all.
-   - **(b) A deterministic stats-primitives layer in each silo** — every cross-bank-bound numeric value traces to a declared primitive call with recorded provenance. The LLM has no syscall to raw transactions on the cross-bank path; data-plane isolation is structural, not policy-based.
-   - **(c) Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp) on aggregate-count primitives**, with per-investigator ε budget tracked via zCDP composition. Applied where it earns its keep (alert counts, flow histograms, F2 input aggregates); not applied to binary presence queries where it would eat the signal.
-   - **(d) Schema validation** at egress — only pre-declared message shapes leave the bank.
+The demo scenario is a planted structuring ring spanning Bank Alpha, Bank Beta, and Bank Gamma. Each entity holds accounts at two banks. Per-bank activity stays noisy and sub-threshold; the pooled cross-bank pattern reveals the ring. One entity has a synthetic PEP relation for the sanctions agent to flag.
 
-**The demo scenario:** a 5-entity structuring ring spanning all three banks (Bank Alpha, Bank Beta, Bank Gamma). Each entity holds accounts at exactly two of the three banks. Sub-$10K transfers cycle through the ring over a 90-day window. Per-bank velocity stays just below each bank's individual alert threshold, so the ring is invisible to any single bank. **Federated agent coordination surfaces the ring in a 3-minute demo.** One entity has a PEP relation that the sanctions agent flags.
+## Why It Matters
 
----
+Section 314(b) of the USA PATRIOT Act allows financial institutions to share information about suspected money laundering and terrorist financing. In practice, banks underuse it because the operational and legal process is slow, inconsistent, and uncomfortable for competing institutions.
 
-## Who it's designed for
+This project does not remove legal review. It lowers the technical friction:
 
-| Persona | What they do | What this gives them |
+- Common query primitives instead of ad hoc requests
+- Hash-based cross-bank linkage instead of customer-name sharing
+- Policy enforcement and audit logs for every cross-bank message
+- Differential privacy budgets for repeated aggregate queries
+- A reproducible multi-agent demo that shows why federation detects what a single bank misses
+
+## Current Build State
+
+| Part | Status | Notes |
 |---|---|---|
-| **AML investigator** at a participating bank | BSA/AML-certified specialist clearing a daily docket of alerts, most of which are false positives | Cross-bank investigation in minutes via §314(b)-authorized agent coordination, without exposing customer identities unless mutual leads warrant escalation |
-| **BSA officer / Chief Compliance Officer** | Accountable for the bank's AML compliance posture; signs SARs; faces personal liability | Audit trail demonstrating every cross-bank disclosure was within §314(b) bounds — regulator-readable record |
-| **AML consortium operator** (e.g., what Verafin built for credit unions) | Runs federation infrastructure on behalf of member banks | Privacy-preserving primitives that make §314(b) actually usable — without raw customer-data exchange |
+| P0 | Done | Repo scaffold, LiteLLM config, Lobster Trap build scripts, P0 smoke tests. Lobster Trap and blocked proxy ingress are verified. OpenRouter fallback pass-through is verified; direct Gemini pass-through still needs a valid Gemini key. |
+| P1 | Done | Clinical work archived and AML plan established. |
+| P2 | Done | Three synthetic bank databases generated with planted AML scenarios. |
+| P3 | Done | Data validation and checksum tests pass. |
+| P4 | Done | Shared Pydantic v2 message schemas for agent traffic. |
+| P5 | Next | Agent runtime base class. |
 
-**Not for** banks wanting full customer-data sharing (out of scope by design — the federation's value is *not* sharing raw data), single-bank AML tooling, or real-time payment authorization. We're investigative, not authorization-time.
+See [`plan.md`](plan.md) for the full build plan.
 
----
+## Data
 
-## Why this matters — honest framing
+The active AML data lives in [`data/silos/`](data/silos/) after generation:
 
-**§314(b) of the USA PATRIOT Act has been law for 25 years.** It explicitly authorizes US financial institutions to share information about suspected money laundering and terrorist financing with each other. Banks barely use it. This system addresses some of the reasons; it does not address all of them. We think it's important to be direct about which is which.
+| Bank | Customers | Accounts | Transactions | Signals | Ground-truth rows |
+|---|---:|---:|---:|---:|---:|
+| Bank Alpha | 8,009 | 14,043 | 112,212 | 1,969 | 9 |
+| Bank Beta | 5,009 | 8,375 | 46,743 | 794 | 9 |
+| Bank Gamma | 3,005 | 4,836 | 22,961 | 313 | 5 |
 
-**Why banks barely use §314(b):**
+The planted scenarios include:
 
-1. **Legal risk aversion.** General counsels treat §314(b) as a last resort because every disclosure carries a small but nonzero risk of customer-side challenge. In practice, §314(b) outreach happens by formal letter, takes weeks, and is reserved for the clearest cases.
-2. **No shared infrastructure.** Each bank would have to build its own outbound and inbound process. The fixed cost dominates the marginal case.
-3. **Competitive trust.** Banks compete. Sharing customer-relevant signal with a peer — even under §314(b) — creates business-side worry ("what if they use this disclosure to poach the customer?").
-4. **No standardized vocabulary.** Each bank has its own alert types, thresholds, and data models. There's no common ontology for cross-bank queries.
+- S1: 5-entity structuring ring spanning all three banks
+- S2: 3-entity structuring ring spanning Alpha and Beta
+- S3: 4-entity layering chain across Alpha, Beta, Gamma, and back to Alpha
+- S4: PEP marker on the S1-D entity
 
-**What this system addresses:** shared infrastructure (2), technical-not-contractual privacy guarantees (3), and a query-primitive ontology (4). It does **not** address (1) — the legal-team friction. We lower the technical cost; the institutional cost remains. A regulator or consortium operator would still need to push through the legal posture.
+Regenerate and validate:
 
-**Pitch comp.** [Verafin → Nasdaq $2.75B (2020)](https://www.nasdaq.com/about/press-room/nasdaq-acquires-verafin) for the contractual-trust variant of this idea. Verafin's privacy model is contractual: banks sign onto Verafin's terms, Verafin operates a multi-tenant aggregator, banks trust Verafin operationally. What we demonstrate is the **technical-trust** variant: cryptographic and DP guarantees instead of contractual ones, smaller competitive-paranoia barrier. Whether technical guarantees are sufficiently more valuable than contractual ones to justify the build cost depends on the buyer:
-
-- **Probably not for credit-union-scale buyers** — they already trust Verafin; the contractual model works for them.
-- **Plausibly yes for top-tier banks** — Citi, JPM, and HSBC have publicly described wanting more cross-institution AML signal but cite competitive sensitivity. Technical guarantees may be what unlocks that.
-- **Plausibly yes for regulator-driven mandates** — if FinCEN ever moves from "we encourage §314(b)" to "we expect §314(b) usage," the privacy-tech gap matters because banks need a defensible "we did it carefully" story for examiner review.
-
-**Realistic claim for this build.** It is a credibility / portfolio piece that demonstrates a working multi-agent architecture on top of real privacy primitives mapped to a real market with a real comp. The architecture is sound; the institutional barriers to deployment are also real. We make the technical problem cheap enough that the institutional problem becomes the binding constraint. That is the honest pitch.
-
----
-
-## Where DP fits
-
-Differential privacy earns its keep here against one specific threat: **a §314(b)-authorized investigator who uses the channel for sustained customer surveillance rather than for a real case.** A per-investigator query quota would bound the *number* of questions; DP bounds the *information* extractable about any single customer across the entire query stream. With a per-(investigator, peer-bank) ε budget tracked via zCDP composition, the channel closes when the budget is exhausted — and "exhausted" is calibrated to a privacy guarantee, not just to a count.
-
-DP applies where it earns its keep, and only there:
-
-| Query shape | DP applied? | Why |
-|---|---|---|
-| `count_entities_by_name_hash` (binary presence) | No | Sensitivity-1 question with magnitude-1 answer — noise eats the signal. Hash-based linkage handles privacy here. |
-| `alert_count_for_entity` (aggregate count) | **Yes** — Gaussian, sensitivity 1 | Bounds multi-query leakage about an entity's activity volume |
-| `flow_histogram` (bucketed distribution) | **Yes** — Gaussian per bucket | Bounds cumulative-flow inference |
-| `counterparty_edge_existence` (binary edge) | No | Same as entity presence |
-| `pattern_aggregate_for_f2` (cross-bank count tuples) | **Yes** — Gaussian | F2 reasons over noised aggregates only |
-
-The audit panel shows ε debiting in real time on DP-applied queries. Non-DP queries still route through the stats-primitives layer for provenance and budget accounting; they just don't add noise. This is what gives the architecture a defensible answer to "but couldn't a determined insider use §314(b) as a surveillance backdoor?" — yes, up to ε worth of bits, then the channel closes.
-
-For the headline demo (detecting the structuring ring), DP is not the protagonist. The protagonist is the cross-bank cycle that no single bank can see. DP runs in the audit panel as the visible budget mechanic; the detection itself comes from graph structure, not from noised statistics. This is a deliberate scoping — overselling DP would be dishonest. Verafin uses no DP at all. Having DP at the right surfaces is a credibility marker against the contractual-trust baseline, not the headline.
-
----
-
-## Project structure
-
+```powershell
+uv run python data/scripts/build_banks.py
+uv run python data/scripts/plant_scenarios.py
+uv run python data/scripts/validate_banks.py
+uv run pytest tests/test_data_checksum.py
 ```
-federated_silo_agent/
-├── frontend/                # Researcher UI (Next.js + Tailwind, or Streamlit fallback)
-│   └── app/
-│       ├── page.tsx         # Chat panel + result renderer
-│       ├── hospitals/       # Per-silo metadata + ε meter
-│       └── audit/           # Live SSE feed of all governance events
-│
-├── backend/
-│   ├── main.py              # FastAPI entrypoint
-│   ├── aggregator/          # The central coordinator (runs in assumed TEE)
-│   │   ├── planner.py       # NL → ComputationPlan (Gemini structured JSON)
-│   │   ├── dispatcher.py    # Parallel + iterative fan-out to silos
-│   │   ├── combine/         # Per-primitive numerical combiners (deterministic)
-│   │   └── narrator.py      # Structured result → English summary
-│   │
-│   ├── silos/               # Per-hospital runtime (one process per silo)
-│   │   ├── runner.py        # Generic silo agent
-│   │   ├── stats/           # Per-primitive sufficient-statistic computers
-│   │   ├── dp.py            # OpenDP Gaussian noise calibration
-│   │   ├── budget.py        # Per-user ε ledger via zCDP/RDP composition
-│   │   ├── schema.py        # Pydantic egress validator
-│   │   └── filter_resolver.py  # Fuzzy NL filter → structured SQL (schema only)
-│   │
-│   ├── audit/
-│   │   ├── tail.py          # Merge Lobster Trap JSONL + DP + schema events
-│   │   ├── differencing.py  # Pattern auditor for differencing-attack sequences
-│   │   └── api.py           # SSE stream to frontend
-│   │
-│   └── data/                    # Runtime data access helpers (future)
-│
-├── shared/
-│   └── plans.py             # Pydantic ComputationPlan + SufficientStats schemas
-│                            # (single source of truth, used by aggregator and silos)
-│
-├── infra/
-│   ├── lobstertrap/
-│   │   ├── base_policy.yaml          # Universal injection + off-scope rules
-│   │   ├── packs/
-│   │   │   └── hipaa_pack.yaml       # HIPAA Safe Harbor identifier rules
-│   │   └── compose-policy.py         # Merge base + pack → effective policy
-│   ├── litellm_config.yaml           # OpenAI-compatible routing to Gemini
-│   └── docker-compose.yml            # litellm + N×lobstertrap + backend
-│
-├── tests/                   # pytest suite (equivalence, DP correctness, defense tests)
-├── docs/
-│   ├── demo_script.md       # Beat-by-beat demo timing
-│   └── demo_screencast.mp4  # Live-demo backup
-│
-├── plan.md                  # Full product design doc + 40-part build plan
-└── README.md                # This file
-```
-
----
 
 ## Architecture
 
-A researcher's question flows through three trust zones, each policed by a different mechanism.
-
 ```mermaid
 flowchart TB
-    subgraph Browser["Researcher's Browser"]
-        Chat["Chat panel"]
-        Hosp["Hospital view"]
-        Aud["Audit panel"]
+    subgraph BA["Bank Alpha"]
+        A1A["A1 monitor"]
+        A2A["A2 investigator"]
+        DBA["SQLite silo"]
+        SPA["Stats primitives"]
+        A1A --> A2A
+        A2A --> SPA
+        SPA --> DBA
     end
 
-    subgraph TEE["Aggregator (assumed in TEE)"]
-        Planner["Planner LLM<br/>(NL → ComputationPlan)"]
-        Disp["Dispatcher"]
-        Comb["Combiner<br/>(deterministic math)"]
-        Narr["Narrator LLM<br/>(result → English)"]
-        LT_A["Lobster Trap<br/>(NL channel policy)"]
+    subgraph BB["Bank Beta"]
+        A1B["A1 monitor"]
+        A2B["A2 investigator"]
+        DBB["SQLite silo"]
+        SPB["Stats primitives"]
+        A1B --> A2B
+        A2B --> SPB
+        SPB --> DBB
     end
 
-    subgraph Silos["Five Hospital Silos (private, isolated) — 363 cardiac patients each, ~50 synthetic CHF"]
-        S1["Riverside General<br/>(academic)"]
-        S2["Lakeside Medical<br/>(regional)"]
-        S3["Summit Community<br/>(community)"]
-        S4["Fairview Regional<br/>(mid-size)"]
-        S5["Coastal Medical Ctr<br/>(suburban)"]
+    subgraph BG["Bank Gamma"]
+        A1G["A1 monitor"]
+        A2G["A2 investigator"]
+        DBG["SQLite silo"]
+        SPG["Stats primitives"]
+        A1G --> A2G
+        A2G --> SPG
+        SPG --> DBG
     end
 
-    Chat -->|NL query| Planner
-    Planner -->|plan| Disp
-    Disp -->|plan| S1
-    Disp -->|plan| S2
-    Disp -->|plan| S3
-    Disp -->|plan| S4
-    Disp -->|plan| S5
-    S1 -->|DP-noised stats| Comb
-    S2 -->|DP-noised stats| Comb
-    S3 -->|DP-noised stats| Comb
-    S4 -->|DP-noised stats| Comb
-    S5 -->|DP-noised stats| Comb
-    Comb --> Narr
-    Narr -->|summary| Chat
-    LT_A -.polices.- Planner
-    LT_A -.polices.- Narr
-    Comb -.audit events.- Aud
+    subgraph FED["Federation layer, assumed TEE"]
+        F1["F1 coordinator"]
+        F2["F2 graph analyst"]
+        F3["F3 sanctions or PEP screener"]
+        F4["F4 SAR drafter"]
+        F5["F5 compliance auditor"]
+        LT["Lobster Trap"]
+        LLM["LiteLLM to Gemini"]
+        LT --> LLM
+        F1 --> F2
+        F1 --> F3
+        F2 --> F4
+        F3 --> F4
+        LT --> F5
+    end
+
+    A2A <--> LT
+    A2B <--> LT
+    A2G <--> LT
+    LT <--> F1
 ```
 
----
+Two paths matter:
 
-## The statistical pipeline
+- **LLM path:** agent to Lobster Trap to LiteLLM to Gemini. This is where natural-language reasoning and structured-output agent calls happen.
+- **Data path:** A2 to stats primitives to local SQLite. This is deterministic and bank-local. The LLM composes responses but does not directly read raw transactions on the cross-bank response path.
 
-A single query's lifecycle. **Privacy is paid once, at silo egress (step 5–7).** Combine, finalize, and narrate are post-processing — free under DP closure.
+## Privacy Model
 
-```mermaid
-flowchart LR
-    Q["NL query"] --> P["1. Plan<br/>(LLM)"]
-    P --> D["2. Dispatch<br/>(parallel<br/>or iterative)"]
-    D --> LC["3. Local<br/>compute<br/>per silo"]
-    LC --> DP["4. DP noise<br/>(calibrated to<br/>sensitivity)"]
-    DP --> SV["5. Schema<br/>validate"]
-    SV --> BG["6. Budget<br/>debit ε"]
-    BG --> EG["7. Egress<br/>(structured JSON)"]
-    EG --> CB["8. Combine<br/>(sum across silos)"]
-    CB --> FN["9. Finalize<br/>(invert, iterate,<br/>compute SEs)"]
-    FN --> NR["10. Narrate<br/>(LLM, policed)"]
-    NR --> R["Result<br/>+ audit trail"]
+| Mechanism | Role |
+|---|---|
+| Hash-based linkage | Lets banks correlate the same shell entity across institutions without exposing names. |
+| Stats primitives | Restrict cross-bank data access to declared query shapes. |
+| Schema validation | Blocks raw rows and undeclared shapes from leaving a bank. |
+| Lobster Trap | Polices prompt injection, unsafe requests, role abuse, private data leakage, and cross-agent natural-language channels. |
+| Differential privacy | Bounds repeated aggregate-query leakage for counts and histograms. |
+| Audit stream | Records cross-bank messages, policy verdicts, primitive provenance, and privacy-budget debits. |
+
+DP is intentionally scoped. It is useful for aggregate counts and flow histograms. It is not the right tool for binary entity-presence queries, where noise would destroy the signal; those rely on hash linkage and audit controls.
+
+## P0 Proxy Chain
+
+P0 proves the governance path:
+
+```text
+agent or smoke script
+  -> Lobster Trap on http://127.0.0.1:8080
+  -> LiteLLM on http://127.0.0.1:4000
+  -> Gemini API
 ```
 
-For iterative methods (logistic, mixed-effects, Poisson), steps 2–7 repeat per Newton/REML iteration with each iteration debiting its own ε increment from the budget ledger.
+Local policy smoke, no Gemini key required:
 
----
-
-## Trust mechanisms (defense in depth)
-
-Three orthogonal mechanisms, each doing what it's best at:
-
-```mermaid
-flowchart TB
-    subgraph NL["NL channels — policed by Lobster Trap"]
-        direction TB
-        AI["Analyst input"] -->|"injection? PHI<br/>extraction? off-scope?"| LT1["block / allow"]
-        NO["Narrator output"] -->|"mentions individuals?<br/>names hospitals? cites<br/>numbers not in result?"| LT2["block / allow"]
-    end
-
-    subgraph NUM["Numerical channel — schema + DP + budget"]
-        direction TB
-        SUM["Silo sufficient stats"] --> SC["Schema validator:<br/>only known shapes pass<br/>(fails closed)"]
-        SC --> NOISE["OpenDP Gaussian noise:<br/>calibrated to L2 sensitivity<br/>from declared clip ranges"]
-        NOISE --> LEDG["Per-user ε ledger:<br/>zCDP/RDP composition<br/>across queries"]
-    end
-
-    subgraph DET["Audit & detection"]
-        direction TB
-        DA["Differencing-pattern auditor:<br/>flags suspect query sequences<br/>(e.g., cohort-of-11 then<br/>cohort-of-10-excluding-X)"]
-        LOG["JSONL audit log:<br/>every plan, every emission,<br/>every block — replayable"]
-    end
+```powershell
+.\scripts\bootstrap_lobstertrap.ps1
+uv run python scripts/smoke_lobstertrap.py
 ```
 
-**Mapping attacks → defenses:**
+Full proxy smoke, Gemini key required:
 
-| Attack | Defended by |
-|---|---|
-| Plain-English request for individual records | Lobster Trap (HIPAA Safe Harbor identifier rules) |
-| Prompt injection ("ignore previous instructions...") | Lobster Trap (injection patterns) |
-| LLM hallucinated numbers in narration | Lobster Trap (narrator egress: only cite structured-result numbers) |
-| Compromised silo agent embeds raw rows | Schema validator (fails closed if shape mismatch) |
-| Trivially-small cohort (n < k) | Schema validator (k-anonymity floor) |
-| Single-query reconstruction / membership inference | DP Gaussian noise calibrated to sensitivity |
-| Differencing attack (n vs n−1 cohort) | Differencing-pattern auditor + DP composition makes residual smaller than noise |
-| Multi-query inference (repeat to average out noise) | Per-user ε budget exhausts; queries refused |
-
----
-
-## A query in detail
-
-Here's what happens when a researcher asks for a federated logistic regression — the demo's hero query:
-
-```mermaid
-sequenceDiagram
-    actor R as Researcher
-    participant A as Aggregator
-    participant LT as Lobster Trap
-    participant S1 as Riverside silo
-    participant S2 as Lakeside silo
-    participant S3 as Summit silo
-    participant AU as Audit panel
-
-    R->>A: "Logistic regression of 30-day<br/>readmission on age, BMI, EF,<br/>prior admits, DM, CKD"
-    A->>LT: Analyst input check
-    LT-->>A: ✓ allow
-    A->>A: Planner LLM → ComputationPlan
-    A->>AU: plan_emitted
-
-    loop Newton iterations (typically 5–7)
-        par parallel dispatch
-            A->>S1: plan + current β_t
-            A->>S2: plan + current β_t
-            A->>S3: plan + current β_t
-        end
-        S1->>S1: compute g, H over filter,<br/>clip covariates, add DP noise,<br/>schema-validate, debit ε
-        S2->>S2: same
-        S3->>S3: same
-        S1-->>A: (g₁, H₁, n₁) + DP params
-        S2-->>A: (g₂, H₂, n₂) + DP params
-        S3-->>A: (g₃, H₃, n₃) + DP params
-        A->>A: G = Σgᵢ, H = ΣHᵢ
-        A->>A: β_{t+1} = β_t − H⁻¹G
-        A->>AU: epsilon_debit × 3 (one per silo)
-    end
-
-    A->>A: Compute SEs from final Hessian
-    A->>A: Narrator LLM (structured → English)
-    A->>LT: Narrator output check
-    LT-->>A: ✓ allow (no PHI, only cited numbers)
-    A-->>R: Coefficient table + CIs + English summary
-    A->>AU: query_complete
+```powershell
+$env:GEMINI_API_KEY = "<your key>"
+.\scripts\start_litellm.ps1
+.\scripts\start_lobstertrap.ps1
+uv run python scripts/smoke_proxy.py
 ```
 
-Total ε consumed for this query: ~6 iterations × per-iteration ε = ~0.3 typically (out of a default 1.0 budget per session). The researcher sees the meter tick down per iteration on the audit panel.
+OpenRouter fallback smoke, OpenRouter key required:
 
----
-
-## Statistical primitives supported
-
-The engine ships with a comprehensive clinical-research toolkit. Every primitive is provably equivalent to centralized computation when DP is off; DP noise is calibrated to the primitive's L2 sensitivity given the plan's declared clip ranges.
-
-### Descriptive
-
-| Primitive | What it produces |
-|---|---|
-| `count` | Cohort size |
-| `mean(x)` | Mean ± SEM |
-| `variance(x)` / `stddev(x)` | Pooled variance and standard deviation |
-| `proportion(num, den)` | Proportion with Wilson + Clopper-Pearson CIs |
-| `quantile(x, q)` | Median, IQR, percentiles, min (`q=0`), max (`q=100`) |
-| `histogram(x, bins)` | Distribution; mode and CDF derivable |
-| `skewness(x)` / `kurtosis(x)` | Normality screening |
-| `incidence_rate(events, person_time)` | Events per person-time with Garwood Poisson CI |
-
-### Comparative
-
-| Primitive | What it produces |
-|---|---|
-| `pearson(x, y)` | Pearson correlation r with CI |
-| `t_test(x ~ group)` | Welch's two-sample t-test |
-| `chi_square(var1, var2)` | χ² / Fisher's exact for contingency tables |
-| `mann_whitney_u(x ~ group)` | Non-parametric two-sample comparison |
-
-### Regression family
-
-| Primitive | What it produces |
-|---|---|
-| `ols(y ~ X)` | Linear regression with coefficient CIs |
-| `logistic(y ~ X)` | Binary classification with predicted probabilities |
-| `poisson(y ~ X)` | Count regression |
-| `negative_binomial(y ~ X)` | Overdispersed count regression |
-| `mixed_effects(y ~ X + (1|hospital))` | Linear mixed model with random hospital intercept |
-| `+ cluster_se` modifier | Sandwich estimator for cluster-robust standard errors |
-
-### Model diagnostics
-
-| Primitive | What it produces |
-|---|---|
-| `auc_roc(model, threshold_bins)` | ROC curve + AUC for binary classifiers |
-
-### Compositional features
-
-- **Multi-step plans** — DAG of primitives where later steps reference earlier results (`"top 3 comorbidities by readmission rate, then logistic within the top one"`).
-- **Fuzzy filter resolution** — silos resolve NL filters like `"diabetic CHF patients over 65 on guideline therapy"` against schema metadata (never against rows) into structured WHERE clauses.
-
-What's not supported, and why:
-- **Cox proportional hazards / Kaplan-Meier survival** — partial likelihood and rank-based statistics don't decompose into clean sufficient statistics across silos.
-- **Decision trees / random forests / GBT** — federated versions are research-heavyweight, out of scope for an 8-day build.
-- **Arbitrary SQL** — silos do not run LLM-generated SQL. The set of primitives is the trust contract between aggregator and silos.
-
----
-
-## Build status
-
-In progress. The plan is decomposed into 40 self-contained build parts (`P0`–`P40`). See [`plan.md`](./plan.md) for the full specification and dependency graph.
-
-| Phase | Parts | Status |
-|---|---|---|
-| Foundation (scaffold, schemas, silo runtime, closed-form stats) | P0–P11 | ☐ |
-| Privacy stack (DP, budget, differencing auditor) | P12–P14 | ☐ |
-| GLM family (OLS, logistic, DP variants) | P15–P19 | ☐ |
-| Frontend (chat, audit, hospitals) | P20–P22 | ☐ |
-| Validation + polish + submission | P23–P27 | ☐ |
-| LLM-side extensions (multi-step, fuzzy filters) | P28–P29 | ☐ |
-| Descriptive primitives | P30, P38, P39, P31, P40 | ☐ |
-| Comparative & inferential primitives | P32, P33, P34, P35, P36, P37 | ☐ |
-
----
-
-## Configuring the API key
-
-The planner and narrator (and the benign smoke-test case) call Gemini through LiteLLM. You need a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) — free tier is generous, no credit card required.
-
-```bash
-# From the repo root
-cp .env.example .env
-# Then edit .env and set GEMINI_API_KEY=<your-key>
+```powershell
+$env:OPENROUTER_API_KEY = "<your key>"
+.\scripts\start_litellm.ps1 -OpenRouter
+.\scripts\start_lobstertrap.ps1
+uv run python scripts/smoke_openrouter.py
 ```
 
-`.env` is gitignored. Three entry points read it:
+OpenRouter can be used as a development fallback through LiteLLM, but the primary hackathon story should stay direct Gemini via Google AI Studio or Gemini API.
 
-| Entry point | How it picks up `.env` |
-|---|---|
-| `uv run python scripts/smoke_proxy.py` | `python-dotenv` loads `.env` automatically |
-| `docker compose up` (from repo root) | Docker Compose auto-loads `.env` for `${GEMINI_API_KEY}` substitution |
-| `scripts/start_litellm.ps1` (native Windows) | Parses `.env` and sets `$env:GEMINI_API_KEY` before launching LiteLLM |
+More detail lives in [`docs/p0_proxy_chain.md`](docs/p0_proxy_chain.md).
 
-If you'd rather set the key in your shell directly: `export GEMINI_API_KEY=...` (bash) or `$env:GEMINI_API_KEY = "..."` (PowerShell) also works for any entry point.
+## Project Structure
 
----
+```text
+federated_silo_agent/
+  data/
+    silos/                         generated bank SQLite databases
+    scripts/
+      build_banks.py               baseline synthetic bank generation
+      plant_scenarios.py           planted AML rings and layering chain
+      validate_banks.py            scenario and data validation
+      clinical-archive/            prior clinical pipeline
+  docs/
+    p0_proxy_chain.md              local P0 runbook
+    clinical-archive/              prior clinical plan
+  infra/
+    litellm_config.yaml            Gemini routing through LiteLLM
+    litellm_openrouter_config.yaml OpenRouter fallback routing through LiteLLM
+    docker-compose.yml             optional LiteLLM plus Lobster Trap stack
+    lobstertrap/
+      base_policy.yaml             current P0 policy
+      Dockerfile                   optional container build
+  scripts/
+    bootstrap_lobstertrap.ps1      clone, test, and build Lobster Trap
+    start_litellm.ps1              native Windows LiteLLM launcher
+    start_lobstertrap.ps1          native Windows Lobster Trap launcher
+    smoke_lobstertrap.py           local policy smoke
+    smoke_proxy.py                 live proxy-chain smoke
+      smoke_openrouter.py            OpenRouter-backed proxy-chain smoke
+      p0_cases.py                    shared P0 prompt cases
+  shared/
+    enums.py                        shared enum values
+    messages.py                     Pydantic v2 message contracts
+  tests/
+    test_data_checksum.py
+    test_messages.py
+    test_p0_cases.py
+  plan.md
+  README.md
+```
 
-## How to use
+## Setup
 
-> **Not yet runnable end-to-end.** P0 (proxy chain) is wired and the LT side is verified; the benign Gemini round-trip requires the API key above. Downstream parts (P1 schemas, P3 silo runtime, etc.) will fill out this section as they land.
->
-> P0 proxy-chain notes live in [`docs/p0_proxy_chain.md`](docs/p0_proxy_chain.md).
->
-> Expected sections, once built:
->
-> - **Prerequisites** — Python 3.11+, Go 1.22+ for Lobster Trap, Node 20+ (or Streamlit-only path), a Gemini API key, and Docker if using the compose path.
-> - **Installation** — `uv sync` for Python deps, `pnpm install` for the frontend, `docker compose up` for LiteLLM + Lobster Trap where Docker is available.
-> - **Generating synthetic hospital data** — `uv run python data/scripts/download_synthea_omop.py`, then `build_silos.py`, `feature_engineering.py`, `apply_scenarios.py`, and `validate.py`.
-> - **Running the demo** — `docker compose up`, navigate to `http://localhost:3000`, sign in as a researcher, ask a question.
-> - **Example queries** — a curated set of NL queries demonstrating each primitive.
-> - **Configuration** — per-silo `epsilon` caps, `k`-anonymity floor, policy pack selection.
-> - **Tests** — `pytest` for the equivalence + DP correctness + defense suites.
+Python:
 
----
+```powershell
+uv sync
+uv run pytest
+```
+
+Gemini:
+
+```powershell
+# Create .env manually or set the variable in your shell.
+$env:GEMINI_API_KEY = "<your key>"
+```
+
+The current shell can also use `OPENROUTER_API_KEY` if the LiteLLM config is switched to the OpenRouter fallback route.
+
+## Verification
+
+Known-good checks:
+
+```powershell
+uv run python data/scripts/validate_banks.py
+uv run pytest
+uv run pytest tests/test_messages.py
+uv run python scripts/smoke_lobstertrap.py
+```
+
+The live benign Gemini proxy check is intentionally separate because it spends provider quota and requires an API key.
 
 ## Acknowledgments
 
-- [**Veea Lobster Trap**](https://github.com/veeainc/lobstertrap) — the open-source policy proxy that makes the LLM-channel governance story possible.
-- [**OpenDP**](https://github.com/opendp/opendp) — Harvard / Microsoft / NSF differential privacy library.
-- [**Synthea**](https://synthetichealth.github.io/synthea/) — MITRE's synthetic patient generator.
-- [**Google Gemini**](https://ai.google.dev/) — the planner and narrator LLM provider for Track 4 and Gemini award alignment.
-- [**LiteLLM**](https://github.com/BerriAI/litellm) — OpenAI-compatible routing from Lobster Trap to Gemini.
+- [Veea Lobster Trap](https://github.com/veeainc/lobstertrap), the policy proxy for LLM-channel governance.
+- [Google Gemini](https://ai.google.dev/), the target LLM provider for the hackathon build.
+- [LiteLLM](https://github.com/BerriAI/litellm), the OpenAI-compatible routing layer.
+- [OpenDP](https://github.com/opendp/opendp), the planned library for differential privacy primitives.
+- [Synthea](https://synthetichealth.github.io/synthea/), used in the archived clinical prototype.
 
 ## License
 
-TBD (likely MIT to match the underlying open-source stack).
+TBD, likely MIT to match the open-source stack.
