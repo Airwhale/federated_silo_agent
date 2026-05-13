@@ -2,7 +2,7 @@
 
 **Multi-agent cross-bank AML investigation system with privacy-preserving federation.**
 
-Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist agents (graph analyst, sanctions screener, SAR drafter, compliance auditor) compose investigations across the network. **Every cross-bank conversation is policed by Veea Lobster Trap. Aggregate transaction patterns are shared under differential privacy. No customer data ever crosses bank boundaries.**
+Three synthetic banks each run a transaction-monitoring agent and an investigator agent. When suspicious activity surfaces at one bank, the investigator agent coordinates with peer-bank investigators through a federation layer in an assumed TEE. Specialist agents (graph analyst, sanctions screener, SAR drafter, compliance auditor) compose investigations across the network. **Every cross-bank conversation is policed by Veea Lobster Trap. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data ever crosses bank boundaries.**
 
 Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11–19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: **Gemini** powers all six agents (Google partner award); **Veea Lobster Trap** is the policy substrate (Veea partner award). Pitch comp: **Verafin → Nasdaq $2.75B (2020)** for the non-private version of exactly this. See [`plan.md`](./plan.md) for the full product design doc.
 
@@ -16,7 +16,11 @@ A multi-agent federated AML investigation platform. Three layers:
 
 1. **Six agents talking to each other.** Two bank-local agents (transaction monitoring + investigator) at each of three banks, plus four federation-layer agents (cross-bank coordinator, graph analyst, sanctions screener, SAR drafter, compliance auditor) in an assumed TEE. All agents are powered by Gemini.
 2. **Lobster Trap polices every inter-agent message.** §314(b) purpose-declaration enforcement, customer-name redaction on cross-bank queries, role-based authorization (only investigator agents can send cross-bank queries; transaction-monitoring agents can't).
-3. **Privacy enforcement at silo egress.** Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp) on aggregate pattern signals. Per-user privacy budget tracked across queries. Schema validation prevents structural leakage of raw transactions.
+3. **Privacy enforcement at silo egress — layered.**
+   - **(a) Hash-based cross-bank entity linkage** — banks share stable `name_hash` tokens, never customer identifiers. This is the primary privacy mechanism and what makes the federation possible at all.
+   - **(b) A deterministic stats-primitives layer in each silo** — every cross-bank-bound numeric value traces to a declared primitive call with recorded provenance. The LLM has no syscall to raw transactions on the cross-bank path; data-plane isolation is structural, not policy-based.
+   - **(c) Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp) on aggregate-count primitives**, with per-investigator ε budget tracked via zCDP composition. Applied where it earns its keep (alert counts, flow histograms, F2 input aggregates); not applied to binary presence queries where it would eat the signal.
+   - **(d) Schema validation** at egress — only pre-declared message shapes leave the bank.
 
 **The demo scenario:** a 5-entity structuring ring spanning all three banks (Bank Alpha, Bank Beta, Bank Gamma). Each entity holds accounts at exactly two of the three banks. Sub-$10K transfers cycle through the ring over a 90-day window. Per-bank velocity stays just below each bank's individual alert threshold, so the ring is invisible to any single bank. **Federated agent coordination surfaces the ring in a 3-minute demo.** One entity has a PEP relation that the sanctions agent flags.
 
@@ -31,6 +35,49 @@ A multi-agent federated AML investigation platform. Three layers:
 | **AML consortium operator** (e.g., what Verafin built for credit unions) | Runs federation infrastructure on behalf of member banks | Privacy-preserving primitives that make §314(b) actually usable — without raw customer-data exchange |
 
 **Not for** banks wanting full customer-data sharing (out of scope by design — the federation's value is *not* sharing raw data), single-bank AML tooling, or real-time payment authorization. We're investigative, not authorization-time.
+
+---
+
+## Why this matters — honest framing
+
+**§314(b) of the USA PATRIOT Act has been law for 25 years.** It explicitly authorizes US financial institutions to share information about suspected money laundering and terrorist financing with each other. Banks barely use it. This system addresses some of the reasons; it does not address all of them. We think it's important to be direct about which is which.
+
+**Why banks barely use §314(b):**
+
+1. **Legal risk aversion.** General counsels treat §314(b) as a last resort because every disclosure carries a small but nonzero risk of customer-side challenge. In practice, §314(b) outreach happens by formal letter, takes weeks, and is reserved for the clearest cases.
+2. **No shared infrastructure.** Each bank would have to build its own outbound and inbound process. The fixed cost dominates the marginal case.
+3. **Competitive trust.** Banks compete. Sharing customer-relevant signal with a peer — even under §314(b) — creates business-side worry ("what if they use this disclosure to poach the customer?").
+4. **No standardized vocabulary.** Each bank has its own alert types, thresholds, and data models. There's no common ontology for cross-bank queries.
+
+**What this system addresses:** shared infrastructure (2), technical-not-contractual privacy guarantees (3), and a query-primitive ontology (4). It does **not** address (1) — the legal-team friction. We lower the technical cost; the institutional cost remains. A regulator or consortium operator would still need to push through the legal posture.
+
+**Pitch comp.** [Verafin → Nasdaq $2.75B (2020)](https://www.nasdaq.com/about/press-room/nasdaq-acquires-verafin) for the contractual-trust variant of this idea. Verafin's privacy model is contractual: banks sign onto Verafin's terms, Verafin operates a multi-tenant aggregator, banks trust Verafin operationally. What we demonstrate is the **technical-trust** variant: cryptographic and DP guarantees instead of contractual ones, smaller competitive-paranoia barrier. Whether technical guarantees are sufficiently more valuable than contractual ones to justify the build cost depends on the buyer:
+
+- **Probably not for credit-union-scale buyers** — they already trust Verafin; the contractual model works for them.
+- **Plausibly yes for top-tier banks** — Citi, JPM, and HSBC have publicly described wanting more cross-institution AML signal but cite competitive sensitivity. Technical guarantees may be what unlocks that.
+- **Plausibly yes for regulator-driven mandates** — if FinCEN ever moves from "we encourage §314(b)" to "we expect §314(b) usage," the privacy-tech gap matters because banks need a defensible "we did it carefully" story for examiner review.
+
+**Realistic claim for this build.** It is a credibility / portfolio piece that demonstrates a working multi-agent architecture on top of real privacy primitives mapped to a real market with a real comp. The architecture is sound; the institutional barriers to deployment are also real. We make the technical problem cheap enough that the institutional problem becomes the binding constraint. That is the honest pitch.
+
+---
+
+## Where DP fits
+
+Differential privacy earns its keep here against one specific threat: **a §314(b)-authorized investigator who uses the channel for sustained customer surveillance rather than for a real case.** A per-investigator query quota would bound the *number* of questions; DP bounds the *information* extractable about any single customer across the entire query stream. With a per-(investigator, peer-bank) ε budget tracked via zCDP composition, the channel closes when the budget is exhausted — and "exhausted" is calibrated to a privacy guarantee, not just to a count.
+
+DP applies where it earns its keep, and only there:
+
+| Query shape | DP applied? | Why |
+|---|---|---|
+| `count_entities_by_name_hash` (binary presence) | No | Sensitivity-1 question with magnitude-1 answer — noise eats the signal. Hash-based linkage handles privacy here. |
+| `alert_count_for_entity` (aggregate count) | **Yes** — Gaussian, sensitivity 1 | Bounds multi-query leakage about an entity's activity volume |
+| `flow_histogram` (bucketed distribution) | **Yes** — Gaussian per bucket | Bounds cumulative-flow inference |
+| `counterparty_edge_existence` (binary edge) | No | Same as entity presence |
+| `pattern_aggregate_for_f2` (cross-bank count tuples) | **Yes** — Gaussian | F2 reasons over noised aggregates only |
+
+The audit panel shows ε debiting in real time on DP-applied queries. Non-DP queries still route through the stats-primitives layer for provenance and budget accounting; they just don't add noise. This is what gives the architecture a defensible answer to "but couldn't a determined insider use §314(b) as a surveillance backdoor?" — yes, up to ε worth of bits, then the channel closes.
+
+For the headline demo (detecting the structuring ring), DP is not the protagonist. The protagonist is the cross-bank cycle that no single bank can see. DP runs in the audit panel as the visible budget mechanic; the detection itself comes from graph structure, not from noised statistics. This is a deliberate scoping — overselling DP would be dishonest. Verafin uses no DP at all. Having DP at the right surfaces is a credibility marker against the contractual-trust baseline, not the headline.
 
 ---
 
