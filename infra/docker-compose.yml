@@ -1,0 +1,31 @@
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+
+  lobstertrap:
+    build:
+      context: ./lobstertrap
+    command:
+      - "serve"
+      - "--policy"
+      - "/app/policy.yaml"
+      - "--listen"
+      - ":8080"
+      - "--backend"
+      - "http://litellm:4000"
+      - "--audit-log"
+      - "/logs/lobstertrap.jsonl"
+    depends_on:
+      - litellm
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./lobstertrap/base_policy.yaml:/app/policy.yaml:ro
+      - ../logs:/logs

@@ -14,6 +14,11 @@ venv/
 .env
 .env.local
 
+# Local tooling and runtime outputs
+.tools/
+logs/
+*.log
+
 # OS
 .DS_Store
 Thumbs.db

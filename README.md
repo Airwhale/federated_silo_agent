@@ -4,7 +4,7 @@
 
 Ask a question in English. The system translates it into a structured computation, dispatches sufficient-statistic computations to each hospital silo, applies calibrated differential privacy at every silo egress, sums the results, and narrates the answer back. **No hospital ever sees another's raw data.** Every query is auditable. Privacy budget is visibly bounded across queries.
 
-Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon) (Veea track), May 11–19, 2026. See [`plan.md`](./plan.md) for the full product design doc and 40-part build plan.
+Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11–19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: use **Gemini** through Google AI Studio / Gemini API for the planner and narrator, and use **Veea Lobster Trap** for visible LLM-channel governance and audit metadata. See [`plan.md`](./plan.md) for the full product design doc and 40-part build plan.
 
 ---
 
@@ -12,7 +12,7 @@ Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab
 
 A federated computation platform for clinical analytics. Three layers, cleanly separated:
 
-1. **Natural-language translation** at the edges. A planner LLM converts the researcher's question into a structured `ComputationPlan`. After the math runs, a narrator LLM converts the numerical result back into English. Both LLM calls are policed by [Veea's Lobster Trap](https://github.com/veeainc/lobstertrap).
+1. **Natural-language translation** at the edges. Gemini converts the researcher's question into a structured `ComputationPlan`. After the math runs, Gemini converts the numerical result back into English. Both LLM calls are policed by [Veea's Lobster Trap](https://github.com/veeainc/lobstertrap).
 2. **Deterministic federated computation** in the middle. Each silo computes only the sufficient statistics required by the plan (`XᵀX`, `Xᵀy`, `n` for OLS; per-iteration gradient + Hessian for logistic; bucket counts for histograms; etc.). The aggregator sums them numerically. No LLM in the math path.
 3. **Privacy enforcement at silo egress.** Calibrated Gaussian noise via [OpenDP](https://github.com/opendp/opendp). Per-user privacy budget tracked across queries with composition combinators. Schema validation prevents structural leakage. Differencing-pattern auditor flags adversarial query sequences.
 
@@ -47,7 +47,7 @@ federated_silo_agent/
 ├── backend/
 │   ├── main.py              # FastAPI entrypoint
 │   ├── aggregator/          # The central coordinator (runs in assumed TEE)
-│   │   ├── planner.py       # NL → ComputationPlan (Anthropic structured output)
+│   │   ├── planner.py       # NL → ComputationPlan (Gemini structured JSON)
 │   │   ├── dispatcher.py    # Parallel + iterative fan-out to silos
 │   │   ├── combine/         # Per-primitive numerical combiners (deterministic)
 │   │   └── narrator.py      # Structured result → English summary
@@ -65,10 +65,7 @@ federated_silo_agent/
 │   │   ├── differencing.py  # Pattern auditor for differencing-attack sequences
 │   │   └── api.py           # SSE stream to frontend
 │   │
-│   └── data/
-│       ├── synthea_runner.py     # Orchestrates Synthea generation
-│       ├── feature_engineering.py # Cohort features (age_at_index, GDMT, etc.)
-│       └── scenarios.py     # Planted demo scenarios (deterministic seed)
+│   └── data/                    # Runtime data access helpers (future)
 │
 ├── shared/
 │   └── plans.py             # Pydantic ComputationPlan + SufficientStats schemas
@@ -80,7 +77,7 @@ federated_silo_agent/
 │   │   ├── packs/
 │   │   │   └── hipaa_pack.yaml       # HIPAA Safe Harbor identifier rules
 │   │   └── compose-policy.py         # Merge base + pack → effective policy
-│   ├── litellm_config.yaml           # Anthropic ↔ OpenAI shape translation
+│   ├── litellm_config.yaml           # OpenAI-compatible routing to Gemini
 │   └── docker-compose.yml            # litellm + N×lobstertrap + backend
 │
 ├── tests/                   # pytest suite (equivalence, DP correctness, defense tests)
@@ -332,11 +329,13 @@ In progress. The plan is decomposed into 40 self-contained build parts (`P0`–`
 
 > **Not yet runnable.** This section will be filled out as build parts P0 (repo scaffold + proxy-chain smoke) and downstream parts land.
 >
+> P0 proxy-chain notes live in [`docs/p0_proxy_chain.md`](docs/p0_proxy_chain.md).
+>
 > Expected sections, once built:
 >
-> - **Prerequisites** — Python 3.11+, Node 20+ (or Streamlit-only path), Docker, Java 17+ (Synthea), an Anthropic API key.
-> - **Installation** — `uv sync` for Python deps, `pnpm install` for the frontend, `docker compose up` for LiteLLM + Lobster Trap.
-> - **Generating synthetic hospital data** — `python -m backend.data.synthea_runner` to produce three populations with planted scenarios.
+> - **Prerequisites** — Python 3.11+, Go 1.22+ for Lobster Trap, Node 20+ (or Streamlit-only path), a Gemini API key, and Docker if using the compose path.
+> - **Installation** — `uv sync` for Python deps, `pnpm install` for the frontend, `docker compose up` for LiteLLM + Lobster Trap where Docker is available.
+> - **Generating synthetic hospital data** — `uv run python data/scripts/download_synthea_omop.py`, then `build_silos.py`, `feature_engineering.py`, `apply_scenarios.py`, and `validate.py`.
 > - **Running the demo** — `docker compose up`, navigate to `http://localhost:3000`, sign in as a researcher, ask a question.
 > - **Example queries** — a curated set of NL queries demonstrating each primitive.
 > - **Configuration** — per-silo `epsilon` caps, `k`-anonymity floor, policy pack selection.
@@ -349,8 +348,8 @@ In progress. The plan is decomposed into 40 self-contained build parts (`P0`–`
 - [**Veea Lobster Trap**](https://github.com/veeainc/lobstertrap) — the open-source policy proxy that makes the LLM-channel governance story possible.
 - [**OpenDP**](https://github.com/opendp/opendp) — Harvard / Microsoft / NSF differential privacy library.
 - [**Synthea**](https://synthetichealth.github.io/synthea/) — MITRE's synthetic patient generator.
-- [**LiteLLM**](https://github.com/BerriAI/litellm) — Anthropic ↔ OpenAI API shape translation.
-- [**Anthropic Claude**](https://www.anthropic.com/) — the planner and narrator LLMs.
+- [**Google Gemini**](https://ai.google.dev/) — the planner and narrator LLM provider for Track 4 and Gemini award alignment.
+- [**LiteLLM**](https://github.com/BerriAI/litellm) — OpenAI-compatible routing from Lobster Trap to Gemini.
 
 ## License
 

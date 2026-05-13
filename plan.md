@@ -35,7 +35,7 @@ The combination is what makes this build interesting *now*.
 
 ### 1.3 Demo opportunity (hackathon-specific)
 
-TechEx Intelligent Enterprise Solutions Hackathon, May 11–19, 2026. Veea track invites SOC2 / **HIPAA** / finance policy packs, multi-agent permission systems, drift monitoring, governance dashboards, enterprise security workflows. The HIPAA-pack naming is a direct fit. $10K prize. Demo on stage at AI & Big Data Expo North America May 19. **The hackathon is a forcing function** to build something demonstrably real in 8 days, not a strategy in itself.
+TechEx Intelligent Enterprise Solutions Hackathon, May 11–19, 2026. The submission should choose **Track 4: Data & Intelligence** as the primary track: the product is an analytics agent for natural-language querying over governed data, with a federated data pipeline and auditable aggregate analytics. The same build should also be competitive for partner awards: **Gemini** powers the planner and narrator through Google AI Studio / Gemini API, while **Veea Lobster Trap** visibly governs the LLM channel with HIPAA-style policy blocks and audit metadata. **The hackathon is a forcing function** to build something demonstrably real in 8 days, not a strategy in itself.
 
 ---
 
@@ -104,7 +104,7 @@ The single-vertical choice trades the "platform breadth" pitch beat for **demo c
 
 1. **Demonstrate end-to-end federated computation** with formal correctness (federated math = centralized math when DP is off, bit-identical within tolerance).
 2. **Demonstrate calibrated differential privacy** with composition tracking that bounds multi-query leakage.
-3. **Demonstrate AI-mediated NL interface** that a clinical researcher could plausibly use without knowing SQL.
+3. **Demonstrate a Gemini-powered NL interface** that a clinical researcher could plausibly use without knowing SQL.
 4. **Demonstrate Lobster Trap as the open policy substrate** for the LLM channels, integrated with structural defenses (schema, DP) for the numerical channels — pitched explicitly as a **HIPAA-compliant federated analytics platform**.
 5. **Win or place at TechEx** by being one of the few entries with substantive math under the hood.
 6. **Produce defensible artifacts** (working demo, README, pitch deck, screencast) for post-hackathon design-partner conversations.
@@ -148,7 +148,7 @@ Three orthogonal mechanisms each doing what they're best at: **Lobster Trap poli
 1. **Privacy-by-default.** No raw rows ever leave a silo. Schema validation enforces this structurally, not by convention.
 2. **Honest about guarantees.** State what each mechanism does and doesn't protect. The threat model is part of the pitch, not a hidden footnote.
 3. **AI at the edges, math in the middle.** The LLM translates between NL and structured representations; it doesn't compute statistics. This bounds the LLM's blast radius and keeps results numerically verifiable.
-4. **Open substrates over proprietary stacks.** Lobster Trap, OpenDP, Synthea, Anthropic SDK, Pydantic, FastAPI — all open or vendor-portable.
+4. **Open and sponsor-aligned substrates over proprietary lock-in.** Gemini API / Google AI Studio, Lobster Trap, LiteLLM, OpenDP, Synthea-OMOP, Pydantic, FastAPI — all open, sponsor-aligned, or vendor-portable at the boundary.
 5. **Composable parts, single responsibility.** Each statistic computer is one file. Each silo is one process. Build is decomposed into ~40 self-contained units.
 6. **Provable equivalence.** Federated math with DP off must be bit-identical to centralized analysis. If that fails, nothing else matters.
 7. **Audit is product.** The audit panel isn't an afterthought; it's the demo's signature visual and the artifact a compliance officer or HIPAA auditor would inspect.
@@ -228,7 +228,7 @@ The blocked-attack beats are not theater — they're load-bearing pitch material
         ║   └─────────────┬───────────────────────────┘    ║
         ║                 ▼                                 ║
         ║   ┌─────────────────────────────────────────┐    ║
-        ║   │  Aggregator LiteLLM  →  Aggregator Lobster Trap │    ║
+        ║   │  Aggregator Lobster Trap  →  Aggregator LiteLLM │    ║
         ║   └─────────────┬───────────────────────────┘    ║
         ╚═════════════════│═════════════════════════════════╝
                           │ ComputationPlan dispatch
@@ -250,7 +250,7 @@ The blocked-attack beats are not theater — they're load-bearing pitch material
    └────────────┘    └────────────┘    └────────────┘
 ```
 
-LLM wire path: `agent → LiteLLM (Anthropic→OAI shape) → Lobster Trap → LiteLLM → Anthropic`. LiteLLM is required because Lobster Trap parses OAI `/v1/chat/completions` JSON, and Anthropic's native `/v1/messages` shape doesn't match.
+LLM wire path: `agent → Lobster Trap → LiteLLM → Gemini API`. Lobster Trap inspects OpenAI-compatible `/v1/chat/completions` traffic; LiteLLM keeps that shape while routing to Gemini. This keeps Gemini as the primary model provider for Track 4 / Gemini award alignment while preserving Veea's governance layer. OpenRouter can serve as an OpenAI-compatible Gemini fallback if direct LiteLLM-to-Gemini routing blocks, but it should not be the primary Google story.
 
 ### 8.2 Statistical pipeline
 
@@ -598,7 +598,7 @@ P14 (differencing)            ▼
 
 Each part is a self-contained "build this thing" unit. When feeding to me, paste the part heading and bullets; I'll have the design context above.
 
-**P0. Repo scaffold + proxy-chain smoke.** Repo skeleton, docker-compose with LiteLLM + one Lobster Trap, end-to-end Anthropic round-trip working through the proxy chain. *Validates the biggest schedule risk before any feature work.* Files: `pyproject.toml`, `infra/docker-compose.yml`, `infra/litellm_config.yaml`, `infra/lobstertrap/base_policy.yaml`, `scripts/smoke_proxy.py`. Acceptance: `python scripts/smoke_proxy.py` returns Claude response visibly traversing Lobster Trap. Depends on: nothing.
+**P0. Repo scaffold + proxy-chain smoke.** Repo skeleton, Go 1.22+ toolchain check for Lobster Trap, LiteLLM configured for Gemini, one Lobster Trap proxy in front of LiteLLM, and an end-to-end Gemini round trip through the proxy chain. *Validates the biggest schedule risk before any feature work.* Files: `pyproject.toml`, `infra/docker-compose.yml`, `infra/litellm_config.yaml`, `infra/lobstertrap/base_policy.yaml`, `scripts/smoke_proxy.py`, `scripts/smoke_lobstertrap.py`. Acceptance: `python scripts/smoke_proxy.py` calls `http://localhost:8080/v1/chat/completions`, receives a Gemini response, and the JSON includes Lobster Trap `_lobstertrap` metadata; a blocked prompt returns a Lobster Trap denial without reaching Gemini. Depends on: nothing.
 
 **P1. Shared schemas.** Pydantic v2 `ComputationPlan` + `SufficientStats` discriminated union (`MeanStats`, `HistogramStats`, `PearsonStats`, `OLSStats`, `LogisticIterStats`, `PoissonIterStats`). Files: `shared/plans.py`, `tests/test_plans.py`. Acceptance: round-trip + rejection tests for each variant. Depends on: nothing.
 
@@ -608,17 +608,17 @@ Each part is a self-contained "build this thing" unit. When feeding to me, paste
 
 **P4. Closed-form stats.** Real `count`, `mean`, `histogram`, `pearson` computers over silo SQLite. Files: `backend/silos/stats/{count,mean,histogram,pearson}.py`, `backend/silos/stats/__init__.py`, `tests/test_silo_stats_closed_form.py`. Acceptance: federated equivalence to centralized within 1e-9. Depends on: P1, P2, P3.
 
-**P5. Aggregator planner.** Anthropic Opus 4.7 with structured-output tool call → `ComputationPlan`. System prompt includes clinical-domain examples (CHF cohort queries, comorbidity filters, etc.). Files: `backend/aggregator/planner.py`, `backend/aggregator/prompts/planner_system.md`, `tests/test_planner.py`. Acceptance: 5 hand-written clinical NL queries → valid plans; off-scope query refused. Depends on: P0, P1.
+**P5. Aggregator planner.** Gemini Pro-class model via the P0 proxy chain, constrained to emit a validated `ComputationPlan` JSON object. System prompt includes clinical-domain examples (CHF cohort queries, comorbidity filters, etc.). Files: `backend/aggregator/planner.py`, `backend/aggregator/prompts/planner_system.md`, `tests/test_planner.py`. Acceptance: 5 hand-written clinical NL queries → valid plans; off-scope query refused. Depends on: P0, P1.
 
-**P6. Aggregator dispatcher.** Parallel HTTP fanout to silos (`httpx.AsyncClient`); iterative dispatch helper for logistic. Files: `backend/aggregator/dispatcher.py`, `tests/test_dispatcher.py`. Acceptance: 3-silo mock fanout in parallel; total latency ~ max-silo not sum. Depends on: P1, P3.
+**P6. Aggregator dispatcher.** Parallel HTTP fanout to silos (`httpx.AsyncClient`); iterative dispatch helper for logistic. Files: `backend/aggregator/dispatcher.py`, `tests/test_dispatcher.py`. Acceptance: 5-silo mock fanout in parallel; total latency ~ max-silo not sum. Depends on: P1, P3.
 
 **P7. Aggregator combiners (closed-form).** Sum sufficient stats, finalize for `count`, `mean`, `histogram`, `pearson`. Files: `backend/aggregator/combine/__init__.py` + per-op modules, `tests/test_combine_closed_form.py`. Acceptance: central-vs-federated equivalence. Depends on: P1, P4.
 
-**P8. Aggregator narrator.** Sonnet call constrained to mention only numbers in the structured input. Clinical-domain prompt examples. Files: `backend/aggregator/narrator.py`, `backend/aggregator/prompts/narrator_system.md`, `tests/test_narrator.py`. Acceptance: produces summary mentioning the headline number; no hospital names or patient identifiers; appropriate clinical caveats (e.g., "not for treatment decisions"). Depends on: P0, P1.
+**P8. Aggregator narrator.** Gemini Flash-class model via the P0 proxy chain, constrained to mention only numbers in the structured input. Clinical-domain prompt examples. Files: `backend/aggregator/narrator.py`, `backend/aggregator/prompts/narrator_system.md`, `tests/test_narrator.py`. Acceptance: produces summary mentioning the headline number; no hospital names or patient identifiers; appropriate clinical caveats (e.g., "not for treatment decisions"). Depends on: P0, P1.
 
 **P9. Lobster Trap config — base + hipaa_pack.** YAML for analyst-input ingress, narrator egress, prompt injection, off-scope, **HIPAA Safe Harbor 18 identifier rules** (names, dates other than year, geographic units smaller than state, phone, email, MRN, account, license, vehicle, device, URL, IP, biometric, photo, "any other unique identifying characteristic"). Files: `infra/lobstertrap/base_policy.yaml`, `infra/lobstertrap/packs/hipaa_pack.yaml`, `infra/lobstertrap/compose-policy.py`, `tests/test_policies.py`. Acceptance: known injection prompts matched; HIPAA Safe Harbor identifier requests denied; legitimate cohort queries pass. Depends on: nothing.
 
-**P10. Backend wire-up — `main.py`.** FastAPI app routing analyst NL through planner → dispatcher → combiner → narrator. Files: `backend/main.py`, `tests/test_e2e_closed_form.py`. Acceptance: end-to-end NL → result + narrative round trip with 3 hospital silos. Depends on: P0–P9.
+**P10. Backend wire-up — `main.py`.** FastAPI app routing analyst NL through planner → dispatcher → combiner → narrator. Files: `backend/main.py`, `tests/test_e2e_closed_form.py`. Acceptance: end-to-end NL → result + narrative round trip with 5 hospital silos. Depends on: P0–P9.
 
 **P11. Audit tail + SSE.** Tail LT JSONL + emit DP/schema/budget events; SSE stream to frontend. Files: `backend/audit/tail.py`, `backend/audit/api.py`, `backend/audit/events.py`, `tests/test_audit_tail.py`. Acceptance: trigger query, observe events on SSE. Depends on: P0, P9, P10.
 
@@ -642,7 +642,7 @@ Each part is a self-contained "build this thing" unit. When feeding to me, paste
 
 **P21. Frontend audit panel + budget meter.** Live SSE tail color-coded; per-hospital ε meters. Files: `frontend/app/audit/page.tsx`, `frontend/components/{AuditEvent,BudgetMeter}.tsx`. Acceptance: OLS query visibly debits ε; logistic Newton iteration shows multiple debits in sequence. **Most demo-critical UI.** Depends on: P11, P13.
 
-**P22. Frontend hospital view.** Per-hospital identity, HIPAA pack status, schema metadata (NOT row data), cohort summary counts above k-floor, LT health. Files: `frontend/app/hospitals/page.tsx`. Acceptance: renders 3 hospital silos with cohort counts. Depends on: P10.
+**P22. Frontend hospital view.** Per-hospital identity, HIPAA pack status, schema metadata (NOT row data), cohort summary counts above k-floor, LT health. Files: `frontend/app/hospitals/page.tsx`. Acceptance: renders 5 hospital silos with cohort counts. Depends on: P10.
 
 **P23. Planted-scenario validation suite.** End-to-end tests that the four planted scenarios (GDMT effect, DM+CKD interaction, hospital LOS variation, rare comorbidity power unlock) are recoverable from the federated path within expected effect sizes and CIs. Files: `tests/test_planted_scenarios.py`, helper script `scripts/verify_scenarios.py`. Acceptance: each scenario passes; if any fails, surface the gap clearly (effect size off, CI too wide, etc.). Depends on: P19, P15, P7.
 
@@ -656,7 +656,7 @@ Each part is a self-contained "build this thing" unit. When feeding to me, paste
 
 **P28. Multi-step plan composition.** Planner emits a DAG of primitive plans instead of a single primitive. Aggregator dispatcher executes in topological order; later steps can reference earlier results via templated parameters. Enables clinical queries like *"top 3 comorbidities by readmission rate, then run a logistic regression within the top-1 cohort."* Files: updates to `shared/plans.py` (`MultiStepPlan`, `PlanStep`, `dependency_refs`), `backend/aggregator/planner.py` (system prompt + structured output for multi-step), `backend/aggregator/dispatcher.py` (DAG executor with context dict), `backend/aggregator/narrator.py` (narrate composite results), `tests/test_multistep_plans.py`. Approach: each step is a fully-specified `ComputationPlan` with its own ε and clip ranges; templated references like `{step_1.top_comorbidity}` resolved at execution time; budget cost = OpenDP composition over all step ε values. Acceptance: top-3-then-regression query returns histogram + logistic result; budget meter visibly debits at each step; central-vs-federated equivalence on each step. Depends on: P5, P6, P7, P10, P13.
 
-**P29. Silo-side fuzzy filter resolution.** Silos can interpret fuzzy filter expressions via a local LLM call against schema metadata (column names, types, ICD-10/SNOMED code enumerations) — never against actual rows. Files: `backend/silos/filter_resolver.py`, updates to `backend/silos/runner.py` (call resolver before stat dispatch when plan has `fuzzy_filter`), updates to silo configs (silo-LLM port + LT port), updates to `infra/lobstertrap/packs/hipaa_pack.yaml` (silo-LLM channel rules forbidding row content), `tests/test_filter_resolver.py`. Approach: plan field `fuzzy_filter: str` (e.g., `"diabetic CHF patients over 65 on guideline therapy"`) is sent through the silo's local LLM (Sonnet) with a system prompt containing only schema metadata + ICD-10/SNOMED/RxNorm reference; LLM returns structured `{column: ..., op: ..., value: ...}` tuples; resolver validates against known column set and code enumerations before applying as SQL. **No privacy budget cost** — no row data is touched. Acceptance: `"diabetic CHF patients over 65 on guideline therapy"` resolves to `condition.icd10 LIKE 'I50%' AND condition.icd10 LIKE 'E1[01]%' AND age_at_index > 65 AND gdmt_adherence = 1`; resolver refuses fuzzy filters referencing non-schema columns; silo-LLM channel rejected by LT if row data appears in prompt. Depends on: P3, P9.
+**P29. Silo-side fuzzy filter resolution.** Silos can interpret fuzzy filter expressions via a local Gemini Flash-class call against schema metadata (column names, types, ICD-10/SNOMED code enumerations) — never against actual rows. Files: `backend/silos/filter_resolver.py`, updates to `backend/silos/runner.py` (call resolver before stat dispatch when plan has `fuzzy_filter`), updates to silo configs (silo-LLM port + LT port), updates to `infra/lobstertrap/packs/hipaa_pack.yaml` (silo-LLM channel rules forbidding row content), `tests/test_filter_resolver.py`. Approach: plan field `fuzzy_filter: str` (e.g., `"diabetic CHF patients over 65 on guideline therapy"`) is sent through the silo's local LLM with a system prompt containing only schema metadata + ICD-10/SNOMED/RxNorm reference; LLM returns structured `{column: ..., op: ..., value: ...}` tuples; resolver validates against known column set and code enumerations before applying as SQL. **No privacy budget cost** — no row data is touched. Acceptance: `"diabetic CHF patients over 65 on guideline therapy"` resolves to `condition.icd10 LIKE 'I50%' AND condition.icd10 LIKE 'E1[01]%' AND age_at_index > 65 AND gdmt_adherence = 1`; resolver refuses fuzzy filters referencing non-schema columns; silo-LLM channel rejected by LT if row data appears in prompt. Depends on: P3, P9.
 
 ### 11.2.1 Additional statistical primitives — ordered easy → hard
 
@@ -764,7 +764,7 @@ If a single area runs hot (e.g., the proxy chain takes 2 days instead of 1), the
 
 > *Purpose: name the things most likely to derail the build, with mitigations decided upfront.*
 
-- **LiteLLM ↔ Lobster Trap shape compatibility** — biggest schedule risk. Validate Day 1 (P0). Fallback: swap Claude for an OAI-native model.
+- **Lobster Trap ↔ LiteLLM ↔ Gemini shape compatibility** — biggest schedule risk. Validate Day 1 (P0). Preferred path: Lobster Trap receives OpenAI-compatible chat completions, forwards to LiteLLM, and LiteLLM routes to Gemini. Fallback: route Gemini through OpenRouter's OpenAI-compatible API. Last-resort demo fallback: call Gemini directly and demo Lobster Trap policy blocks separately, with the caveat that this weakens the Veea award story.
 - **Synthea source-pool quirks** — the prebuilt AWS Synthea-OMOP 1k pool has zero native heart-failure patients and sparse comorbidity overlap. Mitigation: handled — we synthetically inject CHF labels and fall back to seeded sampling for DM/CKD when source data is empty. All documented in `data/README.md` and `data/scripts/feature_engineering.py`.
 - **Source-pool replication** — same 363 cardiac source patients appear in all five silos with per-silo `person_id` offsets. Mitigation: framed honestly on stage as a federated-computation correctness demo (see Section 9.5), not a real multi-site independent-inference demo.
 - **DP-OLS sensitivity calibration** — getting L2 sensitivity right requires bounded covariates. Mitigation: declare clip ranges in `ComputationPlan` (age ∈ [0, 120], BMI ∈ [10, 80], EF ∈ [10, 80], etc.); clip before computing. Document the small bias clipping introduces.
@@ -799,7 +799,7 @@ If a single area runs hot (e.g., the proxy chain takes 2 days instead of 1), the
 
 ### 13.2 Stage demo
 
-- Local laptop, all-localhost, no internet dependency beyond Anthropic API.
+- Local laptop, all-localhost, no internet dependency beyond Gemini API / Google AI Studio.
 - Synthea-generated data pre-loaded (avoid live generation during demo).
 - Backup laptop running the same stack.
 - Pre-recorded screencast as final fallback.
@@ -861,7 +861,7 @@ Same engine extends to:
 - **Frontend stack:** Next.js (visual polish, ~1.5 days more) vs. Streamlit (faster, less polished). Decide Day 1.
 - **Hosting:** localhost (safest) vs. Vercel + Fly.io (live URL strengthens pitch). Decide Day 6.
 - **Disease cohort beyond CHF:** Demo focuses on CHF. Stretch goal: add diabetes cohort for demo flexibility. Decide based on Phase 2 timing.
-- **Anthropic models:** Sonnet for narrator, Opus 4.7 for planner. Revisit if cost or latency becomes an issue.
+- **Gemini model IDs:** Gemini Pro-class for planner, Gemini Flash-class for narrator. Confirm exact API model IDs in P0 and store them in config (`GEMINI_PLANNER_MODEL`, `GEMINI_NARRATOR_MODEL`) so model upgrades do not require code changes.
 - **Solo or paired:** if paired, parallelize frontend (Days 5–7) with backend hardening; if solo, lean toward Streamlit.
 
 *Resolved during data-layer build:*
