@@ -36,6 +36,8 @@ from shared.enums import AgentRole, AuditEventKind, BankId, QueryShape, RouteKin
 from shared.messages import (
     A3_RESPONSE_NONCE_SUFFIX,
     AggregateActivityPayload,
+    CounterpartyLinkagePayload,
+    EntityPresencePayload,
     LocalSiloContributionRequest,
     PrimitiveCallRecord,
     PurposeDeclaration,
@@ -775,10 +777,14 @@ def _needs_sanctions_request(query: Sec314bQuery) -> bool:
 
 
 def _query_entity_hashes(query: Sec314bQuery) -> list[str]:
+    # isinstance over the discriminated-union variants instead of hasattr
+    # duck-typing: a future payload that happens to share a field name would
+    # otherwise be silently caught here, and the field type is also checked
+    # statically rather than via attribute lookup.
     payload = query.query_payload
-    if hasattr(payload, "name_hashes"):
+    if isinstance(payload, (EntityPresencePayload, AggregateActivityPayload)):
         return list(payload.name_hashes)
-    if hasattr(payload, "counterparty_hashes"):
+    if isinstance(payload, CounterpartyLinkagePayload):
         return list(payload.counterparty_hashes)
     return []
 

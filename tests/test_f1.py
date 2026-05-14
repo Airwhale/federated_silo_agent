@@ -33,6 +33,7 @@ from shared.messages import (
     A3_RESPONSE_NONCE_SUFFIX,
     AggregateActivityPayload,
     CounterpartyLinkagePayload,
+    EntityPresencePayload,
     IntResponseValue,
     PrimitiveCallRecord,
     PurposeDeclaration,
@@ -937,6 +938,44 @@ def test_f1_sanctions_side_request_includes_counterparty_hashes(
     assert result.route_plan is not None
     assert result.route_plan.sanctions_request is not None
     assert result.route_plan.sanctions_request.entity_hashes == [HASH_B]
+
+
+def test_f1_sanctions_side_request_supports_entity_presence_payload(
+    fixture: F1Fixture,
+) -> None:
+    # Locks in the isinstance-based payload dispatch in `_query_entity_hashes`:
+    # EntityPresencePayload must surface its `name_hashes` to the F3 side request
+    # the same way AggregateActivityPayload does. Without this, the existing
+    # tests only exercise the AggregateActivity and CounterpartyLinkage branches.
+    query = Sec314bQuery(
+        sender_agent_id="bank_alpha.A2",
+        sender_role=AgentRole.A2,
+        sender_bank_id=BankId.BANK_ALPHA,
+        recipient_agent_id="federation.F1",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        nonce="entity-presence-sanctions-query",
+        requesting_investigator_id="investigator-alpha-1",
+        requesting_bank_id=BankId.BANK_ALPHA,
+        target_bank_ids=[BankId.BANK_BETA],
+        query_shape=QueryShape.ENTITY_PRESENCE,
+        query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
+        purpose_declaration=PurposeDeclaration(
+            typology_code=TypologyCode.SANCTIONS_EVASION,
+            suspicion_rationale="Entity may match an SDN-list hash token.",
+        ),
+        requested_rho_per_primitive=0.0,
+    )
+    signed = sign_message(
+        query,
+        private_key=fixture.a2_key.private_key,
+        signing_key_id=fixture.a2_key.signing_key_id,
+    )
+
+    result = fixture.agent.run(f1_input(signed))
+
+    assert result.route_plan is not None
+    assert result.route_plan.sanctions_request is not None
+    assert result.route_plan.sanctions_request.entity_hashes == [HASH_A]
 
 
 def test_f1_empty_aggregation_is_a_refusal(fixture: F1Fixture) -> None:
