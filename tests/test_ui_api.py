@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi.testclient import TestClient
 
 from backend.ui.server import create_app
-from backend.ui.state import DemoControlService
+from backend.ui.snapshots import SessionCreateRequest
+from backend.ui.state import MAX_ACTIVE_SESSIONS, DemoControlService
 
 
 def client() -> TestClient:
@@ -237,3 +240,31 @@ def test_openapi_schema_is_available() -> None:
     assert "/sessions" in paths
     assert "/sessions/{session_id}/probes" in paths
     assert "/sessions/{session_id}/probes/{probe_id}" not in paths
+
+
+def test_unknown_session_returns_unquoted_detail() -> None:
+    # str(KeyError("msg")) wraps the message in single quotes; the 404
+    # detail must be the bare message so the API reads cleanly.
+    test_client = client()
+
+    response = test_client.get("/sessions/00000000-0000-0000-0000-000000000000")
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail.startswith("unknown session_id: ")
+    assert "'" not in detail
+
+
+def test_session_dict_is_bounded_by_fifo_eviction() -> None:
+    service = DemoControlService()
+    created_ids: list[UUID] = []
+    for _ in range(MAX_ACTIVE_SESSIONS + 5):
+        snapshot = service.create_session(SessionCreateRequest())
+        created_ids.append(snapshot.session_id)
+
+    assert len(service._sessions) == MAX_ACTIVE_SESSIONS
+    # The first 5 sessions should have been evicted; the last MAX should remain.
+    for evicted in created_ids[:5]:
+        assert evicted not in service._sessions
+    for retained in created_ids[-MAX_ACTIVE_SESSIONS:]:
+        assert retained in service._sessions

@@ -139,16 +139,31 @@ class DemoSessionRuntime:
         )
 
 
+MAX_ACTIVE_SESSIONS = 50
+
+
 class DemoControlService:
-    """Session registry plus controlled probe harness for the P9a API."""
+    """Session registry plus controlled probe harness for the P9a API.
+
+    Sessions are held in an in-memory FIFO bounded at ``MAX_ACTIVE_SESSIONS``.
+    When the cap is reached, ``create_session`` evicts the oldest session
+    so a long-running demo or automated probe sweep cannot grow the dict
+    without bound. P15 will replace this with the real orchestrator
+    session store, which owns persistence and TTLs.
+    """
 
     def __init__(self) -> None:
         self._principals = _build_demo_principals()
         self._allowlist = PrincipalAllowlist(_allowlist_entries(self._principals))
+        # Python dicts preserve insertion order since 3.7, which gives us
+        # FIFO eviction for free without pulling in collections.OrderedDict.
         self._sessions: dict[UUID, DemoSessionRuntime] = {}
 
     def create_session(self, request: SessionCreateRequest) -> SessionSnapshot:
         session = DemoSessionRuntime(request)
+        while len(self._sessions) >= MAX_ACTIVE_SESSIONS:
+            oldest_id = next(iter(self._sessions))
+            del self._sessions[oldest_id]
         self._sessions[session.session_id] = session
         return session.to_snapshot(self.component_readiness())
 
