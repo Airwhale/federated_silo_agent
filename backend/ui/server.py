@@ -10,7 +10,12 @@ from backend.ui.state import DemoControlService
 
 
 def create_app(service: DemoControlService | None = None) -> FastAPI:
-    """Create the local demo-control API app."""
+    """Create the local demo-control API app.
+
+    Owns the fallback service construction so ``create_router`` can
+    require an explicit service. Tests pass their own service; the
+    module-level ``app`` builds one on import.
+    """
     app = FastAPI(
         title="Federated Silo Agent Demo Control API",
         version="0.1.0",
@@ -26,7 +31,7 @@ def create_app(service: DemoControlService | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(create_router(service))
+    app.include_router(create_router(service if service is not None else DemoControlService()))
     return app
 
 

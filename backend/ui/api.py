@@ -20,10 +20,17 @@ from backend.ui.snapshots import (
 from backend.ui.state import DemoControlService
 
 
-def create_router(service: DemoControlService | None = None) -> APIRouter:
-    """Build the P9a API router around one session service."""
+def create_router(service: DemoControlService) -> APIRouter:
+    """Build the P9a API router around one session service.
+
+    The service is required so router construction never implicitly
+    spins up state. ``create_app`` in ``server.py`` owns the fallback
+    construction; tests inject their own service. Removing the
+    optional default makes the dependency wiring obvious at every
+    callsite.
+    """
     router = APIRouter()
-    control = service or DemoControlService()
+    control = service
 
     @router.get("/health", response_model=HealthSnapshot)
     def health() -> HealthSnapshot:

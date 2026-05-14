@@ -568,7 +568,15 @@ class DemoControlService:
         approved_hash = message.route_approval.approved_query_body_hash if message.route_approval else None
         computed_hash = approved_body_hash(tampered)
         if approved_hash == computed_hash:
-            raise AssertionError("route mismatch probe did not change approved body hash")
+            # Internal-setup invariant: the probe's tampered body
+            # somehow hashed to the original approved hash, so the
+            # tampering never happened. Using `RuntimeError` rather
+            # than `AssertionError` because the latter is loosely
+            # associated with `assert` statements (which are stripped
+            # by `python -O`); the explicit raise form isn't stripped,
+            # but RuntimeError is the cleaner semantic for a
+            # service-layer code-invariant violation.
+            raise RuntimeError("route mismatch probe did not change approved body hash")
         response = self._beta_a3(session).run(A3TurnInput(request=tampered))
         if response.refusal_reason != "route_violation":
             # A3 accepted a body that no longer matches the signed route
@@ -692,9 +700,11 @@ class DemoControlService:
             private_key=principal.private_key,
             signing_key_id=principal.signing_key_id,
         )
-        routed = Sec314bQuery.model_validate(
-            unsigned.model_copy(update={"route_approval": signed_approval}).model_dump()
-        )
+        # `StrictModel` (Sec314bQuery's base) has `validate_assignment=True`,
+        # so `model_copy(update=...)` re-runs validators on the changed
+        # `route_approval` field. No need for the
+        # `model_validate(model_dump())` round-trip.
+        routed = unsigned.model_copy(update={"route_approval": signed_approval})
         return sign_message(
             routed,
             private_key=principal.private_key,
