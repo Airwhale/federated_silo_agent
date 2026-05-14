@@ -96,6 +96,22 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
         llm: LLMClient | None = None,
         audit: AuditEmitter | None = None,
     ) -> None:
+        """Construct the F1 coordinator.
+
+        Lifecycle contract for the orchestrator (P15):
+
+        - This agent MUST be instantiated once per federation node and reused
+          across all turns. The `replay_cache` and `principal_allowlist`
+          fields are stateful and must be shared between the routing turn
+          (which burns the A2 query's nonce) and any later aggregation turn
+          (which burns each A3 response's nonce). A per-turn agent would
+          construct a fresh `ReplayCache()` and lose replay protection.
+        - `principal_allowlist` is the runtime trust registry; reloading it
+          mid-session would invalidate in-flight signed envelopes.
+        - `private_key` / `signing_key_id` must match an allowlisted F1
+          principal entry; both are signed onto every routed request and
+          aggregate response.
+        """
         self.agent_id = FEDERATION_AGENT_ID
         self.system_prompt = ""
         self.principal_allowlist = principal_allowlist
@@ -941,8 +957,14 @@ def _local_request_as_query(request: LocalSiloContributionRequest) -> Sec314bQue
         requesting_investigator_id=request.requesting_investigator_id,
         requesting_bank_id=request.requesting_bank_id,
         # Iterate the BankId enum rather than a hardcoded peer list so a future
-        # bank addition is picked up automatically; FEDERATION is excluded
-        # because it is not a peer bank, only the federation runtime.
+        # peer-bank addition is picked up automatically; FEDERATION is excluded
+        # because it is the federation runtime, not a peer bank. Note: if a
+        # future BankId variant ever represents a non-peer role (e.g. a
+        # regulator or auditor), an explicit `is_peer_bank` predicate should
+        # be added here. Today this carrier is only used by the
+        # local-contribution retry path, which routes by
+        # `responding_bank_id == requesting_bank_id`, so the synthesized
+        # `target_bank_ids` is never actually dispatched to peers.
         target_bank_ids=[
             bank_id
             for bank_id in BankId
