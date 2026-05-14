@@ -174,6 +174,7 @@ Honest note on what DP doesn't do: it doesn't protect entity-presence binary que
 | Bank investigator console | A1 alerts, A2 reasoning, cross-bank query status, manual "ask A2" action | Primary operational surface |
 | Federation timeline | Live agent-to-agent conversation with LT verdicts overlaid, plus step/run controls | The multi-agent demo's signature visual |
 | Silo inspector | Per-bank A3 inbox, route approvals, P7 primitive calls, privacy budget, and returned fields | Shows that each silo owns its own data-plane enforcement |
+| System state dashboard | Signing keys, envelope verification, route-approval state, replay cache, DP ledger, RNG/noise metadata, LT/LiteLLM health, audit-chain head | Makes the hidden trust machinery inspectable |
 | Policy and attack lab | Prompt injection, customer-name leakage, MITM body tamper, replay, route mismatch, and budget-exhaustion attempts | Lets judges probe the security claims directly |
 | Audit panel | Every LT decision, every DP debit, every schema violation, every route approval, and hash-chain status | The compliance dashboard |
 | SAR draft viewer | Structured form + attributed contributions | Regulatory artifact |
@@ -185,10 +186,11 @@ Minimum judge controls:
 1. Start or reset a canonical scenario.
 2. Step one mechanism at a time, or run until the next terminal artifact.
 3. Open any agent turn and inspect prompt metadata, typed input, typed output, constraint results, and audit events.
-4. Open any trust-domain node and inspect local LT/LiteLLM configuration, inboxes, route approvals, replay-cache status, and audit forwarding.
-5. Open any bank silo and inspect A3 decisions, P7 primitive invocations, args hashes, rho debit, remaining budget, and refusal paths.
-6. Launch safe negative probes: prompt injection, raw-name leakage, hallucinated hashes, MITM body tamper, replay, route mismatch, unsupported query shape, and budget exhaustion.
-7. Export the run timeline, final SAR draft, and audit JSONL for judging or screencast backup.
+4. Open any trust-domain node and inspect local LT/LiteLLM configuration, inboxes, route approvals, signing keys, replay-cache status, and audit forwarding.
+5. Open any bank silo and inspect A3 decisions, P7 primitive invocations, args hashes, rho debit, remaining budget, DP noise metadata, and refusal paths.
+6. Open system-state panels for signing/envelope verification, route approvals, replay protection, DP ledger composition, LT verdict state, LiteLLM/provider health, and audit-chain integrity.
+7. Launch safe negative probes: prompt injection, raw-name leakage, hallucinated hashes, MITM body tamper, replay, route mismatch, unsupported query shape, and budget exhaustion.
+8. Export the run timeline, final SAR draft, and audit JSONL for judging or screencast backup.
 
 ### 7.3 Demo experience design
 
@@ -1033,7 +1035,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Judge-safe control API:*
   - `start_scenario(scenario_id, mode)` creates a `ScenarioRun` and returns a `run_id`. Modes: `stub`, `live`, and `live_with_stub_fallback`.
   - `step(run_id)`, `run_until_next_artifact(run_id)`, and `run_until_idle(run_id)` drive the same orchestrator transitions used by tests and scripts.
-  - `inspect_component(run_id, component_id)` returns typed snapshots for A1, A2, A3, F1-F5, P7, LT, LiteLLM, policy adapter, inboxes, replay cache, route approvals, and audit channel.
+  - `inspect_component(run_id, component_id)` returns typed snapshots for A1, A2, A3, F1-F5, P7, LT, LiteLLM, policy adapter, inboxes, replay cache, route approvals, signing/envelope state, DP ledger state, provider health, and audit channel.
   - `inspect_message(run_id, message_id)` returns envelope metadata, body hash, signature status, LT verdicts, schema validation result, and downstream provenance.
   - `inject_probe(run_id, probe_kind, target_component, payload_patch)` launches a safe negative test such as prompt injection, customer-name leakage, hallucinated hash, MITM body tamper, replay, route mismatch, unsupported query shape, or budget exhaustion.
   - Probe requests are never privileged. They enter through the same public boundary the real attacker would use, and success means a deterministic refusal or audited policy block.
@@ -1110,7 +1112,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P18 - Interactive judge console**
 
-- *Goal:* An interactive web console that lets judges drive, inspect, and safely attack every part of the mechanism. The console shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid, but it also exposes component inspectors and probe controls for A1, A2, A3, F1-F5, P7, policy adapters, LT, LiteLLM, inboxes, route approvals, replay cache, audit chain, and final SAR artifacts.
+- *Goal:* An interactive web console that lets judges drive, inspect, and safely attack every part of the mechanism. The console shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid, but it also exposes component inspectors and probe controls for A1, A2, A3, F1-F5, P7, policy adapters, LT, LiteLLM, inboxes, route approvals, replay cache, signing/envelope state, DP ledger state, audit chain, and final SAR artifacts.
 - *Files:* `backend/ui/__init__.py`, `backend/ui/server.py`, `backend/ui/api.py`, `backend/ui/static/` or `frontend/` (web app), `backend/ui/components.py` (shared view models: agent badge, message card, privacy-budget meter with epsilon display, policy verdict panel), `backend/demo/canonical_flow.py` (extended to support `--ui` flag).
 - *Primary view layout (browser, 1080p target):*
   ```
@@ -1140,6 +1142,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Interaction model:*
   - **Run controls:** start scenario, reset, step once, run until next artifact, run until idle, switch stub/live/live-with-stub-fallback.
   - **Component inspectors:** A1 local monitoring, A2 investigation state, F1 routing, each A3 silo response, P7 primitive calls, F2 graph inference, F3 sanctions result, F4 SAR draft, F5 audit findings.
+  - **System state panels:** signing key id, envelope body hash, signature verification result, nonce freshness, replay-cache hit/miss, route-approval binding, DP ledger spent/remaining rho, per-primitive sigma/sensitivity, audit-chain head, LT rule verdicts, and LiteLLM/provider health.
   - **Security probes:** prompt injection, customer-name leakage, hallucinated hash, MITM body tamper, replayed nonce, mismatched route approval, unsupported query shape, and budget exhaustion.
   - **Exports:** audit JSONL, timeline JSON, final SAR draft, and a compact run summary.
 - *Out of scope for this part:* no production authentication, no multi-user collaboration, no arbitrary SQL explorer, no UI path that grants the judge privileges unavailable to the real actors. Raw bank transaction inspection is allowed only inside the owning bank silo inspector and is clearly labeled as synthetic demo data.
@@ -1147,6 +1150,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Running `uv run python -m backend.ui.server --live` starts the judge console and streams the canonical flow in real time; the canonical flow's ~30 events all surface in the correct panes within their actual timestamps.
   - Privacy-budget meter visibly debits per DP-applied query and stops debiting on non-DP primitives.
   - Every inspector is backed by a typed snapshot from P15, not by ad hoc scraping of logs.
+  - Signing, route-approval, replay, DP-ledger, LT, LiteLLM, and audit-chain state are visible as first-class panels, not buried in raw logs.
   - Each security probe reaches the expected block/refusal layer and creates an audit event visible in the audit panel.
   - Layout readable at 1920×1080 resolution (the screen-recording target).
 - *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one attack lab tab first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.

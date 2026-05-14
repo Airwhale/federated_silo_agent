@@ -367,6 +367,18 @@ class A2InvestigatorAgent(Agent[A2TurnInput, A2TurnResult]):
         return any(count >= CORRELATED_ALERT_THRESHOLD for count in counts.values())
 
     def _validate_peer_response_lineage(self, payload: A2PeerResponseInput) -> None:
+        """Verify the full alert / query / response lineage before synthesis.
+
+        Thirteen checks total. The `federation.F1` bindings on the response
+        sender (sender_agent_id / sender_role / sender_bank_id) are
+        deliberately hardcoded as a STRUCTURAL security property of the
+        federation, not a runtime config knob: A2 must only synthesize on
+        responses that came through F1's audit-and-validate gate. Making
+        the response sender configurable would let a deployment bypass F1
+        — exactly the misroute the lineage check exists to catch. Future
+        federation topologies that add new coordinator roles MUST extend
+        this method explicitly rather than parameterize the expected sender.
+        """
         if payload.alert.recipient_agent_id != self.agent_id:
             raise InvalidAgentInput("peer response alert must be addressed to this A2")
         if payload.alert.sender_bank_id != self.bank_id:

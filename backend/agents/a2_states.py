@@ -160,21 +160,37 @@ class QueryDraft(A2Model):
                 )
             return self
 
-        if not self.name_hashes:
-            raise ValueError(
-                f"{self.query_shape.value} requires non-empty name_hashes "
-                "(got 0 entries); populate name_hashes from the alert's "
-                "evidence entity_hashes"
-            )
-        if self.counterparty_hashes:
-            preview = list(self.counterparty_hashes)[:3]
-            raise ValueError(
-                f"{self.query_shape.value} must not include counterparty_hashes "
-                f"(got {len(self.counterparty_hashes)} entries, e.g. {preview}); "
-                "use query_shape=counterparty_linkage if you need to query by "
-                "counterparty tokens, otherwise remove them"
-            )
-        return self
+        if self.query_shape in (
+            QueryShape.ENTITY_PRESENCE,
+            QueryShape.AGGREGATE_ACTIVITY,
+        ):
+            if not self.name_hashes:
+                raise ValueError(
+                    f"{self.query_shape.value} requires non-empty name_hashes "
+                    "(got 0 entries); populate name_hashes from the alert's "
+                    "evidence entity_hashes"
+                )
+            if self.counterparty_hashes:
+                preview = list(self.counterparty_hashes)[:3]
+                raise ValueError(
+                    f"{self.query_shape.value} must not include counterparty_hashes "
+                    f"(got {len(self.counterparty_hashes)} entries, e.g. {preview}); "
+                    "use query_shape=counterparty_linkage if you need to query by "
+                    "counterparty tokens, otherwise remove them"
+                )
+            return self
+
+        # Exhaustive guard. If a new QueryShape is added to shared.enums
+        # without extending this validator, fail loud rather than silently
+        # accepting (or implicitly applying the name_hashes branch). The
+        # isinstance-style dispatch above is the source of truth for which
+        # hash field each shape expects; new shapes MUST declare their
+        # expectation here explicitly.
+        raise ValueError(
+            f"unhandled query_shape {self.query_shape.value!r}; extend "
+            "QueryDraft.hash_fields_must_match_shape with an explicit branch "
+            "declaring which hash field this shape requires"
+        )
 
 
 class SynthesisDecision(A2Model):
