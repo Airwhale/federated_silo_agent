@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -47,6 +47,7 @@ from shared.messages import (
     SanctionsCheckRequest,
     Sec314bQuery,
     Sec314bResponse,
+    utc_now,
 )
 
 
@@ -520,7 +521,6 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
     ) -> Sec314bQuery:
         created_at, expires_at = _message_times(query)
         unsigned = Sec314bQuery(
-            message_id=uuid4(),
             sender_agent_id=self.agent_id,
             sender_role=AgentRole.F1,
             sender_bank_id=BankId.FEDERATION,
@@ -610,13 +610,14 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
             private_key=self.private_key,
             signing_key_id=self.signing_key_id,
         )
-        routed = _validated_model_copy(request, update={"route_approval": signed_route})
-        signed = sign_message(
+        # sign_message validates internally via _validated_copy; we just need
+        # the route_approval attached to the request before signing.
+        routed = request.model_copy(update={"route_approval": signed_route})
+        return sign_message(
             routed,
             private_key=self.private_key,
             signing_key_id=self.signing_key_id,
         )
-        return type(request).model_validate(signed.model_dump())
 
     def _route_approval(
         self,
@@ -658,12 +659,11 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
                 "F1-B3 sanctions-related purpose; screen only supplied hash tokens."
             ),
         )
-        signed = sign_message(
+        return sign_message(
             request,
             private_key=self.private_key,
             signing_key_id=self.signing_key_id,
         )
-        return SanctionsCheckRequest.model_validate(signed.model_dump())
 
     def _build_aggregate_response(
         self,
@@ -715,7 +715,7 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
             detail=f"F1 aggregated {len(verified_responses)} successful A3 response(s)",
             model_name="deterministic_aggregate",
         )
-        return Sec314bResponse.model_validate(signed.model_dump())
+        return signed
 
     def _query_refusal(
         self,
@@ -753,7 +753,6 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
                 private_key=self.private_key,
                 signing_key_id=self.signing_key_id,
             )
-            response = Sec314bResponse.model_validate(response.model_dump())
         return F1TurnResult(action="refusal", response=response)
 
     @staticmethod
@@ -933,10 +932,13 @@ def _local_request_as_query(request: LocalSiloContributionRequest) -> Sec314bQue
         query_id=request.source_query_id,
         requesting_investigator_id=request.requesting_investigator_id,
         requesting_bank_id=request.requesting_bank_id,
+        # Iterate the BankId enum rather than a hardcoded peer list so a future
+        # bank addition is picked up automatically; FEDERATION is excluded
+        # because it is not a peer bank, only the federation runtime.
         target_bank_ids=[
             bank_id
-            for bank_id in (BankId.BANK_ALPHA, BankId.BANK_BETA, BankId.BANK_GAMMA)
-            if bank_id != request.requesting_bank_id
+            for bank_id in BankId
+            if bank_id != BankId.FEDERATION and bank_id != request.requesting_bank_id
         ],
         query_shape=request.query_shape,
         query_payload=request.query_payload,
@@ -1038,8 +1040,3 @@ def _retry_route_plan(
         local_request=local_requests[0] if local_requests else None,
         negotiation_notes=notes,
     )
-
-
-def utc_now() -> datetime:
-    """Return a timezone-aware UTC timestamp."""
-    return datetime.now(UTC)
