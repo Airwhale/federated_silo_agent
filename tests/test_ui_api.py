@@ -281,6 +281,19 @@ def test_component_readiness_is_memoized_per_service() -> None:
     assert first is second
 
 
+def test_service_rejects_non_positive_max_active_sessions(monkeypatch) -> None:
+    # Defensive: if a future config path lowers MAX_ACTIVE_SESSIONS to 0
+    # or below, the FIFO eviction loop would StopIteration-or-spin.
+    # Fail loud at service construction instead.
+    import pytest
+
+    from backend.ui import state as state_module
+
+    monkeypatch.setattr(state_module, "MAX_ACTIVE_SESSIONS", 0)
+    with pytest.raises(ValueError, match="must be >= 1"):
+        DemoControlService()
+
+
 def test_session_dict_is_bounded_by_fifo_eviction() -> None:
     service = DemoControlService()
     created_ids: list[UUID] = []

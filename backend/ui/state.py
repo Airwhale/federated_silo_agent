@@ -193,24 +193,38 @@ class DemoControlService:
     """
 
     def __init__(self) -> None:
+        if MAX_ACTIVE_SESSIONS < 1:
+            # Defensive: MAX_ACTIVE_SESSIONS is a module constant today,
+            # but if a future config path lowers it to 0 or below, the
+            # FIFO eviction loop in `create_session` would either spin
+            # forever or hit `StopIteration` on `next(iter({}))`. Fail
+            # loud at service construction instead.
+            raise ValueError(
+                f"MAX_ACTIVE_SESSIONS must be >= 1, got {MAX_ACTIVE_SESSIONS}"
+            )
         self._principals = _build_demo_principals()
         self._allowlist = PrincipalAllowlist(_allowlist_entries(self._principals))
         # Python dicts preserve insertion order since 3.7, which gives us
         # FIFO eviction for free without pulling in collections.OrderedDict.
         self._sessions: dict[UUID, DemoSessionRuntime] = {}
         self._sessions_lock = threading.Lock()
-        # component_readiness() does 3 filesystem stat calls (per-bank DB
-        # presence) and rebuilds a 19-entry list. File presence does not
-        # change during a demo run, so cache the result per service
-        # instance — every `component_snapshot` and session-snapshot call
-        # would otherwise re-stat the same paths. Tests construct fresh
-        # services per case, so the cache cannot stale across test runs.
-        self._component_readiness_cache: list[ComponentReadinessSnapshot] | None = None
+        # Pre-populate component readiness at construction time so the
+        # first request does not pay the filesystem I/O cost, and two
+        # threadpool workers cannot race the lazy-init (both seeing the
+        # cache as None and re-running `_database_detail()`). File
+        # presence does not change during a demo run, so the snapshot
+        # taken here is the right one for the service's whole lifetime.
+        self._component_readiness_cache: list[ComponentReadinessSnapshot] = (
+            self._build_component_readiness()
+        )
 
     def create_session(self, request: SessionCreateRequest) -> SessionSnapshot:
         session = DemoSessionRuntime(request)
         with self._sessions_lock:
-            while len(self._sessions) >= MAX_ACTIVE_SESSIONS:
+            # Belt-and-braces with the __init__ validation: even if the
+            # cap were somehow zeroed, `and self._sessions` keeps the
+            # loop from `StopIteration`-ing on an empty dict.
+            while len(self._sessions) >= MAX_ACTIVE_SESSIONS and self._sessions:
                 oldest_id = next(iter(self._sessions))
                 del self._sessions[oldest_id]
             self._sessions[session.session_id] = session
@@ -462,10 +476,11 @@ class DemoControlService:
         )
 
     def component_readiness(self) -> list[ComponentReadinessSnapshot]:
-        if self._component_readiness_cache is not None:
-            return self._component_readiness_cache
+        return self._component_readiness_cache
+
+    def _build_component_readiness(self) -> list[ComponentReadinessSnapshot]:
         db_status = _database_detail()
-        self._component_readiness_cache = [
+        return [
             _component(ComponentId.A1, "A1 local monitor", SnapshotStatus.LIVE, "P6 complete."),
             _component(ComponentId.A2, "A2 investigator", SnapshotStatus.LIVE, "P8 complete."),
             _component(ComponentId.F1, "F1 coordinator", SnapshotStatus.LIVE, "P9 complete."),
@@ -486,7 +501,6 @@ class DemoControlService:
             _component(ComponentId.DP_LEDGER, "DP ledger", SnapshotStatus.LIVE, "P7 rho ledger is live."),
             _component(ComponentId.AUDIT_CHAIN, "Audit chain", SnapshotStatus.NOT_BUILT, "Hash-chain persistence lands P13/P15.", "P13/P15"),
         ]
-        return self._component_readiness_cache
 
     def _unsigned_message_probe(
         self,
