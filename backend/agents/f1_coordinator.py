@@ -239,7 +239,15 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
                 verified_responses.append(response)
                 continue
 
-            assert routed_request is not None
+            # `_validate_a3_response` already raises when routed_request is None,
+            # so this branch is structurally unreachable with None. Re-check
+            # explicitly rather than via `assert` so the guard survives
+            # `python -O` (which strips assertions).
+            if routed_request is None:
+                raise InvalidAgentInput(
+                    "internal invariant violated: refusal response reached "
+                    "_handle_silo_refusal without a routed_request"
+                )
             note, retry_request = self._handle_silo_refusal(
                 response,
                 routed_request=routed_request,
@@ -1035,6 +1043,16 @@ def _retry_route_plan(
     local_requests = [
         request for request in retry_requests if isinstance(request, LocalSiloContributionRequest)
     ]
+    # F1RoutePlan.local_request is a single optional field because the demo's
+    # architecture only routes one LocalSiloContributionRequest per query (the
+    # requesting bank's own A3). Fail loud rather than silently drop additional
+    # local requests if a future call ever violates that invariant.
+    if len(local_requests) > 1:
+        raise InvalidAgentInput(
+            "internal invariant violated: retry plan contains "
+            f"{len(local_requests)} LocalSiloContributionRequest entries; "
+            "F1RoutePlan.local_request only carries one"
+        )
     return F1RoutePlan(
         peer_requests=peer_requests,
         local_request=local_requests[0] if local_requests else None,
