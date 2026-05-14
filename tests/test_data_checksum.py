@@ -11,9 +11,9 @@ commit 5bf0283.
 What this test does
 -------------------
 Computes a deterministic, content-based fingerprint of the data state
-across all five silos (cohort sizes, per-silo aggregate sums for each
-key feature, the pooled scenario-effect summary) and compares the
-SHA-256 of that fingerprint to a known-good value.
+across all three bank silos (row-level table hashes plus aggregate
+counts) and compares the SHA-256 of that fingerprint to a known-good
+value.
 
 If the data pipeline produces bit-identical output given the fixed seed
 (``20260512``), this test passes. If anything drifts, it fails with a
@@ -70,8 +70,13 @@ SILO_IDS = ["bank_alpha", "bank_beta", "bank_gamma"]
 # The known-good fingerprint hash, captured against the canonical build.
 # Update with ``python tests/test_data_checksum.py --update`` when you
 # intentionally change the data pipeline.
+# Keep ``None`` supported for first-time dataset bring-up, but committed
+# demo builds should pin a concrete hash.
 # ---------------------------------------------------------------------------
 EXPECTED_FINGERPRINT_HASH = "3a87870c1d58a50a6f0df69bf95e6b92a9cfe38297cba2c849e9297a4a13b45e"
+EXPECTED_HASH_ASSIGNMENT_RE = re.compile(
+    r'EXPECTED_FINGERPRINT_HASH = (?:None|"[a-f0-9]{64}")'
+)
 
 
 def _table_row_hash(df: pd.DataFrame, sort_cols: list[str]) -> str:
@@ -212,6 +217,18 @@ def test_data_checksum() -> None:
         pytest.fail(msg)
 
 
+def test_expected_hash_rewrite_accepts_hash_or_none_assignment() -> None:
+    new_hash = "a" * 64
+    old_hash = "b" * 64
+    for source in (
+        f'EXPECTED_FINGERPRINT_HASH = "{old_hash}"',
+        'EXPECTED_FINGERPRINT_HASH = None',
+    ):
+        rewritten = _rewrite_expected_hash_text(source, new_hash)
+
+        assert rewritten == f'EXPECTED_FINGERPRINT_HASH = "{new_hash}"'
+
+
 # ---------------------------------------------------------------------------
 # CLI for regenerating the expected hash
 # ---------------------------------------------------------------------------
@@ -232,16 +249,24 @@ def _update_expected_hash() -> None:
 
     # Rewrite this file
     me = Path(__file__).read_text(encoding="utf-8")
-    updated = re.sub(
-        r'EXPECTED_FINGERPRINT_HASH = "3a87870c1d58a50a6f0df69bf95e6b92a9cfe38297cba2c849e9297a4a13b45e"',
-        f'EXPECTED_FINGERPRINT_HASH = "{new_hash}"',
-        me,
-        count=1,
-    )
-    if updated == me:
-        sys.exit("Failed to locate EXPECTED_FINGERPRINT_HASH in this file.")
+    try:
+        updated = _rewrite_expected_hash_text(me, new_hash)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     Path(__file__).write_text(updated, encoding="utf-8")
     print(f"\nUpdated EXPECTED_FINGERPRINT_HASH in {__file__}")
+
+
+def _rewrite_expected_hash_text(source: str, new_hash: str) -> str:
+    """Rewrite EXPECTED_FINGERPRINT_HASH regardless of its current hash value."""
+    updated, count = EXPECTED_HASH_ASSIGNMENT_RE.subn(
+        f'EXPECTED_FINGERPRINT_HASH = "{new_hash}"',
+        source,
+        count=1,
+    )
+    if count != 1:
+        raise ValueError("Failed to locate EXPECTED_FINGERPRINT_HASH in this file.")
+    return updated
 
 
 if __name__ == "__main__":

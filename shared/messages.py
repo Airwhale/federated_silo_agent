@@ -46,7 +46,7 @@ MediumText: TypeAlias = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
 ]
-HashString: TypeAlias = Annotated[
+OpaqueHashToken: TypeAlias = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
@@ -55,6 +55,20 @@ HashString: TypeAlias = Annotated[
         pattern=r"^[A-Za-z0-9_.:-]+$",
     ),
 ]
+# Demo cross-bank linkage tokens are truncated SHA-256 hex strings emitted by
+# the synthetic data builders. Full local SHA-256 identifiers use Sha256Hex.
+CrossBankHashToken: TypeAlias = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=16,
+        max_length=16,
+        pattern=r"^[a-f0-9]{16}$",
+    ),
+]
+# Backwards-compatible broad hash alias. Prefer CrossBankHashToken or
+# Sha256Hex at new boundaries when the expected shape is known.
+HashString: TypeAlias = OpaqueHashToken
 Sha256Hex: TypeAlias = Annotated[
     str,
     StringConstraints(
@@ -148,9 +162,9 @@ class EvidenceItem(StrictModel):
 
     evidence_id: UUID = Field(default_factory=uuid4)
     summary: ShortText
-    entity_hashes: list[HashString] = Field(default_factory=list)
-    account_hashes: list[HashString] = Field(default_factory=list)
-    transaction_hashes: list[HashString] = Field(default_factory=list)
+    entity_hashes: list[CrossBankHashToken] = Field(default_factory=list)
+    account_hashes: list[OpaqueHashToken] = Field(default_factory=list)
+    transaction_hashes: list[OpaqueHashToken] = Field(default_factory=list)
 
     @field_validator("summary")
     @classmethod
@@ -194,7 +208,7 @@ class EntityPresencePayload(StrictModel):
     """Query for whether hashed entities have relevant local signals."""
 
     query_shape: Literal["entity_presence"] = QueryShape.ENTITY_PRESENCE.value
-    name_hashes: list[HashString] = Field(min_length=1)
+    name_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date | None = None
     window_end: date | None = None
 
@@ -211,7 +225,7 @@ class AggregateActivityPayload(StrictModel):
     """Query for DP-protected aggregate activity about hashed entities."""
 
     query_shape: Literal["aggregate_activity"] = QueryShape.AGGREGATE_ACTIVITY.value
-    name_hashes: list[HashString] = Field(min_length=1)
+    name_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date
     window_end: date
     metrics: list[NonEmptyStr] = Field(default_factory=lambda: ["alert_count"])
@@ -226,7 +240,7 @@ class CounterpartyLinkagePayload(StrictModel):
     """Query for counterparty linkage around hashed account identifiers."""
 
     query_shape: Literal["counterparty_linkage"] = QueryShape.COUNTERPARTY_LINKAGE.value
-    account_hashes: list[HashString] = Field(min_length=1)
+    account_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date
     window_end: date
     max_hops: int = Field(default=1, ge=1, le=2)
@@ -303,7 +317,7 @@ class HistogramResponseValue(StrictModel):
 class HashListResponseValue(StrictModel):
     """Hash-list response value."""
 
-    hash_list: list[HashString]
+    hash_list: list[OpaqueHashToken]
 
 
 ResponseValue: TypeAlias = (
@@ -400,7 +414,7 @@ class SanctionsCheckRequest(Message):
     message_type: Literal["sanctions_check_request"] = (
         MessageType.SANCTIONS_CHECK_REQUEST.value
     )
-    entity_hashes: list[HashString] = Field(min_length=1)
+    entity_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     requesting_context: MediumText
 
     @field_validator("requesting_context")
@@ -423,7 +437,7 @@ class SanctionsCheckResponse(Message):
         MessageType.SANCTIONS_CHECK_RESPONSE.value
     )
     in_reply_to: UUID
-    results: dict[HashString, SanctionsResult]
+    results: dict[CrossBankHashToken, SanctionsResult]
 
 
 class BankAggregate(StrictModel):
@@ -465,7 +479,7 @@ class GraphPatternResponse(Message):
     )
     pattern_class: PatternClass
     confidence: float = Field(ge=0.0, le=1.0)
-    suspect_entity_hashes: list[HashString] = Field(default_factory=list)
+    suspect_entity_hashes: list[CrossBankHashToken] = Field(default_factory=list)
     narrative: MediumText
 
     @field_validator("narrative")
@@ -636,7 +650,11 @@ AuditPayload: TypeAlias = Annotated[
 
 
 class AuditEvent(Message):
-    """Normalized audit event emitted by runtime, policy, and DP layers."""
+    """Signed wire-level audit event emitted to the federation audit stream.
+
+    Runtime agents emit backend.agents.base.RuntimeAuditEvent first; P15 maps
+    those local records into this cross-node envelope.
+    """
 
     message_type: Literal["audit_event"] = MessageType.AUDIT_EVENT.value
     event_id: UUID = Field(default_factory=uuid4)

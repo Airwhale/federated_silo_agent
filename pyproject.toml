@@ -8,6 +8,7 @@ dependencies = [
     "httpx>=0.28.1",
     "litellm[proxy]>=1.75",
     "numpy>=2.4.4",
+    "opendp>=0.14.2",
     "pandas>=3.0.3",
     "pyarrow>=24.0.0",
     "pydantic>=2.11",
