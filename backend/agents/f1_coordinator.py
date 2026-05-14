@@ -441,8 +441,14 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
         self,
         response: Sec314bResponse,
         *,
-        routed_request: F1RoutedRequest | None,
+        routed_request: F1RoutedRequest,
     ) -> tuple[F1NegotiationNote, F1RoutedRequest | None]:
+        # `routed_request` is guaranteed non-None by the caller: both
+        # `_validate_a3_response` and the explicit if-raise at the call site
+        # reject responses with no matching routed_request. Narrowing the
+        # parameter type here satisfies static analysis on the
+        # `_retry_attempts(routed_request)` call below without duplicating
+        # the runtime guard.
         reason = response.refusal_reason or "unknown_refusal"
         if reason in TERMINAL_SECURITY_REFUSALS:
             return (
