@@ -255,6 +255,32 @@ def test_unknown_session_returns_unquoted_detail() -> None:
     assert "'" not in detail
 
 
+def test_not_found_falls_back_when_keyerror_has_no_message() -> None:
+    # Defense in depth: if any future caller raises KeyError() with no
+    # args, the 404 contract still returns an informative detail.
+    from fastapi import status
+
+    from backend.ui.api import _not_found
+
+    exc = _not_found(KeyError())
+
+    assert exc.status_code == status.HTTP_404_NOT_FOUND
+    assert exc.detail == "Resource not found"
+
+
+def test_component_readiness_is_memoized_per_service() -> None:
+    # `component_readiness()` reads infra/ file presence; repeated calls
+    # within one service should not re-stat (file presence is constant
+    # for a single demo run).
+    service = DemoControlService()
+
+    first = service.component_readiness()
+    second = service.component_readiness()
+
+    # Same list object on the second call → cache hit, no re-stat.
+    assert first is second
+
+
 def test_session_dict_is_bounded_by_fifo_eviction() -> None:
     service = DemoControlService()
     created_ids: list[UUID] = []

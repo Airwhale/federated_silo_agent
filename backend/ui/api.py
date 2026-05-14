@@ -123,6 +123,10 @@ def create_router(service: DemoControlService) -> APIRouter:
 
 def _not_found(exc: KeyError) -> HTTPException:
     # str(KeyError("msg")) wraps the message in quotes; pull the first arg
-    # when it is a string so the API "detail" reads cleanly.
+    # when it is a string so the API "detail" reads cleanly. Fall back to
+    # a generic message if the caller raised KeyError() with no args
+    # (currently never the case, but the 404 contract is "always informative").
     detail = exc.args[0] if exc.args and isinstance(exc.args[0], str) else str(exc)
+    if not detail:
+        detail = "Resource not found"
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)

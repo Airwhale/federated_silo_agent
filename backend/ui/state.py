@@ -199,6 +199,13 @@ class DemoControlService:
         # FIFO eviction for free without pulling in collections.OrderedDict.
         self._sessions: dict[UUID, DemoSessionRuntime] = {}
         self._sessions_lock = threading.Lock()
+        # component_readiness() does 3 filesystem stat calls (per-bank DB
+        # presence) and rebuilds a 19-entry list. File presence does not
+        # change during a demo run, so cache the result per service
+        # instance — every `component_snapshot` and session-snapshot call
+        # would otherwise re-stat the same paths. Tests construct fresh
+        # services per case, so the cache cannot stale across test runs.
+        self._component_readiness_cache: list[ComponentReadinessSnapshot] | None = None
 
     def create_session(self, request: SessionCreateRequest) -> SessionSnapshot:
         session = DemoSessionRuntime(request)
@@ -352,7 +359,14 @@ class DemoControlService:
         session = self._session(session_id)
         # Each probe handler may mutate several session fields; serialize
         # the whole run+append so a concurrent reader of `component_snapshot`
-        # or `to_snapshot` cannot see a half-applied probe outcome.
+        # or `to_snapshot` cannot see a half-applied probe outcome. The
+        # current P9a probes are deterministic and fast — A3SiloResponderAgent
+        # is constructed per call without LLM, P7 ledger debits are O(1) — so
+        # holding the lock for the full dispatch is correct.
+        # TODO(P15): when LLM-driven probes land (LT injection, A3 with
+        # policy adapter), refactor probe handlers to return a state-update
+        # bundle, run the handler outside the lock, and commit the bundle
+        # atomically at the end so a slow probe cannot block other reads.
         with session.lock:
             try:
                 if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
@@ -428,8 +442,10 @@ class DemoControlService:
         )
 
     def component_readiness(self) -> list[ComponentReadinessSnapshot]:
+        if self._component_readiness_cache is not None:
+            return self._component_readiness_cache
         db_status = _database_detail()
-        return [
+        self._component_readiness_cache = [
             _component(ComponentId.A1, "A1 local monitor", SnapshotStatus.LIVE, "P6 complete."),
             _component(ComponentId.A2, "A2 investigator", SnapshotStatus.LIVE, "P8 complete."),
             _component(ComponentId.F1, "F1 coordinator", SnapshotStatus.LIVE, "P9 complete."),
@@ -450,6 +466,7 @@ class DemoControlService:
             _component(ComponentId.DP_LEDGER, "DP ledger", SnapshotStatus.LIVE, "P7 rho ledger is live."),
             _component(ComponentId.AUDIT_CHAIN, "Audit chain", SnapshotStatus.NOT_BUILT, "Hash-chain persistence lands P13/P15.", "P13/P15"),
         ]
+        return self._component_readiness_cache
 
     def _unsigned_message_probe(
         self,
