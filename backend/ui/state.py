@@ -227,7 +227,13 @@ class DemoControlService:
         return session.to_snapshot(self.component_readiness())
 
     def timeline(self, session_id: UUID) -> list[TimelineEventSnapshot]:
-        return list(self._session(session_id).timeline)
+        session = self._session(session_id)
+        # `list(...)` iterates `session.timeline`; a concurrent
+        # `append_event` from another threadpool worker can mutate
+        # the list mid-iteration and surface
+        # "RuntimeError: list changed size during iteration".
+        with session.lock:
+            return list(session.timeline)
 
     def component_snapshot(self, session_id: UUID, component_id: ComponentId) -> ComponentSnapshot:
         session = self._session(session_id)
@@ -259,12 +265,20 @@ class DemoControlService:
                 envelope=envelope,
             )
         if component_id == ComponentId.REPLAY:
+            # `ReplayCache.to_snapshot` is internally locked (own
+            # `threading.Lock`), so the session.lock here is for
+            # pattern consistency with the other component branches
+            # rather than strict necessity. Cheap, defensive, and
+            # matches the audit invariant that one snapshot read
+            # corresponds to one observable state.
+            with session.lock:
+                replay_snapshot = session.replay_cache.to_snapshot()
             return ComponentSnapshot(
                 component_id=component_id,
                 status=item.status,
                 title=item.label,
                 fields=fields,
-                replay=session.replay_cache.to_snapshot(),
+                replay=replay_snapshot,
             )
         if component_id == ComponentId.ROUTE_APPROVAL:
             with session.lock:
