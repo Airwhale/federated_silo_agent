@@ -343,13 +343,23 @@ class A2InvestigatorAgent(Agent[A2TurnInput, A2TurnResult]):
         counts = {hash_value: 1 for hash_value in current_hashes}
         current_time = payload.alert.created_at
         for summary in payload.correlated_alerts:
+            # Both timestamps are guaranteed UTC-aware: `Alert.created_at`
+            # by `Message.created_at_must_be_utc` (and `_normalize_utc`'s
+            # naive-input reject), `summary.created_at` by
+            # `CorrelatedAlertSummary.created_at_must_be_aware`. The
+            # subtraction therefore cannot raise TypeError at runtime.
             age = current_time - summary.created_at
             if age < timedelta(0) or age > timedelta(days=CORRELATION_WINDOW_DAYS):
                 continue
-            for hash_value in current_hashes & set(summary.entity_hashes):
-                # `hash_value` is guaranteed in `counts` because the inner-loop
-                # iterates over the intersection with `current_hashes`, and
-                # `counts` is initialized from `current_hashes` at line 343.
+            # Dedup within a single summary: a summary that mentions the
+            # same `name_hash` twice still counts as ONE correlated alert
+            # for that hash. Iterating `summary.entity_hashes` directly
+            # would double-count; the set intersection collapses repeats.
+            summary_matches = current_hashes & set(summary.entity_hashes)
+            for hash_value in summary_matches:
+                # `hash_value` is guaranteed in `counts` because
+                # `summary_matches` is a subset of `current_hashes`, and
+                # `counts` is initialized from `current_hashes` above.
                 counts[hash_value] += 1
         return any(count >= CORRELATED_ALERT_THRESHOLD for count in counts.values())
 

@@ -292,6 +292,47 @@ def test_empty_peer_response_emits_dismissal_without_llm() -> None:
     assert result.dismissal.recipient_agent_id == "federation.F5"
 
 
+def test_correlated_alert_bypass_dedupes_hashes_within_one_summary() -> None:
+    """A single summary mentioning the same hash twice still counts as one alert.
+
+    The A2-B1 threshold is `>= 3 correlated alerts on the same name_hash within
+    30 days`. The correlated-alert counter dedupes entity_hashes within each
+    summary so duplicate entries inside one summary cannot prematurely
+    trigger the bypass. We send TWO summaries each repeating HASH_A multiple
+    times — that's still only 2 correlated alerts (plus the current one = 3
+    total), which is exactly at the threshold but verifying we don't see
+    e.g. 7+ from naive counting.
+
+    Without dedup, summary 1 (`[HASH_A, HASH_A, HASH_A]`) would contribute 3
+    increments and summary 2 (`[HASH_A, HASH_A]`) another 2, giving count=6.
+    With dedup, each summary contributes exactly 1, giving count=3. The
+    bypass should fire AT threshold (3) with the dedup logic, NOT
+    over-aggressively (>=2) with the naive count.
+    """
+    alert_obj = alert()
+    prior_time = alert_obj.created_at - timedelta(days=3)
+    one_only = [
+        CorrelatedAlertSummary(
+            alert_id=uuid4(),
+            entity_hashes=[HASH_A, HASH_A, HASH_A],
+            signal_type=SignalType.STRUCTURING.value,
+            created_at=prior_time,
+        ),
+    ]
+    agent, llm, _audit = agent_with_responses(
+        TriageDecision(action="dismiss", reason="Not enough corroboration."),
+    )
+
+    # One summary with duplicates → count=2 (initial 1 + this summary's 1).
+    # Below threshold 3, so bypass must NOT fire and we go through the LLM.
+    result = agent.run(
+        agent.build_alert_input(alert_obj, correlated_alerts=one_only)
+    )
+    assert llm.call_count == 1, "single summary with duplicates must NOT trigger A2-B1"
+    assert result.bypass_rule_id is None
+    assert result.action == "dismiss"
+
+
 def test_correlated_alert_bypass_emits_query_without_llm() -> None:
     alert_obj = alert()
     prior_time = alert_obj.created_at - timedelta(days=3)
