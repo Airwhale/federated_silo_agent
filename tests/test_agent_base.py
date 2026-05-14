@@ -156,6 +156,7 @@ def test_constraint_violation_triggers_one_repair_retry() -> None:
     assert [event.phase for event in audit.events] == ["constraint", "return"]
     assert audit.events[0].rule_name == "max_echo_length"
     assert audit.events[0].status == "retry"
+    assert audit.events[0].retry_count == 1
     assert audit.events[1].retry_count == 1
 
 

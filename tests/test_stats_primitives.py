@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import date
 
@@ -8,6 +9,7 @@ import pytest
 
 from backend.silos import stats_primitives
 from backend.silos.budget import PrivacyBudgetLedger, RequesterKey
+from backend.silos.dp import sigma_for_zcdp
 from backend.silos.local_reader import bank_db_path
 from backend.silos.stats_primitives import (
     MAX_HASH_LIST_LENGTH,
@@ -137,6 +139,31 @@ def test_flow_histogram_returns_dp_histogram_with_fixed_shape() -> None:
     assert all(isinstance(value, int) and value >= 0 for value in result.value)
     assert result.record.returned_value_kind == ResponseValueKind.HISTOGRAM
     assert result.record.rho_debited == 0.03
+    assert result.record.dp_composition == "parallel_disjoint"
+    assert result.record.per_bucket_rho == 0.03
+
+
+def test_flow_histogram_serial_composition_splits_bucket_rho() -> None:
+    layer = primitive_layer()
+    name_hash, _signal_type = sample_name_hash_with_signal()
+    buckets = [(0.0, 1_000.0), (1_000.0, 5_000.0), (5_000.0, math.inf)]
+
+    result = layer.flow_histogram(
+        name_hashes=[name_hash],
+        window=FULL_WINDOW,
+        requester=requester(),
+        buckets=buckets,
+        rho=0.03,
+        composition="serial",
+    )
+
+    assert isinstance(result.value, list)
+    assert len(result.value) == len(buckets)
+    assert result.record.rho_debited == 0.03
+    assert result.record.dp_composition == "serial"
+    assert result.record.per_bucket_rho == 0.01
+    assert result.record.sigma_applied == sigma_for_zcdp(sensitivity=1.0, rho=0.01)
+    assert layer.ledger.spent(requester()) == 0.03
 
 
 def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_two_records() -> None:

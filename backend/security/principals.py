@@ -111,14 +111,16 @@ class PrincipalAllowlist:
         *,
         replay_cache: ReplayCache | None = None,
         now: datetime | None = None,
+        check_freshness: bool = True,
     ) -> VerifiedMessage:
-        """Verify signature, declared identity, allowlist, expiry, and replay."""
+        """Verify signature, declared identity, allowlist, and optionally freshness."""
         entry = self.resolve(getattr(message, "signing_key_id", None))
         verify_message_signature(message, public_key=entry.public_key)
         self._check_declared_identity(message, entry)
         self._check_message_allowance(message, entry)
-        self._check_freshness(message, now=now)
-        if replay_cache is not None:
+        if check_freshness:
+            self._check_freshness(message, now=now)
+        if replay_cache is not None and check_freshness:
             replay_cache.check_and_store(
                 principal_id=entry.agent_id,
                 nonce=message.nonce,
@@ -142,6 +144,7 @@ class PrincipalAllowlist:
         expected_role: AgentRole = AgentRole.F1,
         expected_bank_id: BankId = BankId.FEDERATION,
         now: datetime | None = None,
+        check_expiry: bool = True,
     ) -> VerifiedPrincipal:
         """Verify an F1-signed route approval object."""
         entry = self.resolve(getattr(route_approval, "signing_key_id", None))
@@ -156,9 +159,10 @@ class PrincipalAllowlist:
             )
         if route_approval.route_kind not in entry.allowed_routes:
             raise PrincipalNotAllowed("route approval kind is not allowed")
-        now_value = _normalize_now(now)
-        if route_approval.expires_at <= now_value:
-            raise SecurityEnvelopeError("route approval is expired")
+        if check_expiry:
+            now_value = _normalize_now(now)
+            if route_approval.expires_at <= now_value:
+                raise SecurityEnvelopeError("route approval is expired")
         return VerifiedPrincipal(
             agent_id=entry.agent_id,
             role=entry.role,

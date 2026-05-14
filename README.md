@@ -48,7 +48,7 @@ User or analyst
   -> A2 synthesis back to the user
 ```
 
-`A2` is human-facing and decides what to ask. `F1` validates, routes, aggregates, and audits. `A3` independently re-checks purpose, routing, allowed primitive shape, and DP budget before touching local data. The data returned to `A2` is bounded signal: booleans, counts, histograms, hash lists, refusal reasons, and provenance records. Raw transactions and customer names do not return to `A2`.
+`A2` is human-facing and decides what to ask. `F1` validates, routes, aggregates, and audits. `A3` independently re-checks purpose, routing, allowed primitive shape, and DP budget before touching local data. The data returned to `A2` is bounded signal: booleans, counts, histograms, hash lists, refusal reasons, partial-refusal notes, and provenance records. Raw transactions and customer names do not return to `A2`.
 
 ## Current Build State
 
@@ -64,6 +64,7 @@ User or analyst
 | P7 | Done | Bank-local stats primitives with DP accounting, OpenDP checks, provenance, and budget ledger snapshots. |
 | P8 | Done | A2 outside-TEE investigator agent with typed query drafting, peer-response synthesis, and routing guardrails. |
 | P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
+| P9 | Done | Deterministic F1 federation coordinator with signed A2 ingress validation, F1 route approvals, peer A3 routing, local-contribution routing, sanctions side requests, signed A3 response aggregation, and up to two bounded retries for negotiable silo refusals. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
@@ -177,7 +178,7 @@ Five paths matter:
 | Audit stream | Records cross-bank messages, policy verdicts, primitive provenance, and privacy-budget debits. |
 | System-state snapshots | Let the UI inspect signing, envelope, replay, route-approval, DP-ledger, provider-health, and audit-chain state without scraping logs or exposing secrets. |
 
-DP is intentionally scoped. It is useful for aggregate counts and flow histograms. It is not the right tool for binary entity-presence queries, where noise would destroy the signal; those rely on hash linkage and audit controls.
+DP is intentionally scoped. It is useful for aggregate counts and flow histograms. It is not the right tool for binary entity-presence queries, where noise would destroy the signal; those rely on hash linkage and audit controls. Flow histograms default to fixed-bucket `parallel_disjoint` accounting, where each transaction lands in exactly one bucket and the ledger pays the max bucket rho. The primitives also expose a conservative `serial` mode that splits the same ledger rho across buckets and records the selected mode in provenance.
 
 The UI-facing state panels are planned as observability only. They should report already-made decisions such as "signature verified", "nonce fresh", "rho remaining", or "route approval matched"; they must not become a second path for approving routes, changing budgets, or bypassing A3's silo-side checks.
 
@@ -196,7 +197,7 @@ Planned message-security controls:
 - **Audit hash chain** so deleted or modified audit events are detectable.
 - **TEE attestation hook** for deployments that claim the federation layer or silo responder is running inside a specific trusted execution environment.
 
-The practical rule is: F1 may approve and route, but each silo remains sovereign over whether it can answer. Peer disclosure uses `route_kind="peer_314b"`. Same-bank pooled intermediaries use `route_kind="local_contribution"` and are not modeled as peer targets. A3 can return a refusal such as `unsupported_query_shape`, `unsupported_metric`, `unsupported_metric_combination`, `invalid_rho`, `route_violation`, `signature_invalid`, `envelope_invalid`, `replay_detected`, `budget_exhausted`, or `provenance_violation`.
+The practical rule is: F1 may approve and route, but each silo remains sovereign over whether it can answer. Peer disclosure uses `route_kind="peer_314b"`. Same-bank pooled intermediaries use `route_kind="local_contribution"` and are not modeled as peer targets. A3 can return a refusal such as `unsupported_query_shape`, `unsupported_metric`, `unsupported_metric_combination`, `invalid_rho`, `route_violation`, `signature_invalid`, `principal_not_allowed`, `envelope_invalid`, `replay_detected`, `budget_exhausted`, or `provenance_violation`. If F1 retries with lower rho or a supported fallback metric, the response is a negotiated fallback and the retry note must be shown as such.
 
 DP-backed aggregate metrics require an explicit positive `requested_rho_per_primitive`. A3 refuses zero-rho aggregate requests rather than silently substituting defaults, accepts one aggregate metric class per request, refuses mixed aggregate metric requests before any DP primitive runs, and refuses multi-hash `alert_count` fan-out until a batched primitive exists.
 

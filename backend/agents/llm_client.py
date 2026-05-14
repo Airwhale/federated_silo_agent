@@ -155,7 +155,7 @@ class LLMClient:
         self.requests.append(request)
 
         if self.config.effective_stub_mode():
-            return self._next_stub_response(input_model, output_schema, request.model)
+            return self._next_stub_response(output_schema, request.model)
 
         return self._post_with_retries(request)
 
@@ -197,7 +197,6 @@ class LLMClient:
 
     def _next_stub_response(
         self,
-        input_model: BaseModel,
         output_schema: type[BaseModel],
         model: str,
     ) -> LLMResponse:
@@ -205,7 +204,10 @@ class LLMClient:
             raw = self._stub_responses[self._stub_index]
             self._stub_index += 1
         else:
-            raw = self._default_stub_payload(input_model, output_schema)
+            raise LLMProviderError(
+                "LLM stub mode requires a queued stub response for "
+                f"{output_schema.__name__}"
+            )
 
         if isinstance(raw, BaseModel):
             content = raw.model_dump_json()
@@ -215,17 +217,6 @@ class LLMClient:
             content = json.dumps(dict(raw))
 
         return LLMResponse(content=content, model=model, raw_response={"stub": True})
-
-    def _default_stub_payload(
-        self,
-        input_model: BaseModel,
-        output_schema: type[BaseModel],
-    ) -> dict[str, Any]:
-        input_dump = input_model.model_dump(mode="json")
-        if "echo" in output_schema.model_fields:
-            value = input_dump.get("text") or input_model.model_dump_json()
-            return {"echo": value}
-        return {}
 
     def _post_with_retries(self, request: ChatCompletionRequest) -> LLMResponse:
         last_error: Exception | None = None

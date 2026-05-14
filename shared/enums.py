@@ -27,6 +27,17 @@ class BankId(StrEnum):
     BANK_GAMMA = "bank_gamma"
     FEDERATION = "federation"
 
+    @property
+    def is_peer_bank(self) -> bool:
+        """Return True for peer-bank participants in cross-bank §314(b) flows.
+
+        FEDERATION is the federation runtime, not a peer; any future non-bank
+        role (regulator, auditor, sandbox) must explicitly be excluded here so
+        that places like F1's route planning do not accidentally treat the
+        role as a target bank.
+        """
+        return self != BankId.FEDERATION
+
 
 class MessageType(StrEnum):
     """Serialized top-level message type discriminators."""

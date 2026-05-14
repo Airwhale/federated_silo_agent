@@ -443,6 +443,24 @@ def test_a3_rejects_tampered_signed_query_before_primitive_call() -> None:
     assert primitives.calls == []
 
 
+def test_a3_labels_disallowed_principal_separately_from_bad_signature() -> None:
+    agent, primitives, _audit, private_key = make_agent(sign_responses=True)
+    query = signed_peer_query(private_key=private_key).model_copy(
+        update={"recipient_agent_id": "bank_gamma.A3"}
+    )
+    signed = sign_message(
+        query,
+        private_key=private_key,
+        signing_key_id="f1-key",
+    )
+
+    response = agent.run(A3TurnInput(request=signed))
+
+    assert response.refusal_reason == "principal_not_allowed"
+    assert response.signature is None
+    assert primitives.calls == []
+
+
 def test_a3_budget_exhaustion_returns_structural_refusal_without_llm() -> None:
     primitives = FakePrimitives(BankId.BANK_BETA)
     primitives.entity_result = PrimitiveResult(refusal_reason="budget_exhausted")
