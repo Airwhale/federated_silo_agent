@@ -158,6 +158,21 @@ MAX_ACTIVE_SESSIONS = 50
 # backend/ui/state.py → backend/ui/ → backend/ → repo root
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# `ShortText` allows up to 2048 chars, but a downstream library may
+# produce a longer error string in unusual cases. Truncate at the
+# assignment site to defense-in-depth against a Pydantic ValidationError
+# surfacing as a 500 on what should be a refusal path.
+_DETAIL_MAX_LEN = 2048
+_DETAIL_ELLIPSIS = " …[truncated]"
+
+
+def _truncate_detail(text: str, *, limit: int = _DETAIL_MAX_LEN) -> str:
+    """Clamp a dynamic detail string to ShortText's max length."""
+    if len(text) <= limit:
+        return text
+    head_len = max(limit - len(_DETAIL_ELLIPSIS), 1)
+    return text[:head_len] + _DETAIL_ELLIPSIS
+
 
 class DemoControlService:
     """Session registry plus controlled probe harness for the P9a API.
@@ -339,20 +354,40 @@ class DemoControlService:
         # the whole run+append so a concurrent reader of `component_snapshot`
         # or `to_snapshot` cannot see a half-applied probe outcome.
         with session.lock:
-            if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
-                result = self._unsigned_message_probe(session, request)
-            elif request.probe_kind == ProbeKind.BODY_TAMPER:
-                result = self._body_tamper_probe(session, request)
-            elif request.probe_kind == ProbeKind.WRONG_ROLE:
-                result = self._wrong_role_probe(session, request)
-            elif request.probe_kind == ProbeKind.REPLAY_NONCE:
-                result = self._replay_probe(session, request)
-            elif request.probe_kind == ProbeKind.ROUTE_MISMATCH:
-                result = self._route_mismatch_probe(session, request)
-            elif request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
-                result = self._budget_exhaustion_probe(session, request)
-            else:
-                result = self._placeholder_probe(session, request)
+            try:
+                if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
+                    result = self._unsigned_message_probe(session, request)
+                elif request.probe_kind == ProbeKind.BODY_TAMPER:
+                    result = self._body_tamper_probe(session, request)
+                elif request.probe_kind == ProbeKind.WRONG_ROLE:
+                    result = self._wrong_role_probe(session, request)
+                elif request.probe_kind == ProbeKind.REPLAY_NONCE:
+                    result = self._replay_probe(session, request)
+                elif request.probe_kind == ProbeKind.ROUTE_MISMATCH:
+                    result = self._route_mismatch_probe(session, request)
+                elif request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
+                    result = self._budget_exhaustion_probe(session, request)
+                else:
+                    result = self._placeholder_probe(session, request)
+            except Exception as exc:  # noqa: BLE001
+                # Probe handlers call into real agent code
+                # (A3SiloResponderAgent, PrivacyBudgetLedger, etc.).
+                # An unexpected internal failure should surface as a
+                # structured timeline entry, not a 500. The judge
+                # console can then render the breakdown distinctly
+                # from a "security layer blocked the probe" outcome.
+                # `accepted=False` because the attack did not
+                # demonstrably succeed; `blocked_by=INTERNAL_ERROR`
+                # marks the entry as a code failure rather than a
+                # policy enforcement.
+                result = _probe_result(
+                    request,
+                    accepted=False,
+                    blocked_by=SecurityLayer.INTERNAL_ERROR,
+                    reason=_truncate_detail(
+                        f"Probe handler raised {type(exc).__name__}: {exc}"
+                    ),
+                )
 
             session.append_event(result.timeline_event)
         return result
@@ -424,7 +459,14 @@ class DemoControlService:
         message = _base_a2_query(nonce=f"unsigned-{uuid4()}")
         try:
             self._allowlist.verify_message(message, replay_cache=session.replay_cache)
-        except PrincipalNotAllowed as exc:
+        except SecurityEnvelopeError as exc:
+            # Catch the envelope base class rather than only
+            # PrincipalNotAllowed: an unsigned message currently
+            # surfaces as PrincipalNotAllowed("missing signing_key_id"),
+            # but a future signing-helper variant could raise
+            # SignatureInvalid for an absent signature. Either is a
+            # valid "signature gate refused" outcome from the UI
+            # perspective.
             envelope = _envelope_snapshot(
                 message,
                 status=SnapshotStatus.LIVE,
@@ -871,7 +913,7 @@ def _envelope_snapshot(
         signature_status=signature_status,
         freshness_status=freshness_status,
         blocked_by=blocked_by,
-        detail=detail,
+        detail=_truncate_detail(detail),
     )
 
 

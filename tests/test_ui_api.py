@@ -320,6 +320,56 @@ def test_long_exception_detail_does_not_500_envelope_validation() -> None:
     )
 
 
+def test_truncate_detail_clamps_oversized_strings_with_ellipsis() -> None:
+    # Defense-in-depth: even if a downstream library produces a message
+    # longer than ShortText's 2048-char cap, `_truncate_detail` clamps it
+    # before assignment so Pydantic never raises ValidationError on a
+    # refusal path.
+    from backend.ui.state import _DETAIL_MAX_LEN, _truncate_detail
+
+    short = "x" * 100
+    assert _truncate_detail(short) == short
+
+    long_input = "y" * (_DETAIL_MAX_LEN * 2)
+    clamped = _truncate_detail(long_input)
+    assert len(clamped) <= _DETAIL_MAX_LEN
+    assert clamped.endswith("…[truncated]")
+    assert clamped.startswith("y")
+
+
+def test_probe_handler_internal_error_surfaces_as_structured_result(monkeypatch) -> None:
+    # If a probe handler raises an unexpected exception, run_probe must
+    # return a structured ProbeResult with blocked_by=internal_error and
+    # status=blocked instead of a 500. The judge console then renders the
+    # breakdown as a first-class timeline entry.
+    test_client = client()
+    session_id_str = create_session(test_client)
+
+    from backend.ui import state as state_module
+
+    def boom(self, session, request):  # type: ignore[no-untyped-def]
+        raise RuntimeError("simulated downstream component failure")
+
+    monkeypatch.setattr(state_module.DemoControlService, "_body_tamper_probe", boom)
+
+    response = test_client.post(
+        f"/sessions/{session_id_str}/probes",
+        json={
+            "probe_kind": "body_tamper",
+            "target_component": "F1",
+            "attacker_profile": "valid_but_malicious",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["blocked_by"] == "internal_error"
+    assert "RuntimeError" in body["reason"]
+    assert "simulated downstream component failure" in body["reason"]
+    assert body["timeline_event"]["status"] == "blocked"
+
+
 def test_concurrent_probes_against_one_session_stay_consistent() -> None:
     # Multiple probes hitting the same session via the threadpool must
     # land an event for every call without partial state being visible

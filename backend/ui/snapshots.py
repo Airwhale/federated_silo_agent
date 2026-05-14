@@ -85,6 +85,7 @@ class SecurityLayer(StrEnum):
     P7_BUDGET = "p7_budget"
     NOT_BUILT = "not_built"
     ACCEPTED = "accepted"
+    INTERNAL_ERROR = "internal_error"
 
 
 class ProbeKind(StrEnum):
