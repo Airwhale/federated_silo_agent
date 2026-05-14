@@ -15,6 +15,7 @@ A multi-agent federated AML investigation platform:
 1. **8 agent roles, 14 running agent instances.** Three A1 transaction-monitoring instances, three outside-TEE A2 investigator instances, three inside-bank A3 silo responder instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor.
 2. **Lobster Trap polices inter-agent messages.** The P0 policy already blocks prompt injection, jailbreaks, obfuscation, private-data extraction, data exfiltration, dangerous commands, and sensitive path access. The AML-specific policy pack comes later in P14.
 3. **Privacy enforcement is layered.** Hash-based entity linkage is the primary cross-bank correlation mechanism. A2 has no raw database or stats-primitive handle. A3 invokes deterministic stats primitives inside each bank boundary. Schema validation limits what can leave a silo. Differential privacy applies to aggregate-count and histogram-style primitives where it provides useful protection.
+4. **The demo UI is an inspection surface.** The planned judge console should show the state of signing, envelope verification, route approvals, replay protection, DP budget, LT verdicts, LiteLLM/provider health, and audit-chain integrity through read-only typed snapshots. These panels explain the trust machinery without granting extra privileges.
 
 The demo scenario is a planted structuring ring spanning Bank Alpha, Bank Beta, and Bank Gamma. Each entity holds accounts at two banks. Per-bank activity stays noisy and sub-threshold; the pooled cross-bank pattern reveals the ring. One entity has a synthetic PEP relation for the sanctions agent to flag.
 
@@ -58,7 +59,11 @@ User or analyst
 | P2 | Done | Three synthetic bank databases generated with planted AML scenarios. |
 | P3 | Done | Data validation and checksum tests pass. |
 | P4 | Done | Shared Pydantic v2 message schemas for agent traffic. |
-| P5 | Next | Agent runtime base class. |
+| P5 | Done | Agent runtime base class with deterministic bypasses, constraints, structured LLM parsing, and runtime audit events. |
+| P6 | Done | A1 transaction-monitoring agent over local bank data. |
+| P7 | Done | Bank-local stats primitives with DP accounting, OpenDP checks, provenance, and budget ledger snapshots. |
+| P8 | Done | A2 outside-TEE investigator agent with typed query drafting, peer-response synthesis, and routing guardrails. |
+| P8a | Next | A3 inside-bank silo responder, including signed-envelope, route-approval, replay, and P7 invocation checks. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
@@ -150,11 +155,14 @@ flowchart TB
     LT <--> A3G
 ```
 
-Three paths matter:
+The diagram is logical. The planned cloud demo should run the policy and model-egress stack per trust domain, not as one shared gateway. Each bank silo, investigator node, and federation node owns its local Lobster Trap, LiteLLM route, policy adapter, envelope signer/verifier, replay cache, and audit forwarder.
 
-- **LLM path:** agent to Lobster Trap to LiteLLM to Gemini. This is where natural-language reasoning and structured-output agent calls happen.
+Four paths matter:
+
+- **LLM path:** agent to local Lobster Trap to local LiteLLM to Gemini. OpenRouter can be used as a development fallback through the same LiteLLM boundary.
 - **Coordinator path:** A2 sends approved cross-bank questions only to F1. F1 routes to peer A3 responders and aggregates responses back to A2.
 - **Cross-bank response data path:** A3 to stats primitives to local SQLite. This is deterministic and bank-local. A2 has no raw database or P7 stats-primitive handle.
+- **System-state path:** the UI reads typed snapshots from the control API for signing, envelope verification, replay, route approval, DP ledger, LT/LiteLLM health, and audit-chain status. It does not scrape logs and does not get write privileges over trust decisions.
 
 ## Privacy Model
 
@@ -166,8 +174,11 @@ Three paths matter:
 | Lobster Trap | Polices prompt injection, unsafe requests, role abuse, private data leakage, and cross-agent natural-language channels. |
 | Differential privacy | Bounds repeated aggregate-query leakage for counts and histograms. |
 | Audit stream | Records cross-bank messages, policy verdicts, primitive provenance, and privacy-budget debits. |
+| System-state snapshots | Let the UI inspect signing, envelope, replay, route-approval, DP-ledger, provider-health, and audit-chain state without scraping logs or exposing secrets. |
 
 DP is intentionally scoped. It is useful for aggregate counts and flow histograms. It is not the right tool for binary entity-presence queries, where noise would destroy the signal; those rely on hash linkage and audit controls.
+
+The UI-facing state panels are planned as observability only. They should report already-made decisions such as "signature verified", "nonce fresh", "rho remaining", or "route approval matched"; they must not become a second path for approving routes, changing budgets, or bypassing A3's silo-side checks.
 
 ## Security Envelope
 
@@ -184,6 +195,8 @@ Planned message-security controls:
 - **TEE attestation hook** for deployments that claim the federation layer or silo responder is running inside a specific trusted execution environment.
 
 The practical rule is: F1 may approve and route, but each silo remains sovereign over whether it can answer. A3 can return a refusal such as `invalid_purpose`, `unsupported_query_shape`, `route_violation`, or `budget_exhausted`.
+
+For the judge console, the security-envelope layer should expose redacted state such as `signing_key_id`, canonical body hash, signature verification status, nonce freshness, replay-cache hit or miss, route-approval binding status, and audit-chain head. It must never expose private signing keys, API keys, raw customer names, or raw account identifiers.
 
 ## P0 Proxy Chain
 

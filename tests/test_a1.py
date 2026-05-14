@@ -18,6 +18,7 @@ from backend.agents.a1_monitoring import (
 from backend.runtime import AgentRuntimeContext, LLMClientConfig, TrustDomain
 from backend.silos.local_reader import read_signal_candidates
 from shared.enums import AgentRole, AuditEventKind, BankId, SignalType
+from shared.identifiers import is_cross_bank_hash_token
 
 
 TEST_SDN_HASHES = frozenset({"661f729972ae2156"})
@@ -198,6 +199,10 @@ def test_normal_candidate_path_calls_llm_stub_and_validates_alert() -> None:
     assert decision.alert.sender_agent_id == "bank_alpha.A1"
     assert decision.alert.recipient_agent_id == "bank_alpha.A2"
     assert decision.alert.evidence[0].account_hashes != [candidate.account_id]
+    if is_cross_bank_hash_token(candidate.counterparty_account_id_hashed):
+        assert candidate.counterparty_account_id_hashed in (
+            decision.alert.evidence[0].counterparty_hashes
+        )
     assert decision.alert.evidence[0].transaction_hashes != [candidate.transaction_id]
 
 
@@ -324,6 +329,10 @@ def test_full_llm_path_emits_alerts_for_planted_s1_candidates() -> None:
         for candidate in s1_candidates:
             if candidate.signal_id == decision.signal_id:
                 assert candidate.account_id not in evidence.account_hashes
+                if is_cross_bank_hash_token(candidate.counterparty_account_id_hashed):
+                    assert candidate.counterparty_account_id_hashed in (
+                        evidence.counterparty_hashes
+                    )
                 assert candidate.transaction_id not in evidence.transaction_hashes
                 break
 
