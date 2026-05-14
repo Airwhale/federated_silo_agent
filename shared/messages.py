@@ -79,6 +79,12 @@ Sha256Hex: TypeAlias = Annotated[
         pattern=r"^[a-f0-9]{64}$",
     ),
 ]
+DpCompositionMode: TypeAlias = Literal["parallel_disjoint", "serial"]
+
+# Cross-agent protocol constant for binding an A3 response nonce to the exact
+# F1-routed request nonce. Keeping this in shared prevents F1 and A3 from
+# silently drifting if the suffix changes.
+A3_RESPONSE_NONCE_SUFFIX = ":a3-response"
 
 # Defense-in-depth regex against accidental leakage of customer-identifying
 # strings into cross-bank-bound text fields. This list mirrors the planted
@@ -300,6 +306,9 @@ class RouteApproval(StrictModel):
     requesting_bank_id: BankId
     responding_bank_id: BankId
     approved_by_agent_id: NonEmptyStr
+    # Retry state belongs on the signed route approval, not in nonce text.
+    # This keeps bounded F1 negotiation independent of A2-supplied nonce strings.
+    retry_count: NonNegativeInt = 0
     approved_at: datetime = Field(default_factory=utc_now)
     expires_at: datetime
     signature: NonEmptyStr | None = None
@@ -487,6 +496,8 @@ class PrimitiveCallRecord(StrictModel):
     eps_delta_display: tuple[NonNegativeFloat, NonNegativeFloat] | None = None
     sigma_applied: NonNegativeFloat | None = None
     sensitivity: NonNegativeFloat
+    dp_composition: DpCompositionMode | None = None
+    per_bucket_rho: NonNegativeFloat | None = None
     returned_value_kind: ResponseValueKind
     timestamp: datetime = Field(default_factory=utc_now)
 
@@ -494,6 +505,15 @@ class PrimitiveCallRecord(StrictModel):
     @classmethod
     def timestamp_must_be_utc(cls, value: datetime) -> datetime:
         return _normalize_utc(value)
+
+
+class ResponseRefusalNote(StrictModel):
+    """One silo refusal preserved on an F1 aggregate response."""
+
+    responding_bank_id: BankId
+    refusal_reason: NonEmptyStr
+    decision: NonEmptyStr
+    detail: MediumText
 
 
 class Sec314bResponse(Message):
@@ -511,6 +531,9 @@ class Sec314bResponse(Message):
     provenance: list[PrimitiveCallRecord] = Field(default_factory=list)
     rho_debited_total: NonNegativeFloat = 0.0
     refusal_reason: str | None = None
+    # F1 aggregates can be partial successes. This field carries the banks that
+    # refused so A2 and the UI do not mistake returned fields for a complete set.
+    partial_refusals: list[ResponseRefusalNote] = Field(default_factory=list, max_length=20)
 
     @field_validator("refusal_reason")
     @classmethod

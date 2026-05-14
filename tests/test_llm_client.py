@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 from pydantic import BaseModel, ConfigDict
 
-from backend.agents import LLMClient, LobsterTrapMetadata
+from backend.agents import LLMClient, LLMProviderError, LobsterTrapMetadata
 from backend.runtime import LLMClientConfig, TrustDomain
 from shared.enums import AgentRole, BankId
 
@@ -142,3 +143,22 @@ def test_two_clients_can_use_different_node_local_urls() -> None:
         "https://node-a.example/v1/chat/completions",
         "https://node-b.example/v1/chat/completions",
     ]
+
+
+def test_stub_mode_without_queued_response_fails_loudly() -> None:
+    client = LLMClient(
+        LLMClientConfig(
+            base_url="https://stub.example/v1/chat/completions",
+            default_model="stub-model",
+            stub_mode=True,
+            node_id="node-a",
+        )
+    )
+
+    with pytest.raises(LLMProviderError, match="queued stub response"):
+        client.chat_structured(
+            system_prompt="Return JSON.",
+            input_model=EchoInput(text="hello"),
+            output_schema=EchoOutput,
+            metadata=metadata("node-a"),
+        )

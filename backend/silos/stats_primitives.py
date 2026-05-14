@@ -26,7 +26,7 @@ from backend.silos.dp import (
 from backend.silos.local_reader import bank_db_path
 from shared.enums import BankId, PrivacyUnit, ResponseValueKind, SignalType
 from shared.identifiers import hash_identifier
-from shared.messages import BankAggregate, PrimitiveCallRecord
+from shared.messages import BankAggregate, DpCompositionMode, PrimitiveCallRecord
 
 
 DEFAULT_AMOUNT_BUCKETS: tuple[tuple[float, float], ...] = (
@@ -303,12 +303,18 @@ class BankStatsPrimitives:
         buckets: list[tuple[float, float]] | None = None,
         rho: float = 0.03,
         max_transactions: int = 500,
+        composition: DpCompositionMode = "parallel_disjoint",
     ) -> PrimitiveResult:
         """Return a DP-protected amount histogram for requested entities."""
         _require_non_empty(name_hashes, "name_hashes")
         parsed_window = DateWindow.coerce(window)
         amount_buckets = tuple(buckets or DEFAULT_AMOUNT_BUCKETS)
         _validate_amount_buckets(amount_buckets)
+        bucket_rho = _bucket_rho_for_composition(
+            composition=composition,
+            rho=rho,
+            bucket_count=len(amount_buckets),
+        )
         if self.ledger.remaining(requester) < rho:
             return _budget_refusal()
 
@@ -318,15 +324,18 @@ class BankStatsPrimitives:
             max_transactions=max_transactions,
         )
         true_histogram = _amount_histogram(amounts, amount_buckets)
-        # Parallel composition over disjoint histogram buckets: each transaction
-        # lands in exactly one bucket (the `for ... break` loop in
-        # `_amount_histogram` enforces this), so the Gaussian mechanism applied
-        # to each bucket sees disjoint data. Under zCDP parallel composition,
-        # using the full rho per bucket pays only rho total. This gives sigma =
-        # 1/sqrt(2*rho) per bucket, sqrt(N) times less noise than serial composition.
-        # The ledger record therefore debits rho, not len(buckets) * rho.
-        bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho)
-        validate_opendp_gaussian_map(sensitivity=1.0, rho=rho, sigma=bucket_sigma)
+        # Default to parallel composition over disjoint histogram buckets: each
+        # transaction lands in exactly one bucket (the `for ... break` loop in
+        # `_amount_histogram` enforces this), so zCDP parallel composition pays
+        # the max bucket rho, not the sum. The optional serial mode is a
+        # conservative reviewer-facing fallback that splits the same ledger
+        # debit across buckets and therefore adds more noise.
+        bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=bucket_rho)
+        validate_opendp_gaussian_map(
+            sensitivity=1.0,
+            rho=bucket_rho,
+            sigma=bucket_sigma,
+        )
         # Commit the debit BEFORE drawing noise so audit-replay is deterministic.
         debit = self.ledger.debit(requester, rho)
         if not debit.allowed:
@@ -337,7 +346,7 @@ class BankStatsPrimitives:
                 self._sample_gaussian_noise(
                     float(count),
                     sensitivity=1.0,
-                    rho=rho,
+                    rho=bucket_rho,
                 ).value
             )
             for count in true_histogram
@@ -355,12 +364,16 @@ class BankStatsPrimitives:
                         "max_transactions": max_transactions,
                         "requester": requester.stable_key,
                         "rho": rho,
+                        "composition": composition,
+                        "per_bucket_rho": bucket_rho,
                     },
                     privacy_unit=PrivacyUnit.TRANSACTION,
                     rho_debited=rho,
                     eps_delta=eps_delta_display(rho=rho),
                     sigma_applied=bucket_sigma,
                     sensitivity=1.0,
+                    dp_composition=composition,
+                    per_bucket_rho=bucket_rho,
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                 )
             ],
@@ -519,6 +532,8 @@ class BankStatsPrimitives:
                     eps_delta=eps_delta_display(rho=rho_per_component),
                     sigma_applied=edge_sigma,
                     sensitivity=edge_sensitivity,
+                    dp_composition="parallel_disjoint",
+                    per_bucket_rho=rho_per_component,
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                 ),
                 self._record(
@@ -536,6 +551,8 @@ class BankStatsPrimitives:
                     eps_delta=eps_delta_display(rho=rho_per_component),
                     sigma_applied=flow_sigma,
                     sensitivity=1.0,
+                    dp_composition="parallel_disjoint",
+                    per_bucket_rho=rho_per_component,
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                 ),
             ],
@@ -603,6 +620,8 @@ class BankStatsPrimitives:
         sensitivity: float,
         returned_value_kind: ResponseValueKind,
         eps_delta: tuple[float, float] | None = None,
+        dp_composition: DpCompositionMode | None = None,
+        per_bucket_rho: float | None = None,
     ) -> PrimitiveCallRecord:
         return PrimitiveCallRecord(
             field_name=field_name,
@@ -613,6 +632,8 @@ class BankStatsPrimitives:
             eps_delta_display=eps_delta,
             sigma_applied=sigma_applied,
             sensitivity=sensitivity,
+            dp_composition=dp_composition,
+            per_bucket_rho=per_bucket_rho,
             returned_value_kind=returned_value_kind,
         )
 
@@ -700,6 +721,19 @@ def _validate_amount_buckets(buckets: tuple[tuple[float, float], ...]) -> None:
             raise ValueError("bucket lower bounds must be non-negative")
         if lower >= upper:
             raise ValueError("bucket lower bound must be below upper bound")
+
+
+def _bucket_rho_for_composition(
+    *,
+    composition: DpCompositionMode,
+    rho: float,
+    bucket_count: int,
+) -> float:
+    if composition == "parallel_disjoint":
+        return rho
+    if composition == "serial":
+        return rho / bucket_count
+    raise ValueError(f"unsupported DP composition mode: {composition}")
 
 
 def _jsonable_buckets(buckets: tuple[tuple[float, float], ...]) -> list[list[float | str]]:

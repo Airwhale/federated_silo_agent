@@ -85,6 +85,22 @@ def test_flow_histogram_parallel_composition_matches_single_ledger_debit() -> No
     assert bucket_sigma < serial_sigma
 
 
+def test_flow_histogram_serial_composition_splits_single_ledger_debit() -> None:
+    """Serial histogram accounting spends the same total rho across buckets."""
+    rho_debited = 0.03
+    bucket_count = 5
+    per_bucket_rho = rho_debited / bucket_count
+
+    bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=per_bucket_rho)
+    per_bucket_rhos = [
+        opendp_gaussian_rho(sensitivity=1.0, sigma=bucket_sigma)
+        for _ in range(bucket_count)
+    ]
+
+    assert math.isclose(max(per_bucket_rhos), per_bucket_rho, abs_tol=1e-5)
+    assert math.isclose(sum(per_bucket_rhos), rho_debited, abs_tol=1e-5)
+
+
 def test_pattern_aggregate_composition_matches_component_split() -> None:
     """F2 aggregates compose serially across components, parallel within buckets."""
     total_rho_debited = 0.04

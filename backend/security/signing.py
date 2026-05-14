@@ -92,29 +92,28 @@ def sign_message(
     signing_key_id: str,
 ) -> SignedModelT:
     """Return a copy of `model` with body hash, key id, and signature set."""
+    canonical_model = _validated_copy(model)
     key = (
         load_private_key(private_key)
         if isinstance(private_key, str)
         else private_key
     )
-    with_key = model.model_copy(
-        update={
-            "body_hash": None,
-            "signing_key_id": signing_key_id,
-            "signature": None,
-        }
+    with_key = _validated_copy(
+        canonical_model,
+        update={"body_hash": None, "signing_key_id": signing_key_id, "signature": None},
     )
-    with_hash = model.model_copy(
+    with_hash = _validated_copy(
+        canonical_model,
         update={
             "body_hash": body_hash(with_key),
             "signing_key_id": signing_key_id,
             "signature": None,
-        }
+        },
     )
     signature = key.sign(
         canonical_json_bytes(with_hash, exclude_fields=SIGNATURE_EXCLUDES)
     )
-    return with_hash.model_copy(update={"signature": _b64(signature)})
+    return _validated_copy(with_hash, update={"signature": _b64(signature)})
 
 
 def verify_message_signature(
@@ -137,21 +136,23 @@ def sign_model_signature(
     signing_key_id: str,
 ) -> SignedModelT:
     """Return a copy of a non-envelope model with signing metadata set."""
+    canonical_model = _validated_copy(model)
     key = (
         load_private_key(private_key)
         if isinstance(private_key, str)
         else private_key
     )
-    with_key = model.model_copy(
+    with_key = _validated_copy(
+        canonical_model,
         update={
             "signing_key_id": signing_key_id,
             "signature": None,
-        }
+        },
     )
     signature = key.sign(
         canonical_json_bytes(with_key, exclude_fields=SIGNATURE_EXCLUDES)
     )
-    return with_key.model_copy(update={"signature": _b64(signature)})
+    return _validated_copy(with_key, update={"signature": _b64(signature)})
 
 
 def verify_model_signature(
@@ -175,6 +176,11 @@ def verify_model_signature(
 
 def _b64(value: bytes) -> str:
     return base64.b64encode(value).decode("ascii")
+
+
+def _validated_copy(model: SignedModelT, *, update: dict | None = None) -> SignedModelT:
+    copied = model.model_copy(update=update or {})
+    return type(model).model_validate(copied.model_dump())
 
 
 def _unb64(value: str) -> bytes:

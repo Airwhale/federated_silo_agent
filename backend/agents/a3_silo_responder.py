@@ -27,6 +27,7 @@ from backend.silos.stats_primitives import (
 )
 from shared.enums import AgentRole, AuditEventKind, BankId, QueryShape, RouteKind
 from shared.messages import (
+    A3_RESPONSE_NONCE_SUFFIX,
     AggregateActivityPayload,
     HashListResponseValue,
     HistogramResponseValue,
@@ -47,6 +48,7 @@ METRIC_FLOW_HISTOGRAM = "flow_histogram"
 REFUSAL_BUDGET_EXHAUSTED = "budget_exhausted"
 REFUSAL_ENVELOPE_INVALID = "envelope_invalid"
 REFUSAL_INVALID_RHO = "invalid_rho"
+REFUSAL_PRINCIPAL_NOT_ALLOWED = "principal_not_allowed"
 REFUSAL_UNSUPPORTED_METRIC = "unsupported_metric"
 REFUSAL_UNSUPPORTED_METRIC_COMBINATION = "unsupported_metric_combination"
 REFUSAL_UNSUPPORTED_QUERY_SHAPE = "unsupported_query_shape"
@@ -116,12 +118,20 @@ class A3SiloResponderAgent(Agent[A3TurnInput, Sec314bResponse]):
             self._validate_inbound(request)
         except ReplayDetected as exc:
             return self._refusal(request, "replay_detected", str(exc), "replay")
-        except (SignatureInvalid, PrincipalNotAllowed) as exc:
+        except SignatureInvalid as exc:
             return self._refusal(
                 request,
                 "signature_invalid",
                 str(exc),
                 "signature",
+                sign_response=False,
+            )
+        except PrincipalNotAllowed as exc:
+            return self._refusal(
+                request,
+                REFUSAL_PRINCIPAL_NOT_ALLOWED,
+                str(exc),
+                "principal",
                 sign_response=False,
             )
         except SecurityEnvelopeError as exc:
@@ -421,7 +431,11 @@ class A3SiloResponderAgent(Agent[A3TurnInput, Sec314bResponse]):
             recipient_agent_id="federation.F1",
             created_at=created_at,
             expires_at=expires_at,
-            nonce=f"{request.nonce}:a3-response" if request.nonce else None,
+            nonce=(
+                f"{request.nonce}{A3_RESPONSE_NONCE_SUFFIX}"
+                if request.nonce
+                else None
+            ),
             in_reply_to=_query_id(request),
             responding_bank_id=self.bank_id,
             fields=fields,

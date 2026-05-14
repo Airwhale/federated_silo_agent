@@ -41,6 +41,7 @@ from shared.messages import (
     PrimitiveCallRecord,
     PUBLIC_MESSAGE_MODELS,
     PurposeDeclaration,
+    ResponseRefusalNote,
     RhoDebitedPayload,
     RouteApproval,
     SARContribution,
@@ -214,6 +215,14 @@ def valid_models() -> list[BaseModel]:
             fields={"alert_count": IntResponseValue(int=3)},
             provenance=[primitive_record()],
             rho_debited_total=0.02,
+            partial_refusals=[
+                ResponseRefusalNote(
+                    responding_bank_id=BankId.BANK_GAMMA,
+                    refusal_reason="unsupported_metric",
+                    decision="partial_result",
+                    detail="Gamma could not answer this metric.",
+                )
+            ],
         ),
         SanctionsCheckRequest(
             **message_header(recipient_agent_id="federation.F3"),
@@ -588,6 +597,27 @@ def test_sec314b_response_requires_rho_total_to_match_provenance() -> None:
         )
 
 
+def test_primitive_record_preserves_histogram_accounting_mode() -> None:
+    record = PrimitiveCallRecord(
+        field_name="flow_histogram",
+        primitive_name="flow_histogram",
+        args_hash=ARGS_HASH,
+        privacy_unit=PrivacyUnit.TRANSACTION,
+        rho_debited=0.03,
+        eps_delta_display=(0.5, 0.000001),
+        sigma_applied=12.909944,
+        sensitivity=1.0,
+        dp_composition="serial",
+        per_bucket_rho=0.006,
+        returned_value_kind=ResponseValueKind.HISTOGRAM,
+    )
+
+    parsed = PrimitiveCallRecord.model_validate_json(record.model_dump_json())
+
+    assert parsed.dp_composition == "serial"
+    assert parsed.per_bucket_rho == 0.006
+
+
 def test_refusal_response_cannot_include_fields() -> None:
     with pytest.raises(ValidationError):
         Sec314bResponse(
@@ -602,6 +632,33 @@ def test_refusal_response_cannot_include_fields() -> None:
             rho_debited_total=0.02,
             refusal_reason="budget_exhausted",
         )
+
+
+def test_response_refusal_notes_round_trip_on_partial_success() -> None:
+    note = ResponseRefusalNote(
+        responding_bank_id=BankId.BANK_GAMMA,
+        refusal_reason="unsupported_metric",
+        decision="partial_result",
+        detail="Gamma could not answer this metric.",
+    )
+    response = Sec314bResponse(
+        **message_header(
+            sender_agent_id="federation.F1",
+            sender_role=AgentRole.F1,
+            sender_bank_id=BankId.FEDERATION,
+            recipient_agent_id="bank_alpha.A2",
+        ),
+        in_reply_to=uuid4(),
+        responding_bank_id=BankId.FEDERATION,
+        fields={"bank_beta.alert_count": IntResponseValue(int=3)},
+        provenance=[primitive_record(field_name="bank_beta.alert_count")],
+        rho_debited_total=0.02,
+        partial_refusals=[note],
+    )
+
+    parsed = Sec314bResponse.model_validate_json(response.model_dump_json())
+
+    assert parsed.partial_refusals == [note]
 
 
 def test_customer_name_strings_are_rejected_in_evidence() -> None:

@@ -161,6 +161,21 @@ def test_tampered_signed_message_fails_body_hash_check() -> None:
         allowlist.verify_message(tampered)
 
 
+def test_sign_message_validates_before_hashing() -> None:
+    key_pair = generate_key_pair("f1-key")
+    allowlist = PrincipalAllowlist([f1_entry(key_pair.public_key)])
+    dirty = query_for_beta().model_copy(update={"sender_agent_id": " federation.F1 "})
+
+    signed = sign_message(
+        dirty,
+        private_key=key_pair.private_key,
+        signing_key_id=key_pair.signing_key_id,
+    )
+
+    assert signed.sender_agent_id == "federation.F1"
+    allowlist.verify_message(signed)
+
+
 def test_unknown_signing_key_is_not_allowed() -> None:
     signed, _allowlist, _public_key = signed_query_for_beta()
     empty_allowlist = PrincipalAllowlist([])

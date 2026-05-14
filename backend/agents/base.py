@@ -111,6 +111,7 @@ class Agent(Generic[InT, OutT]):
 
         if violations:
             rule, message = violations[0]
+            retry_count += 1
             self._emit(
                 kind=AuditEventKind.CONSTRAINT_VIOLATION,
                 phase="constraint",
@@ -119,7 +120,6 @@ class Agent(Generic[InT, OutT]):
                 rule_name=rule.name,
                 retry_count=retry_count,
             )
-            retry_count += 1
             output = self._call_and_parse(
                 validated_input,
                 repair_instruction=(
@@ -247,6 +247,7 @@ class Agent(Generic[InT, OutT]):
                 phase=phase,
                 status="retry",
                 detail=str(first_error),
+                retry_count=1,
             )
             repair_response = self.llm.chat_structured(
                 system_prompt=system_prompt,
