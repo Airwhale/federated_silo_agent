@@ -332,20 +332,18 @@ class A3SiloResponderAgent(Agent[A3TurnInput, Sec314bResponse]):
             provenance.extend(result.records)
 
         if METRIC_ALERT_COUNT in metrics:
-            for name_hash in payload.name_hashes:
-                result = self.primitives.alert_count_for_entity(
-                    name_hash=name_hash,
-                    window=(payload.window_start, payload.window_end),
-                    requester=requester,
-                    rho=rho,
-                )
-                if result.refusal_reason is not None:
-                    return _refusal_bundle(route_kind, result.refusal_reason)
-                field_name = METRIC_ALERT_COUNT
-                field_values[field_name] = IntResponseValue(int=int(result.value))
-                provenance.append(
-                    result.record.model_copy(update={"field_name": field_name})
-                )
+            result = self.primitives.alert_count_for_entity(
+                name_hash=payload.name_hashes[0],
+                window=(payload.window_start, payload.window_end),
+                requester=requester,
+                rho=rho,
+            )
+            if result.refusal_reason is not None:
+                return _refusal_bundle(route_kind, result.refusal_reason)
+            field_values[METRIC_ALERT_COUNT] = IntResponseValue(int=int(result.value))
+            provenance.append(
+                result.record.model_copy(update={"field_name": METRIC_ALERT_COUNT})
+            )
 
         if not field_values:
             return _refusal_bundle(route_kind, REFUSAL_UNSUPPORTED_METRIC)
