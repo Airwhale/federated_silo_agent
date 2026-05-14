@@ -124,10 +124,22 @@ def _normalize_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _reject_demo_customer_names(value: str, field_name: str) -> str:
+def reject_demo_customer_names(value: str, field_name: str) -> str:
+    """Public helper: raise if `value` contains a known demo customer name.
+
+    Defense-in-depth check shared across boundary models (shared/messages.py)
+    and agent-local draft models (e.g. backend/agents/a2_states.QueryDraft).
+    Agents that draft user-visible text fields should pin this validator on
+    the field so the violation is caught at the LLM-output boundary with
+    retry, not later when the message envelope is constructed.
+    """
     if _DEMO_CUSTOMER_NAME_RE.search(value):
         raise ValueError(f"{field_name} must not contain customer names")
     return value
+
+
+# Backwards-compat alias for internal callers in this module.
+_reject_demo_customer_names = reject_demo_customer_names
 
 
 def _validate_window(start: date, end: date) -> None:
@@ -162,9 +174,16 @@ class EvidenceItem(StrictModel):
 
     evidence_id: UUID = Field(default_factory=uuid4)
     summary: ShortText
-    entity_hashes: list[CrossBankHashToken] = Field(default_factory=list)
-    account_hashes: list[OpaqueHashToken] = Field(default_factory=list)
-    transaction_hashes: list[OpaqueHashToken] = Field(default_factory=list)
+    entity_hashes: list[CrossBankHashToken] = Field(default_factory=list, max_length=100)
+    account_hashes: list[OpaqueHashToken] = Field(default_factory=list, max_length=100)
+    counterparty_hashes: list[CrossBankHashToken] = Field(
+        default_factory=list,
+        max_length=100,
+    )
+    transaction_hashes: list[OpaqueHashToken] = Field(
+        default_factory=list,
+        max_length=100,
+    )
 
     @field_validator("summary")
     @classmethod
@@ -237,10 +256,10 @@ class AggregateActivityPayload(StrictModel):
 
 
 class CounterpartyLinkagePayload(StrictModel):
-    """Query for counterparty linkage around hashed account identifiers."""
+    """Query for counterparty linkage around cross-bank counterparty tokens."""
 
     query_shape: Literal["counterparty_linkage"] = QueryShape.COUNTERPARTY_LINKAGE.value
-    account_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
+    counterparty_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date
     window_end: date
     max_hops: int = Field(default=1, ge=1, le=2)
@@ -510,6 +529,7 @@ class SARContribution(Message):
     contributing_investigator_id: NonEmptyStr
     contributed_evidence: list[EvidenceItem] = Field(min_length=1)
     local_rationale: MediumText
+    related_query_ids: list[UUID] = Field(default_factory=list)
 
     @field_validator("local_rationale")
     @classmethod

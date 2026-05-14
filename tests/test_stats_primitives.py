@@ -308,7 +308,7 @@ def test_primitive_call_closes_database_connection(
 def test_hash_list_inputs_capped_at_runtime_layer() -> None:
     """Hash-list primitives refuse oversize inputs before issuing SQL.
 
-    The P4 schema caps `name_hashes`/`account_hashes`/`entity_hashes` at
+    The P4 schema caps `name_hashes`/`counterparty_hashes`/`entity_hashes` at
     100 entries to stay well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER
     (default 999) on `IN ({placeholders})` queries. The primitives layer
     mirrors that cap as defense-in-depth so a direct call (tests, future

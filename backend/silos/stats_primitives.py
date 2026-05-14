@@ -324,6 +324,7 @@ class BankStatsPrimitives:
         # to each bucket sees disjoint data. Under zCDP parallel composition,
         # using the full rho per bucket pays only rho total. This gives sigma =
         # 1/sqrt(2*rho) per bucket, sqrt(N) times less noise than serial composition.
+        # The ledger record therefore debits rho, not len(buckets) * rho.
         bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho)
         validate_opendp_gaussian_map(sensitivity=1.0, rho=rho, sigma=bucket_sigma)
         # Commit the debit BEFORE drawing noise so audit-replay is deterministic.
@@ -447,6 +448,8 @@ class BankStatsPrimitives:
         # (one counterparty's edge count is in exactly one bucket; one
         # transaction's amount is in exactly one bucket). zCDP parallel
         # composition lets us use the full per-component rho on each bucket.
+        # The ledger debit is the serial sum across components, not across
+        # buckets inside a component.
         #
         # Edge sensitivity is the L2 norm of the change vector, not L1.
         # One transaction can move one counterparty between two adjacent buckets,

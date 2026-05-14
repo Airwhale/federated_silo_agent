@@ -24,7 +24,7 @@ from backend.agents.a1_models import (
 from backend.agents.rules import ConstraintRule
 from backend.runtime.context import AgentRuntimeContext, LLMClientConfig, TrustDomain
 from shared.enums import AgentRole, AuditEventKind, BankId, SignalType
-from shared.identifiers import hash_identifier
+from shared.identifiers import hash_identifier, is_cross_bank_hash_token
 from shared.messages import Alert, EvidenceItem
 
 
@@ -269,6 +269,11 @@ def build_alert(
                 summary=evidence_summary(candidate, bypass_rule_id),
                 entity_hashes=[candidate.customer_name_hash],
                 account_hashes=[candidate.account_id_hash],
+                counterparty_hashes=(
+                    [candidate.counterparty_account_id_hashed]
+                    if is_cross_bank_hash_token(candidate.counterparty_account_id_hashed)
+                    else []
+                ),
                 transaction_hashes=[candidate.transaction_id_hash],
             )
         ],
@@ -417,15 +422,20 @@ def evidence_uses_hashed_identifiers(
         if candidate is None:
             return False
         expected_account_hash = candidate.account_id_hash
+        expected_counterparty_hash = candidate.counterparty_account_id_hashed
         expected_transaction_hash = candidate.transaction_id_hash
         expected_entity_hash = candidate.customer_name_hash
         found_account_hash = False
+        found_counterparty_hash = not is_cross_bank_hash_token(
+            expected_counterparty_hash
+        )
         found_transaction_hash = False
         found_entity_hash = False
         for item in decision.alert.evidence:
             fields = (
                 item.entity_hashes
                 + item.account_hashes
+                + item.counterparty_hashes
                 + item.transaction_hashes
                 + [item.summary]
             )
@@ -439,10 +449,19 @@ def evidence_uses_hashed_identifiers(
                 found_transaction_hash
                 or expected_transaction_hash in item.transaction_hashes
             )
+            found_counterparty_hash = (
+                found_counterparty_hash
+                or expected_counterparty_hash in item.counterparty_hashes
+            )
             found_entity_hash = (
                 found_entity_hash or expected_entity_hash in item.entity_hashes
             )
-        if not found_account_hash or not found_transaction_hash or not found_entity_hash:
+        if (
+            not found_account_hash
+            or not found_counterparty_hash
+            or not found_transaction_hash
+            or not found_entity_hash
+        ):
             return False
     return True
 

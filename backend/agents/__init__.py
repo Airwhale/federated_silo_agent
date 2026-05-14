@@ -1,5 +1,6 @@
 """Agent runtime exports."""
 
+from backend.agents.a2_investigator import A2InvestigatorAgent
 from backend.agents.base import (
     Agent,
     AgentAuditEvent,
@@ -25,6 +26,7 @@ __all__ = [
     "Agent",
     "AgentAuditEvent",
     "AgentRuntimeError",
+    "A2InvestigatorAgent",
     "AuditEmitter",
     "BypassRule",
     "ChatCompletionRequest",

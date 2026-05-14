@@ -16,6 +16,7 @@ from shared.enums import AgentRole, AuditEventKind, BankId
 
 InT = TypeVar("InT", bound=BaseModel)
 OutT = TypeVar("OutT", bound=BaseModel)
+ParsedT = TypeVar("ParsedT", bound=BaseModel)
 
 
 class AgentRuntimeError(RuntimeError):
@@ -203,21 +204,39 @@ class Agent(Generic[InT, OutT]):
         *,
         repair_instruction: str | None = None,
     ) -> OutT:
-        metadata = self._metadata()
-        response = self.llm.chat_structured(
+        return self._call_structured(
             system_prompt=self.system_prompt,
             input_model=input_data,
             output_schema=self.output_schema,
+            phase="llm_parse",
+            repair_instruction=repair_instruction,
+        )
+
+    def _call_structured(
+        self,
+        *,
+        system_prompt: str,
+        input_model: BaseModel,
+        output_schema: type[ParsedT],
+        phase: str,
+        repair_instruction: str | None = None,
+    ) -> ParsedT:
+        """Call the LLM and parse one strict Pydantic output schema."""
+        metadata = self._metadata()
+        response = self.llm.chat_structured(
+            system_prompt=system_prompt,
+            input_model=input_model,
+            output_schema=output_schema,
             metadata=metadata,
             repair_instruction=repair_instruction,
         )
         try:
-            return self.output_schema.model_validate_json(response.content)
+            return output_schema.model_validate_json(response.content)
         except ValidationError as first_error:
             if repair_instruction is not None:
                 self._emit(
                     kind=AuditEventKind.CONSTRAINT_VIOLATION,
-                    phase="llm_parse",
+                    phase=phase,
                     status="blocked",
                     detail=str(first_error),
                 )
@@ -225,27 +244,27 @@ class Agent(Generic[InT, OutT]):
 
             self._emit(
                 kind=AuditEventKind.CONSTRAINT_VIOLATION,
-                phase="llm_parse",
+                phase=phase,
                 status="retry",
                 detail=str(first_error),
             )
             repair_response = self.llm.chat_structured(
-                system_prompt=self.system_prompt,
-                input_model=input_data,
-                output_schema=self.output_schema,
+                system_prompt=system_prompt,
+                input_model=input_model,
+                output_schema=output_schema,
                 metadata=metadata,
                 repair_instruction=(
                     "Your previous output did not match the required JSON schema. "
-                    f"Return only valid JSON for {self.output_schema.__name__}. "
+                    f"Return only valid JSON for {output_schema.__name__}. "
                     f"Parser error: {first_error}"
                 ),
             )
             try:
-                return self.output_schema.model_validate_json(repair_response.content)
+                return output_schema.model_validate_json(repair_response.content)
             except ValidationError as second_error:
                 self._emit(
                     kind=AuditEventKind.CONSTRAINT_VIOLATION,
-                    phase="llm_parse",
+                    phase=phase,
                     status="blocked",
                     detail=str(second_error),
                     retry_count=1,

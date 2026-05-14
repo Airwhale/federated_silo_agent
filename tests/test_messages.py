@@ -26,6 +26,7 @@ from shared.messages import (
     AuditEvent,
     BankAggregate,
     ContributorAttribution,
+    CounterpartyLinkagePayload,
     DismissalRationale,
     EntityPresencePayload,
     EvidenceItem,
@@ -120,7 +121,8 @@ def valid_models() -> list[BaseModel]:
     evidence = EvidenceItem(
         summary="Near-threshold cash activity tied to hashed entity.",
         entity_hashes=[HASH_A],
-        account_hashes=[HASH_B],
+        account_hashes=[ARGS_HASH],
+        counterparty_hashes=[HASH_B],
     )
     contribution = ContributorAttribution(
         bank_id=BankId.BANK_ALPHA,
@@ -357,10 +359,20 @@ def test_hash_list_payloads_capped_at_one_hundred_entries() -> None:
 
     # Over the cap: each payload must reject.
     with pytest.raises(ValidationError):
+        EvidenceItem(summary="Too many hashes.", entity_hashes=too_many)
+    with pytest.raises(ValidationError):
+        EvidenceItem(summary="Too many hashes.", counterparty_hashes=too_many)
+    with pytest.raises(ValidationError):
         EntityPresencePayload(name_hashes=too_many)
     with pytest.raises(ValidationError):
         AggregateActivityPayload(
             name_hashes=too_many,
+            window_start=date(2026, 5, 1),
+            window_end=date(2026, 5, 13),
+        )
+    with pytest.raises(ValidationError):
+        CounterpartyLinkagePayload(
+            counterparty_hashes=too_many,
             window_start=date(2026, 5, 1),
             window_end=date(2026, 5, 13),
         )
