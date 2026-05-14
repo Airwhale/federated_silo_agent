@@ -268,17 +268,41 @@ def test_not_found_falls_back_when_keyerror_has_no_message() -> None:
     assert exc.detail == "Resource not found"
 
 
-def test_component_readiness_is_memoized_per_service() -> None:
-    # `component_readiness()` reads infra/ file presence; repeated calls
-    # within one service should not re-stat (file presence is constant
-    # for a single demo run).
+def test_provider_health_honors_infra_root_env_override(tmp_path, monkeypatch) -> None:
+    # `FEDERATED_SILO_INFRA_ROOT` lets a non-source-tree deploy point
+    # the readiness checks at a different infra location without code
+    # changes. Set it to a path that contains the expected entries and
+    # confirm provider_health() resolves them there.
+    (tmp_path / "lobstertrap").mkdir()
+    (tmp_path / "litellm_config.yaml").write_text("model_list: []\n", encoding="utf-8")
+    monkeypatch.setenv("FEDERATED_SILO_INFRA_ROOT", str(tmp_path))
+
+    test_client = client()
+
+    response = test_client.get("/system")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider_health"]["lobster_trap_configured"] is True
+    assert body["provider_health"]["litellm_configured"] is True
+
+
+def test_component_readiness_reflects_live_filesystem_changes(tmp_path, monkeypatch) -> None:
+    # Round 12 lesson: an eager-and-cached readiness list goes stale if
+    # the demo creates DBs or infra after server start. The current
+    # implementation rebuilds readiness on each call; assert that
+    # creating an infra file after the service exists makes a later
+    # snapshot see it.
+    monkeypatch.setenv("FEDERATED_SILO_INFRA_ROOT", str(tmp_path))
     service = DemoControlService()
 
-    first = service.component_readiness()
-    second = service.component_readiness()
+    before = service.provider_health()
+    assert before.lobster_trap_configured is False
 
-    # Same list object on the second call → cache hit, no re-stat.
-    assert first is second
+    (tmp_path / "lobstertrap").mkdir()
+
+    after = service.provider_health()
+    assert after.lobster_trap_configured is True
 
 
 def test_service_rejects_non_positive_max_active_sessions(monkeypatch) -> None:

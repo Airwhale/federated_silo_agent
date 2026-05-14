@@ -155,8 +155,21 @@ class DemoSessionRuntime:
 
 MAX_ACTIVE_SESSIONS = 50
 
-# backend/ui/state.py → backend/ui/ → backend/ → repo root
+# backend/ui/state.py → backend/ui/ → backend/ → repo root.
+# The demo runs from the repo root via `uv run uvicorn`, but a container
+# image or any future installable-package layout can override the infra
+# location at startup via the env var below. This keeps the local-dev
+# default zero-config while preventing a hard dependency on the source
+# tree's relative shape.
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_INFRA_ROOT_ENV = "FEDERATED_SILO_INFRA_ROOT"
+
+
+def _infra_root() -> Path:
+    override = os.getenv(_INFRA_ROOT_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return _REPO_ROOT / "infra"
 
 # `ShortText` allows up to 2048 chars, but a downstream library may
 # produce a longer error string in unusual cases. Truncate at the
@@ -208,15 +221,16 @@ class DemoControlService:
         # FIFO eviction for free without pulling in collections.OrderedDict.
         self._sessions: dict[UUID, DemoSessionRuntime] = {}
         self._sessions_lock = threading.Lock()
-        # Pre-populate component readiness at construction time so the
-        # first request does not pay the filesystem I/O cost, and two
-        # threadpool workers cannot race the lazy-init (both seeing the
-        # cache as None and re-running `_database_detail()`). File
-        # presence does not change during a demo run, so the snapshot
-        # taken here is the right one for the service's whole lifetime.
-        self._component_readiness_cache: list[ComponentReadinessSnapshot] = (
-            self._build_component_readiness()
-        )
+        # NOTE on readiness caching: earlier rounds of review pushed
+        # toward a cached readiness list (round 9 perf concern) and
+        # then eager pre-population (round 11 race concern). Round 12
+        # correctly observed that caching plus eager population creates
+        # staleness — if the demo DB files are created after the
+        # server starts, /system reports them missing forever. The
+        # readiness build is ~3 filesystem stat calls; the demo call
+        # volume (judges hit /system a handful of times per session)
+        # does not justify the staleness risk. So we recompute readiness
+        # on each call and accept the cheap I/O.
 
     def create_session(self, request: SessionCreateRequest) -> SessionSnapshot:
         session = DemoSessionRuntime(request)
@@ -461,8 +475,10 @@ class DemoControlService:
         # Anchor the infra path on this file rather than the current
         # working directory so the same code reports correctly whether
         # the server is started from the repo root, a container WORKDIR,
-        # or a Cloud Run / unit-test temp dir.
-        infra_root = _REPO_ROOT / "infra"
+        # or a Cloud Run / unit-test temp dir. A deploy can override the
+        # location with the `FEDERATED_SILO_INFRA_ROOT` env var if the
+        # source tree layout does not match the installed layout.
+        infra_root = _infra_root()
         return ProviderHealthSnapshot(
             status=SnapshotStatus.PENDING,
             lobster_trap_configured=(infra_root / "lobstertrap").exists(),
@@ -476,9 +492,6 @@ class DemoControlService:
         )
 
     def component_readiness(self) -> list[ComponentReadinessSnapshot]:
-        return self._component_readiness_cache
-
-    def _build_component_readiness(self) -> list[ComponentReadinessSnapshot]:
         db_status = _database_detail()
         return [
             _component(ComponentId.A1, "A1 local monitor", SnapshotStatus.LIVE, "P6 complete."),
