@@ -77,6 +77,15 @@ def create_router(service: DemoControlService | None = None) -> APIRouter:
         response_model=list[TimelineEventSnapshot],
     )
     def events(session_id: UUID) -> list[TimelineEventSnapshot]:
+        # `/events` and `/timeline` are deliberately distinct endpoints with
+        # the same P9a-era implementation. `/timeline` is the stable
+        # paged-history view; `/events` is the streaming surface that P15
+        # will upgrade to SSE backed by the audit channel
+        # (`audit.subscribe()`). Keeping the two paths separate now means
+        # the P9b frontend can wire to `/events` for live updates and
+        # `/timeline` for historical scrubbing without a route change
+        # when P15 lands. TODO(P15): replace with StreamingResponse / SSE
+        # once the audit channel exists.
         try:
             return control.timeline(session_id)
         except KeyError as exc:
