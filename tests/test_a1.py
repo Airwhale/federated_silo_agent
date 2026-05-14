@@ -142,6 +142,28 @@ def test_velocity_bypass_emits_without_llm_call() -> None:
     assert decision.alert.signal_type == SignalType.RAPID_MOVEMENT
 
 
+def test_mixed_batch_bypass_is_materialized_before_llm_call() -> None:
+    ctr_candidate = synthetic_ctr_candidate()
+    normal_candidate = read_signal_candidates(BankId.BANK_ALPHA, limit=1)[0]
+    agent, llm, audit = agent_with_responses(suppress_result(normal_candidate.signal_id))
+
+    output = agent.run(agent.build_input([ctr_candidate, normal_candidate]))
+
+    assert llm.call_count == 1
+    assert [decision.signal_id for decision in output.decisions] == [
+        ctr_candidate.signal_id,
+        normal_candidate.signal_id,
+    ]
+    ctr_decision = output.decisions[0]
+    assert ctr_decision.action == "emit"
+    assert ctr_decision.bypass_rule_id == "A1-B1"
+    assert ctr_decision.alert is not None
+    assert ctr_decision.alert.signal_type == SignalType.CTR_REPORT
+    assert output.decisions[1].action == "suppress"
+    assert audit.events[0].kind == AuditEventKind.BYPASS_TRIGGERED
+    assert audit.events[0].rule_name == "A1-B1"
+
+
 def test_normal_candidate_path_calls_llm_stub_and_validates_alert() -> None:
     candidate = read_signal_candidates(BankId.BANK_ALPHA, limit=1)[0]
     agent, llm, _audit = agent_with_responses()
@@ -198,6 +220,45 @@ def test_bad_alert_recipient_raises_constraint_violation_after_retry() -> None:
     assert llm.call_count == 2
     assert audit.events[-1].kind == AuditEventKind.CONSTRAINT_VIOLATION
     assert audit.events[-1].rule_name == "alert_routing"
+    assert audit.events[-1].status == "blocked"
+
+
+def test_raw_identifier_in_evidence_summary_raises_constraint_violation() -> None:
+    candidate = read_signal_candidates(BankId.BANK_ALPHA, limit=1)[0]
+    agent, llm, audit = agent_with_responses()
+    input_data = agent.build_input([candidate])
+    bad_alert = build_alert(
+        input_data=input_data,
+        candidate=candidate,
+        rationale="LLM triage: local signal merits investigator review.",
+    )
+    bad_evidence = bad_alert.evidence[0].model_copy(
+        update={
+            "summary": f"Raw local account leaked: {candidate.account_id}",
+            "entity_hashes": [candidate.customer_name_hash],
+            "account_hashes": [candidate.account_id_hash],
+            "transaction_hashes": [candidate.transaction_id_hash],
+        }
+    )
+    wrong_alert = bad_alert.model_copy(update={"evidence": [bad_evidence]})
+    wrong_result = A1BatchResult(
+        decisions=[
+            A1Decision(
+                signal_id=candidate.signal_id,
+                action="emit",
+                alert=wrong_alert,
+                llm_rationale="Incorrectly leaked a local identifier in evidence.",
+            )
+        ]
+    )
+    llm.set_stub_responses([wrong_result, wrong_result])
+
+    with pytest.raises(ConstraintViolation):
+        agent.run(input_data)
+
+    assert llm.call_count == 2
+    assert audit.events[-1].kind == AuditEventKind.CONSTRAINT_VIOLATION
+    assert audit.events[-1].rule_name == "evidence_uses_hashed_identifiers"
     assert audit.events[-1].status == "blocked"
 
 

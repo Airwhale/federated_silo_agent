@@ -10,6 +10,7 @@ from typing import Literal
 from backend import BACKEND_ROOT
 from backend.agents.a1_models import SignalCandidate
 from shared.enums import BankId
+from shared.identifiers import hash_identifier
 
 
 PROJECT_ROOT = BACKEND_ROOT.parent
@@ -171,8 +172,10 @@ def _rows_to_candidates(db_path: Path, rows: list[sqlite3.Row]) -> list[SignalCa
                 channel=str(row["channel"]),
                 timestamp=timestamp,
                 account_id=account_id,
+                account_id_hash=hash_identifier(account_id),
                 customer_name_hash=str(row["customer_name_hash"]),
                 customer_kyc_tier=str(row["customer_kyc_tier"]),
+                transaction_id_hash=hash_identifier(str(row["transaction_id"])),
                 recent_near_ctr_count_24h=recent_count,
                 counterparty_account_id_hashed=str(row["counterparty_account_id_hashed"]),
                 source_signal_type=str(row["source_signal_type"]),

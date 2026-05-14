@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from backend import BACKEND_ROOT
-from backend.agents.base import Agent, AuditEmitter
+from backend.agents.base import Agent, AuditEmitter, ConstraintViolation
 from backend.agents.llm_client import LLMClient
 from backend.agents.a1_models import (
     A1BatchInput,
@@ -22,9 +21,10 @@ from backend.agents.a1_models import (
     BypassRuleId,
     SignalCandidate,
 )
-from backend.agents.rules import BypassRule, ConstraintRule
+from backend.agents.rules import ConstraintRule
 from backend.runtime.context import AgentRuntimeContext, LLMClientConfig, TrustDomain
 from shared.enums import AgentRole, AuditEventKind, BankId, SignalType
+from shared.identifiers import hash_identifier
 from shared.messages import Alert, EvidenceItem
 
 
@@ -79,7 +79,6 @@ class A1MonitoringAgent(Agent[A1BatchInput, A1BatchResult]):
         self.local_a2_agent_id = local_a2_agent_id or f"{bank_id.value}.A2"
         self.sdn_hashes = sdn_hashes if sdn_hashes is not None else load_sdn_hashes()
         self.system_prompt = load_system_prompt()
-        self.bypass_rules = build_bypass_rules(self.sdn_hashes)
         self.constraint_rules = build_constraint_rules(self.sdn_hashes)
         super().__init__(runtime=runtime, llm=llm, audit=audit)
 
@@ -92,16 +91,78 @@ class A1MonitoringAgent(Agent[A1BatchInput, A1BatchResult]):
             candidates=candidates,
         )
 
+    def run(self, input_data: A1BatchInput | object) -> A1BatchResult:
+        """Run A1 with per-candidate deterministic bypass materialization."""
+        validated_input = self._validate_input(input_data)
+        bypass_decisions: dict[str, A1Decision] = {}
+        llm_candidates: list[SignalCandidate] = []
 
-def build_bypass_rules(
-    sdn_hashes: frozenset[str],
-) -> tuple[BypassRule[A1BatchInput, A1BatchResult], ...]:
-    """Build whole-call bypass rules for deterministic A1-only batches."""
-    return (
-        _build_single_rule_batch_bypass("A1-B1", sdn_hashes),
-        _build_single_rule_batch_bypass("A1-B2", sdn_hashes),
-        _build_single_rule_batch_bypass("A1-B3", sdn_hashes),
-    )
+        for candidate in validated_input.candidates:
+            rule_id = candidate_bypass_rule(candidate, self.sdn_hashes)
+            if rule_id is None:
+                llm_candidates.append(candidate)
+                continue
+
+            bypass_decisions[candidate.signal_id] = forced_decision(
+                validated_input,
+                candidate,
+                rule_id,
+            )
+            self._emit(
+                kind=AuditEventKind.BYPASS_TRIGGERED,
+                phase="bypass",
+                status="ok",
+                detail=bypass_rationale(rule_id, candidate),
+                rule_name=rule_id,
+                bypass_name=rule_id,
+            )
+
+        if not bypass_decisions:
+            return super().run(validated_input)
+
+        llm_decisions: dict[str, A1Decision] = {}
+        if llm_candidates:
+            llm_input = validated_input.model_copy(update={"candidates": llm_candidates})
+            llm_output = super().run(llm_input)
+            llm_decisions = {
+                decision.signal_id: decision for decision in llm_output.decisions
+            }
+
+        decisions_by_signal_id = llm_decisions | bypass_decisions
+        merged_output = A1BatchResult(
+            decisions=[
+                decisions_by_signal_id[candidate.signal_id]
+                for candidate in validated_input.candidates
+            ]
+        )
+        violations = self._constraint_violations(validated_input, merged_output)
+        if violations:
+            rule, message = violations[0]
+            self._emit(
+                kind=AuditEventKind.CONSTRAINT_VIOLATION,
+                phase="constraint",
+                status="blocked",
+                detail=message,
+                rule_name=rule.name,
+            )
+            raise ConstraintViolation(message)
+
+        self._emit(
+            kind=AuditEventKind.MESSAGE_SENT,
+            phase="return",
+            status="ok",
+            model_name=(
+                self.llm.config.default_model
+                if llm_candidates
+                else "deterministic_bypass"
+            ),
+            bypass_name=(
+                "partial_deterministic_bypass"
+                if llm_candidates
+                else "deterministic_bypass"
+            ),
+        )
+        return merged_output
 
 
 def build_constraint_rules(
@@ -148,26 +209,6 @@ def build_constraint_rules(
                 "alert evidence must use hashed identifiers, not raw account or transaction ids"
             ),
         ),
-    )
-
-
-def _build_single_rule_batch_bypass(
-    rule_id: BypassRuleId,
-    sdn_hashes: frozenset[str],
-) -> BypassRule[A1BatchInput, A1BatchResult]:
-    return BypassRule(
-        name=rule_id,
-        trigger=lambda input_data: all(
-            candidate_bypass_rule(candidate, sdn_hashes) == rule_id
-            for candidate in input_data.candidates
-        ),
-        force_output=lambda input_data: A1BatchResult(
-            decisions=[
-                forced_decision(input_data, candidate, rule_id)
-                for candidate in input_data.candidates
-            ]
-        ),
-        reason=f"{rule_id} deterministic monitoring bypass triggered.",
     )
 
 
@@ -227,8 +268,8 @@ def build_alert(
             EvidenceItem(
                 summary=evidence_summary(candidate, bypass_rule_id),
                 entity_hashes=[candidate.customer_name_hash],
-                account_hashes=[hash_identifier(candidate.account_id)],
-                transaction_hashes=[hash_identifier(candidate.transaction_id)],
+                account_hashes=[candidate.account_id_hash],
+                transaction_hashes=[candidate.transaction_id_hash],
             )
         ],
     )
@@ -291,11 +332,6 @@ def evidence_summary(
     return f"Local {candidate.source_signal_type} signal for hashed entity."
 
 
-def hash_identifier(value: str) -> str:
-    """Hash a local identifier before placing it in cross-message evidence."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
 def has_one_decision_per_candidate(
     input_data: A1BatchInput,
     output: A1BatchResult,
@@ -329,6 +365,11 @@ def bypass_candidates_emit(
     output: A1BatchResult,
     sdn_hashes: frozenset[str],
 ) -> bool:
+    """Verify bypass invariants after A1's deterministic merge path.
+
+    A1 materializes bypass candidates before LLM review. This constraint is
+    defense in depth for merge/runtime regressions rather than an LLM filter.
+    """
     decisions = {decision.signal_id: decision for decision in output.decisions}
     for candidate in input_data.candidates:
         rule_id = candidate_bypass_rule(candidate, sdn_hashes)
@@ -336,6 +377,12 @@ def bypass_candidates_emit(
             continue
         decision = decisions.get(candidate.signal_id)
         if decision is None or decision.action != "emit" or decision.alert is None:
+            return False
+        if decision.bypass_rule_id != rule_id:
+            return False
+        if decision.alert.signal_type != map_signal_type(candidate, rule_id):
+            return False
+        if decision.alert.severity != alert_severity(candidate, rule_id):
             return False
     return True
 
@@ -369,11 +416,34 @@ def evidence_uses_hashed_identifiers(
         candidate = candidates.get(decision.signal_id)
         if candidate is None:
             return False
+        expected_account_hash = candidate.account_id_hash
+        expected_transaction_hash = candidate.transaction_id_hash
+        expected_entity_hash = candidate.customer_name_hash
+        found_account_hash = False
+        found_transaction_hash = False
+        found_entity_hash = False
         for item in decision.alert.evidence:
-            if candidate.account_id in item.account_hashes:
+            fields = (
+                item.entity_hashes
+                + item.account_hashes
+                + item.transaction_hashes
+                + [item.summary]
+            )
+            raw_ids = (candidate.account_id, candidate.transaction_id)
+            if any(raw_id in field for raw_id in raw_ids for field in fields):
                 return False
-            if candidate.transaction_id in item.transaction_hashes:
-                return False
+            found_account_hash = (
+                found_account_hash or expected_account_hash in item.account_hashes
+            )
+            found_transaction_hash = (
+                found_transaction_hash
+                or expected_transaction_hash in item.transaction_hashes
+            )
+            found_entity_hash = (
+                found_entity_hash or expected_entity_hash in item.entity_hashes
+            )
+        if not found_account_hash or not found_transaction_hash or not found_entity_hash:
+            return False
     return True
 
 
@@ -441,8 +511,10 @@ def synthetic_ctr_candidate() -> SignalCandidate:
         channel="cash",
         timestamp=datetime(2026, 5, 13, 12, 0, 0),
         account_id="synthetic_acct_A1_B1",
+        account_id_hash=hash_identifier("synthetic_acct_A1_B1"),
         customer_name_hash="synthetic_entity_hash_A1_B1",
         customer_kyc_tier="small_business",
+        transaction_id_hash=hash_identifier("synthetic_txn_A1_B1_ctr"),
         recent_near_ctr_count_24h=1,
         counterparty_account_id_hashed="synthetic_counterparty_A1_B1",
         source_signal_type="synthetic_ctr_threshold",
@@ -460,8 +532,10 @@ def synthetic_sdn_candidate(sdn_hash: str = "sdn_counterparty_hash_0001") -> Sig
         channel="wire",
         timestamp=datetime(2026, 5, 13, 12, 0, 0),
         account_id="synthetic_acct_A1_B2",
+        account_id_hash=hash_identifier("synthetic_acct_A1_B2"),
         customer_name_hash="synthetic_entity_hash_A1_B2",
         customer_kyc_tier="commercial",
+        transaction_id_hash=hash_identifier("synthetic_txn_A1_B2_sdn"),
         recent_near_ctr_count_24h=1,
         counterparty_account_id_hashed=sdn_hash,
         source_signal_type="synthetic_sdn_counterparty",
@@ -479,8 +553,10 @@ def synthetic_velocity_candidate() -> SignalCandidate:
         channel="cash",
         timestamp=datetime(2026, 5, 13, 12, 0, 0),
         account_id="synthetic_acct_A1_B3",
+        account_id_hash=hash_identifier("synthetic_acct_A1_B3"),
         customer_name_hash="synthetic_entity_hash_A1_B3",
         customer_kyc_tier="small_business",
+        transaction_id_hash=hash_identifier("synthetic_txn_A1_B3_velocity"),
         recent_near_ctr_count_24h=10,
         counterparty_account_id_hashed="synthetic_counterparty_A1_B3",
         source_signal_type="synthetic_velocity_spike",
