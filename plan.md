@@ -171,10 +171,24 @@ Honest note on what DP doesn't do: it doesn't protect entity-presence binary que
 
 | Surface | What it shows | Why it matters |
 |---|---|---|
-| Bank investigator console | A1 alerts, A2 reasoning, cross-bank query status | Primary operational surface |
-| Federation timeline | Live agent-to-agent conversation with LT verdicts overlaid | The multi-agent demo's signature visual |
-| Audit panel | Every LT decision, every DP debit, every schema violation | The compliance dashboard |
+| Bank investigator console | A1 alerts, A2 reasoning, cross-bank query status, manual "ask A2" action | Primary operational surface |
+| Federation timeline | Live agent-to-agent conversation with LT verdicts overlaid, plus step/run controls | The multi-agent demo's signature visual |
+| Silo inspector | Per-bank A3 inbox, route approvals, P7 primitive calls, privacy budget, and returned fields | Shows that each silo owns its own data-plane enforcement |
+| Policy and attack lab | Prompt injection, customer-name leakage, MITM body tamper, replay, route mismatch, and budget-exhaustion attempts | Lets judges probe the security claims directly |
+| Audit panel | Every LT decision, every DP debit, every schema violation, every route approval, and hash-chain status | The compliance dashboard |
 | SAR draft viewer | Structured form + attributed contributions | Regulatory artifact |
+
+The UI is an interactive control surface over the full stack, not just a playback view. A judge should be able to click into any component and see what it knew, what it was allowed to call, what message it received, what it emitted, and which policy or schema gate approved or blocked the action. Inspection does not grant extra privileges: attempts launched from the UI still pass through the same signed-envelope, policy, Lobster Trap, schema, A3, and P7 checks as normal traffic.
+
+Minimum judge controls:
+
+1. Start or reset a canonical scenario.
+2. Step one mechanism at a time, or run until the next terminal artifact.
+3. Open any agent turn and inspect prompt metadata, typed input, typed output, constraint results, and audit events.
+4. Open any trust-domain node and inspect local LT/LiteLLM configuration, inboxes, route approvals, replay-cache status, and audit forwarding.
+5. Open any bank silo and inspect A3 decisions, P7 primitive invocations, args hashes, rho debit, remaining budget, and refusal paths.
+6. Launch safe negative probes: prompt injection, raw-name leakage, hallucinated hashes, MITM body tamper, replay, route mismatch, unsupported query shape, and budget exhaustion.
+7. Export the run timeline, final SAR draft, and audit JSONL for judging or screencast backup.
 
 ### 7.3 Demo experience design
 
@@ -534,10 +548,10 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 - **P12** F4 SAR drafter agent ·
 - **P13** F5 compliance auditor agent ·
 - **P14** AML policy adapter + Lobster Trap overlay ·
-- **P15** Agent orchestrator / message bus ·
+- **P15** Agent orchestrator / message bus + UI control API ·
 - **P16** Canonical demo flow script ·
 - **P17** End-to-end smoke test ·
-- **P18** Federation timeline + audit panel (terminal UI) ·
+- **P18** Interactive judge console ·
 - **P19** README + mermaid diagrams for AML ·
 - **P20** Pitch deck ·
 - **P21** Demo dry-run × 3 + screencast ·
@@ -941,7 +955,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Given S1-flow contributions (3 contributing banks, $795K total flow) + F2 ring report + F3 PEP flag, F4 emits a `SARDraft` with all mandatory fields populated; `typology_code="structuring"`; `sar_priority="high"` (because of PEP); `contributors` has 3 entries; narrative references §314(b) and references each bank by bank_id.
   - Given a contribution missing the amount field, F4 emits a `SARContributionRequest` to the contributor rather than producing an incomplete SAR.
   - Narrative passes a customer-name-redaction check.
-- *Risks specific to this part:* (a) the LLM may invent details for the narrative — mitigation: prompt constrains the LLM to only reference facts present in the inputs; constraint check rejects narratives that introduce values not in the structured fields. (b) The narrative is long enough that Gemini latency may be visible in the demo — mitigation: stream the response into the terminal UI; pre-generate during dry-runs as a fallback.
+- *Risks specific to this part:* (a) the LLM may invent details for the narrative - mitigation: prompt constrains the LLM to only reference facts present in the inputs; constraint check rejects narratives that introduce values not in the structured fields. (b) The narrative is long enough that Gemini latency may be visible in the demo - mitigation: stream the response into the judge console; pre-generate during dry-runs as a fallback.
 - *Depends on:* P5, P8, P10, P11.
 - *Scope check:* one to two focused sessions. The narrative prompt engineering is the bulk.
 
@@ -1006,25 +1020,33 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P4 (message schemas).
 - *Scope check:* one focused session.
 
-**P15 — Agent orchestrator / message bus**
+**P15 - Agent orchestrator / message bus + UI control API**
 
-- *Goal:* Runtime that can run in two modes: local deterministic mode for tests and cloud-demo mode with explicit nodes for each silo, investigator, and federation stack. Local mode instantiates all 14 agent instances in one process. Cloud-demo mode deploys separate service processes for the three A3 silo nodes, the A2 investigator nodes, and the F1-F5 federation node; messages cross service boundaries through signed envelopes and each node's local Lobster Trap/LiteLLM stack.
-- *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the terminal UI), `backend/inbox.py` (per-agent inbox), `backend/runtime/node_config.py` (node identity, service URLs, trust-domain config), `backend/runtime/transport.py` (HTTP/gRPC transport abstraction), `tests/test_orchestrator.py`.
+- *Goal:* Runtime that can run in two modes: local deterministic mode for tests and cloud-demo mode with explicit nodes for each silo, investigator, and federation stack. Local mode instantiates all 14 agent instances in one process. Cloud-demo mode deploys separate service processes for the three A3 silo nodes, the A2 investigator nodes, and the F1-F5 federation node; messages cross service boundaries through signed envelopes and each node's local Lobster Trap/LiteLLM stack. The orchestrator also exposes a judge-safe control API so the UI can start, step, pause, inspect, and inject negative probes anywhere in the stack without bypassing policy.
+- *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the web UI), `backend/inbox.py` (per-agent inbox), `backend/runtime/node_config.py` (node identity, service URLs, trust-domain config), `backend/runtime/transport.py` (HTTP/gRPC transport abstraction), `backend/demo/state.py` (scenario/run snapshots for UI inspection), `backend/demo/control_api.py` (FastAPI or Typer-backed control facade), `tests/test_orchestrator.py`, `tests/test_demo_control_api.py`.
 - *Architecture:*
   - **Local mode:** in-process message bus for fast tests and deterministic demo dry-runs. Each agent instance holds an inbox (`asyncio.Queue`); the bus has a routing table keyed by `recipient_agent_id`.
   - **Cloud-demo mode:** each trust domain runs as a service with a local policy/LLM/security stack. Bank silo nodes run `A3 + P7 + local DB + local LT/LiteLLM + policy adapter + envelope verifier + replay cache + audit forwarder`. Investigator nodes run `A2 + local LT/LiteLLM + policy adapter + envelope signer/verifier + replay cache`. The federation node runs `F1-F5 + federation LT/LiteLLM + policy adapter + route approval signer + aggregate audit stream + replay cache`.
   - `Orchestrator.__init__()` in local mode instantiates: 3 A1 instances (one per bank), 3 A2 instances (one per bank), 3 A3 instances (one per bank), one each of F1–F5. Wires each bank's A3 to its bank's stats-primitives layer handle.
   - `Orchestrator.step()` is the visible-progression entry point. Each call: pops one message off any non-empty inbox in priority order (alerts → cross-bank-queries → responses → SAR contributions → SAR drafts → audit annotations), routes it to the addressed agent, awaits the agent's return value, fans out any resulting messages to addressed inboxes, emits all AuditEvents to the audit channel, returns.
   - `Orchestrator.run_until_idle()` calls `step()` in a loop until all inboxes are empty (or until a terminal event like a `SARDraft` lands).
+- *Judge-safe control API:*
+  - `start_scenario(scenario_id, mode)` creates a `ScenarioRun` and returns a `run_id`. Modes: `stub`, `live`, and `live_with_stub_fallback`.
+  - `step(run_id)`, `run_until_next_artifact(run_id)`, and `run_until_idle(run_id)` drive the same orchestrator transitions used by tests and scripts.
+  - `inspect_component(run_id, component_id)` returns typed snapshots for A1, A2, A3, F1-F5, P7, LT, LiteLLM, policy adapter, inboxes, replay cache, route approvals, and audit channel.
+  - `inspect_message(run_id, message_id)` returns envelope metadata, body hash, signature status, LT verdicts, schema validation result, and downstream provenance.
+  - `inject_probe(run_id, probe_kind, target_component, payload_patch)` launches a safe negative test such as prompt injection, customer-name leakage, hallucinated hash, MITM body tamper, replay, route mismatch, unsupported query shape, or budget exhaustion.
+  - Probe requests are never privileged. They enter through the same public boundary the real attacker would use, and success means a deterministic refusal or audited policy block.
+  - `export_run(run_id)` writes timeline JSON, audit JSONL, final artifacts, and a compact human-readable summary.
 - *Audit channel (in `audit.py`):*
   - Ringbuffer of `AuditEvent` records (default 10,000 entries).
-  - Subscriber API (`audit.subscribe() -> AsyncIterator[AuditEvent]`) for the terminal UI to consume live.
+  - Subscriber API (`audit.subscribe() -> AsyncIterator[AuditEvent]`) for the web UI to consume live.
   - Every message routed by the bus is copied to the audit channel as kind `message_sent`; constraint violations, bypass triggers, rho debits, LT verdicts, signature checks, replay rejections, and route approvals all produce additional events.
   - Audit events form a hash chain through `prev_event_hash` and `event_hash`; tests verify tampering changes the chain head.
 - *Bank↔primitives wiring:* on init, the orchestrator constructs each bank's `StatsPrimitivesLayer` (from P7) and passes a handle to that bank's A3 only. A2 receives alert evidence and aggregated responses but no DB or P7 handle.
 - *Cloud node wiring:* in cloud-demo mode, no process gets all handles. Each A3 service receives only its own P7 handle and bank database path. The federation service receives only service URLs and public verification keys for A2/A3 nodes. Investigator services receive only F1's URL and verification key.
 - *F5 wiring:* F5 is optional at construction time. When enabled, it subscribes to the audit channel via `audit.subscribe()`. F5's findings are themselves AuditEvents (kind `human_review` or `rate_limit`). This avoids a build-order cycle: P13 is tested against an `AuditSource` protocol first, then P15 wires it into the real orchestrator.
-- *Out of scope for this part:* no production-grade Kubernetes operator; no multi-region failover; no real bank network connectivity; no agent hot-reload. Cloud-demo mode is for visible trust boundaries, not production operations.
+- *Out of scope for this part:* no production-grade Kubernetes operator; no multi-region failover; no real bank network connectivity; no agent hot-reload. Cloud-demo mode is for visible trust boundaries, not production operations. The control API is demo-scoped and must not become a privileged bypass path.
 - *Acceptance:* `tests/test_orchestrator.py`:
   - Instantiate the orchestrator (with stubbed LLM agents that return canned outputs for predictability); drop a hand-crafted `Alert` into Bank Alpha's A2 inbox; call `run_until_idle()`; verify the audit channel contains at least: the original alert routed, A2's `Sec314bQuery`, F1's broadcasts to peer A3 responders, peer A3s' responses, F1's aggregated response, A2's `SARContribution`, F4's `SARDraft`, and F5's audit annotations.
   - Verify each cross-bank message audit event includes the rho debit from the corresponding primitive call (chained correctly through provenance).
@@ -1033,6 +1055,8 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Verify cloud-demo node config cannot construct a service that has both `A2` and a P7 handle, or both `F1` and a bank database path.
   - Verify cloud-demo routing sends A2 queries to F1, F1 queries to peer A3 endpoints, A3 responses back to F1, and F1 aggregates back to A2.
   - Verify `step()` is deterministic given stubbed LLM outputs (same sequence of events across runs).
+  - Verify UI inspection snapshots expose enough state for every major mechanism without exposing raw peer-bank transactions outside that bank's silo snapshot.
+  - Verify every `inject_probe(...)` negative scenario is blocked or refused at the expected layer and emits an audit event.
 - *Risks specific to this part:* (a) `asyncio` orchestration is easy to deadlock if priorities are wrong — mitigation: priority queue with explicit ordering; test exhaustively. (b) The audit channel's ringbuffer may overflow during long runs — mitigation: 10K entries is well over the demo's ~50 events; UI handles ringbuffer reads gracefully. (c) Wiring 14 agents + 3 primitives layers is mostly plumbing — keep `__init__` clean by extracting a `bank_setup(bank_id) -> BankRuntime` helper. (d) Cloud-demo mode can consume time fast — mitigation: keep service transport thin and fall back to local mode if deployment work runs hot.
 - *Depends on:* P5, P7, P8, P8a, P9, P10, P11, P12, P14. P13 is optional for the first orchestrator pass; when present, it plugs into the `AuditSource` interface built here.
 - *Scope check:* one to two focused sessions. Mostly plumbing once the agent contracts are stable.
@@ -1049,7 +1073,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   5. Expect terminal events: an `F4 SARDraft` emitted with `typology_code="structuring"`, `sar_priority="high"`, `contributors` length ≥ 2.
   6. Print the audit stream to stdout (formatted, color-coded) and the final SARDraft to a separate output file.
 - *Determinism:* the script uses `LLM_STUB_MODE=1` env var or a `--stub` flag to swap in canned-LLM stub agents for fully-reproducible runs; `--live` uses real Gemini (DP noise still produces small variation in some fields, but high-level outcomes — pattern_class, sar_priority, contributors — are stable).
-- *Out of scope for this part:* no terminal UI (that's P18); no recording mechanics (P21); no test assertions beyond what the script prints (P17 binds the assertions).
+- *Out of scope for this part:* no interactive web UI (that's P18); no recording mechanics (P21); no test assertions beyond what the script prints (P17 binds the assertions).
 - *Acceptance:* `uv run python -m backend.demo.canonical_flow --stub` produces:
   - A SARDraft printed to `out/sar_draft.json` with the expected typology code and contributors.
   - An audit stream of ~30–50 events to stdout (or `out/audit.jsonl` if `--out-file`).
@@ -1084,11 +1108,11 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P16.
 - *Scope check:* one short focused session.
 
-**P18 — Federation timeline + audit panel (terminal UI)**
+**P18 - Interactive judge console**
 
-- *Goal:* A terminal UI that shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid. Designed for the screen-recording aspect ratio; the demo's signature visual.
-- *Files:* `backend/ui/__init__.py`, `backend/ui/timeline.py`, `backend/ui/components.py` (reusable Rich components: agent badge, message bubble, privacy-budget meter with epsilon display), `backend/demo/canonical_flow.py` (extended to support `--ui` flag).
-- *Layout (Rich's `Layout` primitive, 1080p target):*
+- *Goal:* An interactive web console that lets judges drive, inspect, and safely attack every part of the mechanism. The console shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid, but it also exposes component inspectors and probe controls for A1, A2, A3, F1-F5, P7, policy adapters, LT, LiteLLM, inboxes, route approvals, replay cache, audit chain, and final SAR artifacts.
+- *Files:* `backend/ui/__init__.py`, `backend/ui/server.py`, `backend/ui/api.py`, `backend/ui/static/` or `frontend/` (web app), `backend/ui/components.py` (shared view models: agent badge, message card, privacy-budget meter with epsilon display, policy verdict panel), `backend/demo/canonical_flow.py` (extended to support `--ui` flag).
+- *Primary view layout (browser, 1080p target):*
   ```
   ┌────────────────────────────────────────────────────────────────────┐
   │ FEDERATED AML INVESTIGATION — Bank α / β / γ                        │
@@ -1111,13 +1135,21 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   │  [00:05] F4 ──SAR──> orch      │  Human-review flags: 0          │
   └──────────────────────────────────┴─────────────────────────────────┘
   ```
-- *Implementation notes:* Rich's `Live` context renders the layout; subscribes to the audit channel via `audit.subscribe()`; each event updates the relevant pane. Privacy-budget meters use Rich's `ProgressBar` and display approximate epsilon values derived from the rho ledger. Message bubbles are color-coded by agent role (A1=cyan, A2=green, A3=teal, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages truncate with ellipsis but the full payload is available on stdout.
-- *Out of scope for this part:* no clickable / interactive elements (terminal UI only); no replay scrubbing; no web UI. The terminal UI is the demo's stage; web UI is post-hackathon.
+- The block above is a wireframe only. The implementation target is a browser dashboard with resizable panels, inspector drawers, and an attack-lab tab, not a Rich terminal renderer.
+- *Implementation notes:* The web server subscribes to the audit channel via `audit.subscribe()` and calls the P15 control API for run, step, inspect, inject, and export actions. Privacy-budget meters display rho plus approximate epsilon values derived from the ledger. Message cards are color-coded by agent role (A1=cyan, A2=green, A3=teal, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages collapse by default, with full typed JSON visible in an inspector drawer.
+- *Interaction model:*
+  - **Run controls:** start scenario, reset, step once, run until next artifact, run until idle, switch stub/live/live-with-stub-fallback.
+  - **Component inspectors:** A1 local monitoring, A2 investigation state, F1 routing, each A3 silo response, P7 primitive calls, F2 graph inference, F3 sanctions result, F4 SAR draft, F5 audit findings.
+  - **Security probes:** prompt injection, customer-name leakage, hallucinated hash, MITM body tamper, replayed nonce, mismatched route approval, unsupported query shape, and budget exhaustion.
+  - **Exports:** audit JSONL, timeline JSON, final SAR draft, and a compact run summary.
+- *Out of scope for this part:* no production authentication, no multi-user collaboration, no arbitrary SQL explorer, no UI path that grants the judge privileges unavailable to the real actors. Raw bank transaction inspection is allowed only inside the owning bank silo inspector and is clearly labeled as synthetic demo data.
 - *Acceptance:*
-  - Running `uv run python -m backend.demo.canonical_flow --ui --live` shows the timeline rendering in real time; the canonical flow's ~30 events all surface in the correct panes within their actual timestamps.
+  - Running `uv run python -m backend.ui.server --live` starts the judge console and streams the canonical flow in real time; the canonical flow's ~30 events all surface in the correct panes within their actual timestamps.
   - Privacy-budget meter visibly debits per DP-applied query and stops debiting on non-DP primitives.
+  - Every inspector is backed by a typed snapshot from P15, not by ad hoc scraping of logs.
+  - Each security probe reaches the expected block/refusal layer and creates an audit event visible in the audit panel.
   - Layout readable at 1920×1080 resolution (the screen-recording target).
-- *Risks specific to this part:* (a) Rich's `Live` can flicker if the update rate is wrong — mitigation: throttle to ~10 fps; batch updates. (b) Long-running terminal display may overflow the ringbuffer — mitigation: a fixed-height "recent events" pane; full audit goes to a file.
+- *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one attack lab tab first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.
 - *Depends on:* P16.
 - *Scope check:* one focused session for the layout; another for the polish (colors, spacing, edge cases).
 
@@ -1138,7 +1170,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **Architecture** — replace the legacy clinical mermaid diagram with AML diagrams. Four diagrams: (1) explicit cloud-demo node topology with one stack per trust domain, (2) high-level federation architecture (investigator nodes ↔ federation node ↔ bank silo nodes), (3) canonical-flow sequence diagram (the 10-step demo flow), (4) trust-boundary diagram (which mechanism polices which boundary).
   - **Privacy Model** — already AML-correct.
   - **P0 Proxy Chain** — already correct.
-  - **Running the demo** — concrete commands: `uv sync && data/scripts/build_banks.py && data/scripts/plant_scenarios.py && data/scripts/validate_banks.py && python -m backend.demo.canonical_flow --ui --live`. Document the `GEMINI_API_KEY` requirement and the offline-stub alternative.
+  - **Running the demo** - concrete commands: `uv sync && data/scripts/build_banks.py && data/scripts/plant_scenarios.py && data/scripts/validate_banks.py && uv run python -m backend.ui.server --live`. Document the `GEMINI_API_KEY` requirement and the offline-stub alternative.
   - **Tests** — `pytest tests/` summary + the opt-in live test.
   - **Project structure** — replace legacy clinical structure with the actual AML structure (backend/agents/, backend/silos/, shared/messages.py, infra/lobstertrap/packs/aml_pack.yaml, etc.).
   - **Cross-vertical applicability** — the slide-deck material as a brief section linking to `plan.md` Section 14.
@@ -1165,7 +1197,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   1. **Title + framing** — "Federated Cross-Bank AML Investigation". Sub-line: "8 agent roles. 3 banks. 1 ring no single bank can see."
   2. **Problem** — §314(b) friction stack (4 frictions, ordered). One-line claim: "the statute has been law for 25 years; banks barely use it." Cite the four frictions visually.
   3. **What we built** — architecture diagram (same as README's Architecture mermaid, exported as PNG). Three explicit bank silo stacks (A3 + P7 + local DB + local LT/LiteLLM + policy/security), investigator stacks (A2 + local LT/LiteLLM), and one separate federation stack (F1-F5 + federation LT/LiteLLM + route signer + aggregate audit).
-  4. **Demo walkthrough** — the 10-step canonical flow with screenshots from the terminal UI (taken from P21's screencast). Show LT verdicts overlaying each step. Land the moment where F2 identifies the structuring ring.
+  4. **Demo walkthrough** - the 10-step canonical flow with screenshots from the interactive judge console (taken from P21's screencast). Show LT verdicts overlaying each step. Land the moment where F2 identifies the structuring ring.
   5. **Where DP fits (and where it doesn't)** — the per-query-shape table from the README. Note: "DP earns its keep on aggregate counts; binary presence relies on hash linkage; we're explicit about which is which."
   6. **What we address vs. don't** — the friction stack revisited. We address 3 of 4 (infrastructure, technical-not-contractual privacy, query-primitive ontology); we do not address legal-team risk aversion (the largest friction). Honest scoping.
   7. **Comp: Verafin → Nasdaq $2.75B** — the comp slide. Their privacy is contractual; ours is technical. Smaller competitive-paranoia barrier. Plausible buyer: top-tier banks or regulator-driven consortium.
@@ -1183,7 +1215,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Goal:* Three consecutive successful canonical-flow runs; a polished screencast recorded as the live-demo backup; a beat-by-beat demo script the presenter can rehearse from.
 - *Files:* `docs/demo_script.md` (the spoken-words script for the 3-minute live demo), `docs/demo_screencast.mp4` (the recorded backup), `docs/demo_dry_run_log.md` (per-run outcomes, latencies, any anomalies — closed out after the third successful run).
 - *Demo script (3-minute beat structure):*
-  - **00:00–00:20 (Setup)** — "Three banks. Eight agent roles, fourteen running instances. A planted structuring ring spanning all three. Each bank sees only their slice." Show the terminal UI initial state with all panes cleared. Mention the dataset is synthetic and calibrated to FinCEN typologies.
+  - **00:00–00:20 (Setup)** - "Three banks. Eight agent roles, fourteen running instances. A planted structuring ring spanning all three. Each bank sees only their slice." Show the judge console initial state with all panes cleared. Mention the dataset is synthetic and calibrated to FinCEN typologies.
   - **00:20–01:00 (Single-bank failure)** — Show Bank Alpha's A1 alert. Show A2 attempting internal investigation. Pause the story: "no cross-bank context; the ring is invisible to Bank Alpha alone." This is the friction the demo addresses.
   - **01:00–02:30 (Federation moment)** — Resume. A2 declares §314(b) suspicion; the AML adapter validates and LT logs; F1 broadcasts; peer banks respond; F2 detects the ring; F3 flags PEP; F4 drafts SAR. Audit panel updates visibly throughout. Call out the LT verdicts and the privacy-budget meter debiting.
   - **02:30–03:00 (Close)** — Final SAR draft visible. One-line market context: "Verafin → Nasdaq $2.75B for the contractual-trust version. We built the technical-trust version." End with partner alignment (Gemini + Veea).
@@ -1230,13 +1262,13 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 In rough priority order, the things that can drop without killing the demo:
 
-1. **P13 (F5 compliance auditor)** → replace with a simpler audit-log dump in the terminal UI
-2. **P12 (F4 SAR drafter)** → pre-draft a SAR for the demo and present it as agent output (annotate the slide)
+1. **P13 (F5 compliance auditor)** -> replace with a simpler audit-log dump in the judge console
+2. **P12 (F4 SAR drafter)** -> pre-draft a SAR for the demo and present it as agent output (annotate the slide)
 3. **S2 / S3 secondary scenarios in P2 data** → already built; cost nothing to keep. If something downstream breaks because of them, narrow the demo to S1 + S4 (the headline + PEP) only
-4. **P18 terminal UI** → fall back to plain stdout printing of the audit stream
-5. **DP scope on P7** → fall back from OpenDP helpers to hand-rolled Gaussian + simple rho-counter if OpenDP integration eats more time than expected. The primitives layer itself stays; only the DP-rigor knob moves.
+4. **Advanced P18 polish** -> keep the basic interactive judge console, but cut replay scrubbing, exports, and the full probe library down to three probes: prompt injection, MITM tamper, and budget exhaustion
+5. **DP scope on P7** -> fall back from OpenDP helpers to hand-rolled Gaussian + simple rho-counter if OpenDP integration eats more time than expected. The primitives layer itself stays; only the DP-rigor knob moves.
 
-Do not cut: A1, A2, A3, F1, F2, F3, the **stats-primitives layer (P7)** (the architecture's structural privacy claim depends on it), the AML policy adapter plus LT overlay (P14), the orchestrator (P15), the canonical flow (P16). These are the demo's spine.
+Do not cut: A1, A2, A3, F1, F2, F3, the **stats-primitives layer (P7)** (the architecture's structural privacy claim depends on it), the AML policy adapter plus LT overlay (P14), the orchestrator/control API (P15), the canonical flow (P16), and the basic interactive judge console (P18). These are the demo's spine.
 
 ---
 

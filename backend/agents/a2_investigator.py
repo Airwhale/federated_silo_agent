@@ -645,5 +645,16 @@ def response_has_corroboration(response: Sec314bResponse) -> bool:
             if value.hash_list:
                 return True
         else:  # pragma: no cover - unreachable under the typed ResponseValue union
-            return True
+            # If a new ResponseValue variant is added to shared.messages
+            # without extending this switch, fail loud rather than silently
+            # treating the unknown value as corroborating. The isinstance
+            # chain above is exhaustive over the current ResponseValue
+            # union; future variants MUST update this function with an
+            # explicit corroboration decision.
+            raise TypeError(
+                "response_has_corroboration switch is not exhaustive: got an "
+                f"unhandled ResponseValue subclass {type(value).__name__!r}. "
+                "Extend the isinstance chain and decide its corroboration "
+                "semantics explicitly."
+            )
     return False

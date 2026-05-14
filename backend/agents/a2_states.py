@@ -134,18 +134,45 @@ class QueryDraft(A2Model):
 
     @model_validator(mode="after")
     def hash_fields_must_match_shape(self) -> QueryDraft:
+        """Enforce that the populated hash field matches the query shape.
+
+        Error messages are deliberately descriptive — LLM-generated drafts
+        are the primary source of validation failures here, and the message
+        is what feeds into `_call_state_with_constraint`'s retry prompt. The
+        retry prompt needs to tell the model exactly what was wrong (which
+        field was missing, which was unexpectedly populated, and a short
+        sample of any offending hashes) so the model can correct course.
+        """
         if self.query_shape == QueryShape.COUNTERPARTY_LINKAGE:
             if not self.counterparty_hashes:
-                raise ValueError("counterparty_linkage requires counterparty_hashes")
+                raise ValueError(
+                    "counterparty_linkage requires non-empty counterparty_hashes "
+                    "(got 0 entries); populate the counterparty_hashes field from "
+                    "the alert's evidence counterparty_hashes"
+                )
             if self.name_hashes:
-                raise ValueError("counterparty_linkage must not include name_hashes")
+                preview = list(self.name_hashes)[:3]
+                raise ValueError(
+                    "counterparty_linkage must not include name_hashes "
+                    f"(got {len(self.name_hashes)} entries, e.g. {preview}); "
+                    "move the tokens into counterparty_hashes if they are real "
+                    "counterparty values, or remove them otherwise"
+                )
             return self
 
         if not self.name_hashes:
-            raise ValueError(f"{self.query_shape.value} requires name_hashes")
-        if self.counterparty_hashes:
             raise ValueError(
-                f"{self.query_shape.value} must not include counterparty_hashes"
+                f"{self.query_shape.value} requires non-empty name_hashes "
+                "(got 0 entries); populate name_hashes from the alert's "
+                "evidence entity_hashes"
+            )
+        if self.counterparty_hashes:
+            preview = list(self.counterparty_hashes)[:3]
+            raise ValueError(
+                f"{self.query_shape.value} must not include counterparty_hashes "
+                f"(got {len(self.counterparty_hashes)} entries, e.g. {preview}); "
+                "use query_shape=counterparty_linkage if you need to query by "
+                "counterparty tokens, otherwise remove them"
             )
         return self
 
