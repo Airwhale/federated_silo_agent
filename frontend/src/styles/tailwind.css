@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Quiet, operational palette. The judge console is a control room, not a marketing
+   page; we lean on a small set of slate + accent colors and dense layouts.
+   Polish (final color tokens, spacing rhythm) lands in P18. */
+
+@theme {
+  --color-accent-live: oklch(0.72 0.16 142);      /* green for status=live */
+  --color-accent-pending: oklch(0.78 0.12 80);    /* amber for pending/simulated */
+  --color-accent-blocked: oklch(0.7 0.16 30);     /* orange-red for blocked */
+  --color-accent-error: oklch(0.65 0.21 25);      /* deeper red for error */
+  --color-accent-notbuilt: oklch(0.55 0.04 260);  /* muted blue-gray for not_built */
+  --color-accent-info: oklch(0.75 0.13 230);      /* sky blue for ACCEPTED/info */
+
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background-color: oklch(0.16 0.01 260);
+}
+
+/* Hide the default focus ring on click but keep it for keyboard nav. */
+:focus:not(:focus-visible) {
+  outline: none;
+}

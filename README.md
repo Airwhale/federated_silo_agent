@@ -66,6 +66,7 @@ User or analyst
 | P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
 | P9 | Done | Deterministic F1 federation coordinator with signed A2 ingress validation, F1 route approvals, peer A3 routing, local-contribution routing, sanctions side requests, signed A3 response aggregation, and up to two bounded retries for negotiable silo refusals. |
 | P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
+| P9b | Done | Vite + React + TypeScript judge console: swimlane topology over five trust-domain instances, polling timeline with trust-domain / instance / layer / status filters, Radix inspector drawer with dedicated panels for signing / envelope / replay / route-approval / DP-ledger / provider-health / audit-chain / LLM-route, per-instance attack lab covering all eight probe kinds, and a system-readiness grid. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
@@ -317,6 +318,29 @@ $env:GEMINI_API_KEY = "<your key>"
 ```
 
 The current shell can also use `OPENROUTER_API_KEY` if the LiteLLM config is switched to the OpenRouter fallback route.
+
+### Run the judge console (P9b)
+
+Two terminals. First, start the P9a control API:
+
+```powershell
+uv run uvicorn backend.ui.server:app --port 8000
+```
+
+Then start the Vite dev server for the console:
+
+```powershell
+./scripts/start_frontend.ps1
+```
+
+The script installs `frontend/node_modules` on first run (Node 20+ required), then serves `http://127.0.0.1:5173`. The frontend reads its API base from `VITE_API_BASE` (default `http://localhost:8000`); override with `./scripts/start_frontend.ps1 -ApiBase http://your-host:8000` to point at a non-local API.
+
+When the backend's `/openapi.json` changes, regenerate the committed TypeScript schema:
+
+```powershell
+cd frontend
+npm run gen:api
+```
 
 ## Verification
 
