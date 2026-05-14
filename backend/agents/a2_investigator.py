@@ -619,7 +619,30 @@ def typology_for_signal(signal_type: SignalType) -> TypologyCode:
 
 
 def response_has_corroboration(response: Sec314bResponse) -> bool:
-    """Return whether a peer response has substantive corroborating signal.
+    """Return whether a peer response has any signal worth running synthesis on.
+
+    Triage gate — NOT a final decision. The semantics are deliberately
+    permissive: return True if the response carries any non-trivial value,
+    return False only on explicit refusal or all-zero/empty fields. The
+    downstream `_run_peer_response_turn` then calls the synthesis LLM to
+    judge whether the signal is actually convincing.
+
+    DP-noise trade-off (acknowledged): P7's `_nonnegative_int` clamps each
+    histogram bucket at 0 before release, so negative noise cannot cancel
+    positive signal. But pure noise on a true-zero histogram can produce a
+    bucket > 0 about 50% of the time, which this function will treat as
+    corroboration and hand off to the LLM. That false-positive is acceptable
+    because:
+      (a) A2 is outside the DP-aware boundary by design; adding a sigma-
+          threshold check here would require A2 to inspect provenance σ,
+          which lives in the synthesis context, not the triage gate.
+      (b) The synthesis LLM call that follows sees per-record σ, ρ, and
+          sensitivity in `Sec314bResponse.provenance` and is responsible
+          for distinguishing noise from signal.
+      (c) The demo's planted ring signal is sized to exceed default σ, so
+          true corroboration is loud enough to survive any reasonable
+          threshold; the noise-only false-positive case is rare and harmless
+          because synthesis will dismiss it.
 
     Uses direct `isinstance` checks against the typed ResponseValue union
     rather than a kind-name lookup; the previous version reimplemented
@@ -639,7 +662,10 @@ def response_has_corroboration(response: Sec314bResponse) -> bool:
             if value.float > 0.0:
                 return True
         elif isinstance(value, HistogramResponseValue):
-            if sum(value.histogram) > 0:
+            # `any(bucket > 0 ...)` expresses "is anything populated?" more
+            # readably than `sum(...) > 0`; same answer for our clamped
+            # non-negative histograms.
+            if any(bucket > 0 for bucket in value.histogram):
                 return True
         elif isinstance(value, HashListResponseValue):
             if value.hash_list:
