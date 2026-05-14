@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import sqlite3
 from collections import Counter
+from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -136,6 +138,8 @@ class BankStatsPrimitives:
         _require_no_dp(rho)
 
         unique_hashes = sorted(set(name_hashes))
+        # Hash list is capped at MAX_HASH_LIST_LENGTH=100 by _require_non_empty
+        # above, well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER (default 999).
         placeholders = ",".join("?" for _ in unique_hashes)
         query = f"""
             SELECT COUNT(DISTINCT name_hash)
@@ -330,6 +334,8 @@ class BankStatsPrimitives:
         parsed_window = DateWindow.coerce(window)
         requested = sorted(set(counterparty_hashes))
         start, end = parsed_window.sqlite_bounds()
+        # Hash list is capped at MAX_HASH_LIST_LENGTH=100 by _require_non_empty
+        # above, well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER (default 999).
         placeholders = ",".join("?" for _ in requested)
         query = f"""
             SELECT DISTINCT counterparty_account_id_hashed
@@ -497,6 +503,9 @@ class BankStatsPrimitives:
         max_transactions: int,
     ) -> list[float]:
         start, end = window.sqlite_bounds()
+        # name_hashes is capped at MAX_HASH_LIST_LENGTH=100 upstream by
+        # flow_histogram's _require_non_empty call, well under SQLite's
+        # SQLITE_LIMIT_VARIABLE_NUMBER (default 999).
         placeholders = ",".join("?" for _ in name_hashes)
         query = f"""
             SELECT t.amount
@@ -561,12 +570,26 @@ class BankStatsPrimitives:
             returned_value_kind=returned_value_kind,
         )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextlib.contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Open the bank database, yield it, and ALWAYS close it on exit.
+
+        Python's `sqlite3.Connection.__exit__` only commits or rolls back
+        the implicit transaction — it does NOT close the connection. Using
+        the raw connection as a context manager would leak a file
+        descriptor on every primitive call. Wrapping the connection in our
+        own `@contextmanager` with a `finally: con.close()` block makes the
+        close deterministic and matches the lifecycle that long-running
+        A3 processes need.
+        """
         if not self.db_path.exists():
             raise FileNotFoundError(f"bank database does not exist: {self.db_path}")
         con = sqlite3.connect(self.db_path)
-        con.row_factory = sqlite3.Row
-        return con
+        try:
+            con.row_factory = sqlite3.Row
+            yield con
+        finally:
+            con.close()
 
 
 def _budget_refusal() -> PrimitiveResult:

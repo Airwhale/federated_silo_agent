@@ -176,6 +176,50 @@ def test_budget_exhaustion_returns_structural_refusal() -> None:
     assert result.refusal_reason == REFUSAL_BUDGET_EXHAUSTED
 
 
+def test_primitive_call_closes_database_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each primitive call must close its SQLite connection on exit.
+
+    Python's `sqlite3.Connection.__exit__` only commits/rolls back the
+    implicit transaction — it does NOT close the connection. A naive
+    `with self._connect() as con:` would leak a file descriptor on every
+    primitive call. P7 wraps `_connect` in `@contextlib.contextmanager`
+    with `finally: con.close()` so closure is deterministic.
+    """
+    close_count = [0]
+
+    class TrackingConnection(sqlite3.Connection):
+        def close(self) -> None:  # type: ignore[override]
+            close_count[0] += 1
+            super().close()
+
+    real_connect = sqlite3.connect
+
+    def tracking_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        kwargs["factory"] = TrackingConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+
+    layer = primitive_layer()
+    name_hash, _signal_type = sample_name_hash_with_signal()
+
+    layer.count_entities_by_name_hash(
+        name_hashes=[name_hash],
+        requester=requester(),
+    )
+    layer.alert_count_for_entity(
+        name_hash=name_hash,
+        window=FULL_WINDOW,
+        requester=requester(),
+        rho=0.02,
+    )
+
+    # Both primitive calls opened a connection and must have closed it.
+    assert close_count[0] == 2
+
+
 def test_hash_list_inputs_capped_at_runtime_layer() -> None:
     """Hash-list primitives refuse oversize inputs before issuing SQL.
 
