@@ -186,7 +186,11 @@ class BankStatsPrimitives:
             WHERE name_hash IN ({placeholders})
         """
         with self._connect() as con:
-            value = int(con.execute(query, unique_hashes).fetchone()[0])
+            row = con.execute(query, unique_hashes).fetchone()
+        # SQLite's COUNT aggregate always returns exactly one row, so `row`
+        # cannot be None in practice. The guard is defensive against future
+        # refactors of this primitive into a non-aggregate query shape.
+        value = int(row[0]) if row else 0
 
         return PrimitiveResult(
             value=value,
@@ -241,7 +245,11 @@ class BankStatsPrimitives:
               {signal_filter}
         """
         with self._connect() as con:
-            true_value = int(con.execute(query, params).fetchone()[0])
+            row = con.execute(query, params).fetchone()
+        # SQLite's COUNT aggregate always returns exactly one row, so `row`
+        # cannot be None in practice. The guard is defensive against future
+        # refactors of this primitive into a non-aggregate query shape.
+        true_value = int(row[0]) if row else 0
 
         # Commit the debit BEFORE drawing noise so audit-replay is deterministic:
         # every committed debit corresponds to exactly one RNG advance. If we
