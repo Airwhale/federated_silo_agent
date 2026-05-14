@@ -65,6 +65,7 @@ User or analyst
 | P8 | Done | A2 outside-TEE investigator agent with typed query drafting, peer-response synthesis, and routing guardrails. |
 | P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
 | P9 | Done | Deterministic F1 federation coordinator with signed A2 ingress validation, F1 route approvals, peer A3 routing, local-contribution routing, sanctions side requests, signed A3 response aggregation, and up to two bounded retries for negotiable silo refusals. |
+| P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
@@ -180,7 +181,11 @@ Five paths matter:
 
 DP is intentionally scoped. It is useful for aggregate counts and flow histograms. It is not the right tool for binary entity-presence queries, where noise would destroy the signal; those rely on hash linkage and audit controls. Flow histograms default to fixed-bucket `parallel_disjoint` accounting, where each transaction lands in exactly one bucket and the ledger pays the max bucket rho. The primitives also expose a conservative `serial` mode that splits the same ledger rho across buckets and records the selected mode in provenance.
 
+Histogram provenance is display-sensitive. `rho_debited` and `eps_delta_display` describe the full released histogram. `per_bucket_rho` and `sigma_applied` describe the per-bucket Gaussian draw. In `serial` mode, the UI should show both the total release budget and the smaller per-bucket rho so auditors do not confuse release-level epsilon with bucket-level epsilon.
+
 The UI-facing state panels are planned as observability only. They should report already-made decisions such as "signature verified", "nonce fresh", "rho remaining", or "route approval matched"; they must not become a second path for approving routes, changing budgets, or bypassing A3's silo-side checks.
+
+The demo control API is split into two planes. The **observability plane** returns typed, redacted snapshots for node readiness, envelope verification, route approvals, replay state, DP ledger rows, provider health, primitive provenance, and audit state. The **probe plane** lets judges attack a node by submitting controlled adversarial inputs such as unsigned messages, body tampering, wrong-role senders, replayed nonces, route mismatches, prompt injection, unsupported query shapes, or budget exhaustion. Probe traffic must enter through the same signed-envelope, allowlist, replay, route-approval, Lobster Trap, A3, and P7 gates as ordinary traffic; the API must not expose privileged endpoints that directly mark a signature valid, approve a route, debit budget, or skip policy.
 
 ## Security Envelope
 

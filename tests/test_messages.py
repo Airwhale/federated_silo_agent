@@ -715,6 +715,19 @@ def test_sar_draft_complete_requires_mandatory_fields() -> None:
         )
 
 
+def test_sar_draft_amount_range_error_names_expected_order() -> None:
+    with pytest.raises(ValidationError, match="less than or equal to upper bound"):
+        SARDraft(
+            **message_header(
+                sender_agent_id="federation.F4",
+                sender_role=AgentRole.F4,
+                sender_bank_id=BankId.FEDERATION,
+                recipient_agent_id="orchestrator",
+            ),
+            suspicious_amount_range=(20_000, 10_000),
+        )
+
+
 def test_audit_event_kind_must_match_payload_kind() -> None:
     with pytest.raises(ValidationError):
         AuditEvent(

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "cryptography>=46.0.3",
     "duckdb>=1.5.2",
+    "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "litellm[proxy]>=1.75",
     "numpy>=2.4.4",
@@ -20,6 +21,7 @@ dependencies = [
     "sqlite-utils>=3.39",
     "tqdm>=4.67.3",
     "typer>=0.16",
+    "uvicorn>=0.46.0",
 ]
 
 [dependency-groups]
