@@ -291,6 +291,35 @@ def test_concurrent_create_session_survives_threadpool() -> None:
     assert len(service._sessions) == MAX_ACTIVE_SESSIONS
 
 
+def test_provider_health_paths_are_repo_anchored(tmp_path, monkeypatch) -> None:
+    # provider_health() reads `infra/lobstertrap` and `infra/litellm_config.yaml`
+    # to report configuration presence. Anchor must be repo-relative
+    # so a server started from any working directory still reports
+    # the configured infra correctly.
+    monkeypatch.chdir(tmp_path)
+    test_client = client()
+
+    response = test_client.get("/system")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["provider_health"]["lobster_trap_configured"] is True
+    assert body["provider_health"]["litellm_configured"] is True
+
+
+def test_long_exception_detail_does_not_500_envelope_validation() -> None:
+    # ShortText's cap (2048) covers exception messages so the envelope
+    # validator never bubbles up a 500 from `_envelope_snapshot(detail=str(exc))`.
+    # Simulate by setting a long detail directly on a snapshot.
+    from backend.ui.snapshots import EnvelopeVerificationSnapshot, SnapshotStatus
+
+    EnvelopeVerificationSnapshot(
+        status=SnapshotStatus.LIVE,
+        detail="x" * 2048,
+        signature_status="invalid",
+    )
+
+
 def test_concurrent_probes_against_one_session_stay_consistent() -> None:
     # Multiple probes hitting the same session via the threadpool must
     # land an event for every call without partial state being visible

@@ -13,7 +13,13 @@ from shared.enums import BankId, RouteKind
 
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+# `ShortText` is the detail-text type for most snapshot fields. The cap is
+# generous (2048) because several callers assign exception messages
+# directly (e.g. `_envelope_snapshot(detail=str(exc))`), and a downstream
+# security or transport library could produce a long error string. Static
+# labels stay well under the cap; a 500-from-validation on an unusually
+# long error string would mask the underlying failure mode.
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
 ProbePayloadText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),

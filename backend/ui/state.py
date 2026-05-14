@@ -155,6 +155,9 @@ class DemoSessionRuntime:
 
 MAX_ACTIVE_SESSIONS = 50
 
+# backend/ui/state.py → backend/ui/ → backend/ → repo root
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 class DemoControlService:
     """Session registry plus controlled probe harness for the P9a API.
@@ -372,7 +375,11 @@ class DemoControlService:
         )
 
     def provider_health(self) -> ProviderHealthSnapshot:
-        infra_root = Path("infra")
+        # Anchor the infra path on this file rather than the current
+        # working directory so the same code reports correctly whether
+        # the server is started from the repo root, a container WORKDIR,
+        # or a Cloud Run / unit-test temp dir.
+        infra_root = _REPO_ROOT / "infra"
         return ProviderHealthSnapshot(
             status=SnapshotStatus.PENDING,
             lobster_trap_configured=(infra_root / "lobstertrap").exists(),
@@ -433,7 +440,10 @@ class DemoControlService:
                 reason="Unsigned message was rejected before F1 route planning.",
                 envelope=envelope,
             )
-        raise AssertionError("unsigned probe unexpectedly passed")
+        return _unexpected_acceptance(
+            request,
+            reason="Unsigned message was unexpectedly accepted; signature gate did not refuse.",
+        )
 
     def _body_tamper_probe(
         self,
@@ -462,7 +472,10 @@ class DemoControlService:
                 reason="Body was modified after signing; canonical body hash failed.",
                 envelope=envelope,
             )
-        raise AssertionError("body tamper probe unexpectedly passed")
+        return _unexpected_acceptance(
+            request,
+            reason="Tampered body was unexpectedly accepted; body-hash gate did not refuse.",
+        )
 
     def _wrong_role_probe(
         self,
@@ -499,7 +512,10 @@ class DemoControlService:
                 reason="A3 signing key claimed an F1 sender role and was denied.",
                 envelope=envelope,
             )
-        raise AssertionError("wrong-role probe unexpectedly passed")
+        return _unexpected_acceptance(
+            request,
+            reason="Wrong-role sender was unexpectedly accepted; allowlist gate did not refuse.",
+        )
 
     def _replay_probe(
         self,
@@ -528,7 +544,11 @@ class DemoControlService:
                 envelope=envelope,
                 replay=session.replay_cache.to_snapshot(),
             )
-        raise AssertionError("replay probe unexpectedly passed")
+        return _unexpected_acceptance(
+            request,
+            reason="Replayed nonce was unexpectedly accepted; replay-cache gate did not refuse.",
+            replay=session.replay_cache.to_snapshot(),
+        )
 
     def _route_mismatch_probe(
         self,
@@ -551,7 +571,17 @@ class DemoControlService:
             raise AssertionError("route mismatch probe did not change approved body hash")
         response = self._beta_a3(session).run(A3TurnInput(request=tampered))
         if response.refusal_reason != "route_violation":
-            raise AssertionError("route mismatch probe did not reach A3 route validation")
+            # A3 accepted a body that no longer matches the signed route
+            # approval — surface as a structured probe-accepted result so
+            # the judge console sees the breach instead of a 500.
+            return _unexpected_acceptance(
+                request,
+                reason=(
+                    "Tampered routed query was unexpectedly accepted; "
+                    f"A3 returned refusal_reason={response.refusal_reason!r} "
+                    "instead of route_violation."
+                ),
+            )
         envelope = _envelope_snapshot(
             tampered,
             status=SnapshotStatus.LIVE,
@@ -832,6 +862,34 @@ def _envelope_snapshot(
         freshness_status=freshness_status,
         blocked_by=blocked_by,
         detail=detail,
+    )
+
+
+def _unexpected_acceptance(
+    request: ProbeRequest,
+    *,
+    reason: str,
+    envelope: EnvelopeVerificationSnapshot | None = None,
+    replay: ReplayCacheSnapshot | None = None,
+    route_approval: RouteApprovalSnapshot | None = None,
+) -> ProbeResult:
+    """Build the structured "probe attack succeeded" outcome.
+
+    If a security layer that should have refused a probe instead let
+    it through, that is a real security event in the demo context,
+    not an API error. The judge console renders this as
+    ``accepted=True``/``status=ERROR`` so the breach is a first-class
+    timeline entry. Test assertions on `accepted is False` still
+    catch the regression loudly without depending on a 500.
+    """
+    return _probe_result(
+        request,
+        accepted=True,
+        blocked_by=SecurityLayer.ACCEPTED,
+        reason=reason,
+        envelope=envelope,
+        replay=replay,
+        route_approval=route_approval,
     )
 
 
