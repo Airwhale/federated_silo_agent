@@ -268,3 +268,24 @@ def test_session_dict_is_bounded_by_fifo_eviction() -> None:
         assert evicted not in service._sessions
     for retained in created_ids[-MAX_ACTIVE_SESSIONS:]:
         assert retained in service._sessions
+
+
+def test_concurrent_create_session_survives_threadpool() -> None:
+    # FastAPI runs sync endpoints in a threadpool. Two callers racing
+    # the FIFO eviction must not surface KeyError or RuntimeError
+    # ("dictionary changed size during iteration"). The result must
+    # contain exactly MAX_ACTIVE_SESSIONS distinct ids.
+    from concurrent.futures import ThreadPoolExecutor
+
+    service = DemoControlService()
+    total = MAX_ACTIVE_SESSIONS * 3
+
+    def create_one() -> UUID:
+        return service.create_session(SessionCreateRequest()).session_id
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        ids = list(pool.map(lambda _: create_one(), range(total)))
+
+    assert len(ids) == total
+    assert len(set(ids)) == total  # every session got a unique uuid
+    assert len(service._sessions) == MAX_ACTIVE_SESSIONS

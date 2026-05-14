@@ -7,8 +7,9 @@ own privileged mutators such as "approve route" or "mark signature valid".
 
 from __future__ import annotations
 
-import os
 import hashlib
+import os
+import threading
 from datetime import timedelta
 from pathlib import Path
 from typing import Literal
@@ -150,6 +151,14 @@ class DemoControlService:
     so a long-running demo or automated probe sweep cannot grow the dict
     without bound. P15 will replace this with the real orchestrator
     session store, which owns persistence and TTLs.
+
+    Thread-safe: FastAPI runs synchronous endpoints in a threadpool, so
+    concurrent ``POST /sessions`` calls could race the FIFO eviction
+    (two callers passing the size check, then either colliding on
+    ``del self._sessions[oldest_id]`` with a ``KeyError`` or mutating
+    the dict mid-iteration). ``_sessions_lock`` serializes the
+    read-modify-write in ``create_session`` and the dict lookup in
+    ``_session``. Same pattern as ``PrivacyBudgetLedger``.
     """
 
     def __init__(self) -> None:
@@ -158,13 +167,15 @@ class DemoControlService:
         # Python dicts preserve insertion order since 3.7, which gives us
         # FIFO eviction for free without pulling in collections.OrderedDict.
         self._sessions: dict[UUID, DemoSessionRuntime] = {}
+        self._sessions_lock = threading.Lock()
 
     def create_session(self, request: SessionCreateRequest) -> SessionSnapshot:
         session = DemoSessionRuntime(request)
-        while len(self._sessions) >= MAX_ACTIVE_SESSIONS:
-            oldest_id = next(iter(self._sessions))
-            del self._sessions[oldest_id]
-        self._sessions[session.session_id] = session
+        with self._sessions_lock:
+            while len(self._sessions) >= MAX_ACTIVE_SESSIONS:
+                oldest_id = next(iter(self._sessions))
+                del self._sessions[oldest_id]
+            self._sessions[session.session_id] = session
         return session.to_snapshot(self.component_readiness())
 
     def get_session(self, session_id: UUID) -> SessionSnapshot:
@@ -630,10 +641,13 @@ class DemoControlService:
         )
 
     def _session(self, session_id: UUID) -> DemoSessionRuntime:
-        try:
-            return self._sessions[session_id]
-        except KeyError as exc:
-            raise KeyError(f"unknown session_id: {session_id}") from exc
+        # Lock the lookup so a concurrent eviction can never surface
+        # a transient KeyError for a still-valid session_id.
+        with self._sessions_lock:
+            try:
+                return self._sessions[session_id]
+            except KeyError as exc:
+                raise KeyError(f"unknown session_id: {session_id}") from exc
 
 
 def _build_demo_principals() -> dict[str, DemoPrincipal]:
