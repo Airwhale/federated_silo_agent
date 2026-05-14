@@ -92,7 +92,7 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
         principal_allowlist: PrincipalAllowlist,
         private_key: str,
         signing_key_id: str,
-        replay_cache: ReplayCache | None = None,
+        replay_cache: ReplayCache,
         llm: LLMClient | None = None,
         audit: AuditEmitter | None = None,
     ) -> None:
@@ -104,8 +104,9 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
           across all turns. The `replay_cache` and `principal_allowlist`
           fields are stateful and must be shared between the routing turn
           (which burns the A2 query's nonce) and any later aggregation turn
-          (which burns each A3 response's nonce). A per-turn agent would
-          construct a fresh `ReplayCache()` and lose replay protection.
+          (which burns each A3 response's nonce). `replay_cache` is therefore
+          required — a defaulted `ReplayCache()` would silently lose replay
+          protection on any caller that constructed a fresh agent per turn.
         - `principal_allowlist` is the runtime trust registry; reloading it
           mid-session would invalidate in-flight signed envelopes.
         - `private_key` / `signing_key_id` must match an allowlisted F1
@@ -117,7 +118,7 @@ class F1CoordinatorAgent(Agent[F1TurnInput, F1TurnResult]):
         self.principal_allowlist = principal_allowlist
         self.private_key = private_key
         self.signing_key_id = signing_key_id
-        self.replay_cache = replay_cache or ReplayCache()
+        self.replay_cache = replay_cache
         super().__init__(runtime=runtime, llm=llm, audit=audit)
 
     def run(self, input_data: F1TurnInput | object) -> F1TurnResult:
@@ -962,19 +963,17 @@ def _local_request_as_query(request: LocalSiloContributionRequest) -> Sec314bQue
         query_id=request.source_query_id,
         requesting_investigator_id=request.requesting_investigator_id,
         requesting_bank_id=request.requesting_bank_id,
-        # Iterate the BankId enum rather than a hardcoded peer list so a future
-        # peer-bank addition is picked up automatically; FEDERATION is excluded
-        # because it is the federation runtime, not a peer bank. Note: if a
-        # future BankId variant ever represents a non-peer role (e.g. a
-        # regulator or auditor), an explicit `is_peer_bank` predicate should
-        # be added here. Today this carrier is only used by the
-        # local-contribution retry path, which routes by
+        # Filter via `BankId.is_peer_bank` so any future non-peer variant
+        # (regulator, auditor, sandbox) is excluded by definition rather than
+        # by accident. Today this carrier is only used by the local-
+        # contribution retry path, which routes by
         # `responding_bank_id == requesting_bank_id`, so the synthesized
-        # `target_bank_ids` is never actually dispatched to peers.
+        # `target_bank_ids` is never actually dispatched to peers — but
+        # keeping the predicate semantic-explicit prevents future drift.
         target_bank_ids=[
             bank_id
             for bank_id in BankId
-            if bank_id != BankId.FEDERATION and bank_id != request.requesting_bank_id
+            if bank_id.is_peer_bank and bank_id != request.requesting_bank_id
         ],
         query_shape=request.query_shape,
         query_payload=request.query_payload,
