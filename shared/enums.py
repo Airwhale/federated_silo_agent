@@ -10,6 +10,7 @@ class AgentRole(StrEnum):
 
     A1 = "A1"
     A2 = "A2"
+    A3 = "A3"
     F1 = "F1"
     F2 = "F2"
     F3 = "F3"

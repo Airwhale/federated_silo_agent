@@ -230,9 +230,23 @@ The demo is a 3-minute four-beat run:
    └──────────────┘ └──────────────┘ └──────────────┘
 ```
 
+The diagram above is logical. For the cloud demo, do not read the single Lobster Trap/LiteLLM box as a shared central gateway. The deployment model below is the target: each trust domain owns its own policy, LLM-egress, signature, replay, and audit-forwarding stack.
+
+Demo deployment topology, with explicit silos:
+
+| Trust domain / node | Runs locally in that node | Does not run there |
+|---|---|---|
+| Bank Alpha silo node | `A3-alpha`, P7 stats primitives, `bank_alpha.db`, local Lobster Trap, local LiteLLM, local AML policy adapter, envelope signer/verifier, replay cache, audit forwarder | `F1-F5`, peer-bank data, outside-bank A2 |
+| Bank Beta silo node | `A3-beta`, P7 stats primitives, `bank_beta.db`, local Lobster Trap, local LiteLLM, local AML policy adapter, envelope signer/verifier, replay cache, audit forwarder | `F1-F5`, peer-bank data, outside-bank A2 |
+| Bank Gamma silo node | `A3-gamma`, P7 stats primitives, `bank_gamma.db`, local Lobster Trap, local LiteLLM, local AML policy adapter, envelope signer/verifier, replay cache, audit forwarder | `F1-F5`, peer-bank data, outside-bank A2 |
+| Investigator nodes | One A2 per participating bank, local Lobster Trap, local LiteLLM, local AML policy adapter, envelope signer/verifier, replay cache | P7, raw bank databases, peer A3 responders |
+| Federation node | F1-F5, federation Lobster Trap, federation LiteLLM, federation AML policy adapter, route-approval signer, aggregate audit stream, replay cache | Bank-local raw databases, P7 direct DB handles |
+
+F1 is separate from every bank silo. It can be co-deployed with F2-F5 in the federation trust domain, but it is not part of any bank's silo stack. Each silo owns its own policy, LLM-egress, signature, replay, and data-access controls; F1 approval is necessary for a silo query, but A3 still independently decides whether the silo can answer.
+
 Three wire paths inside each bank:
 
-- **LLM wire path:** `agent → Lobster Trap (port 8080) → LiteLLM (port 4000) → Gemini API`. All agent roles share this path; each running instance is identified by an agent_id and role in the LT request metadata.
+- **Per-domain LLM wire path:** `agent → local Lobster Trap → local LiteLLM → Gemini API`. Each trust domain has its own LT/LiteLLM stack; each running instance is identified by an agent_id and role in the LT request metadata.
 - **Local monitoring data path:** `A1 → SQLite`. A1 reads local signals only to raise alerts for its own bank.
 - **Cross-bank response data path:** `A3 → stats-primitives layer → SQLite`. Deterministic, non-LLM, raw-SQL inside the bank trusted boundary. The stats layer is the only component allowed to read raw transactions in service of a cross-bank response; A2 has no DB or P7 handle. Every cross-bank-response numeric value in a `Sec314bResponse` traces to a primitive call with a recorded privacy-budget debit (zero for non-DP primitives).
 
@@ -263,9 +277,35 @@ Every cross-boundary message is also assumed to need the security envelope from 
 There are **8 agent roles** and **14 running instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. All roles are Gemini-backed LLM agents that reason about their inputs and decide what to output. Each agent's reasoning is wrapped in deterministic rule checks of two kinds:
 
 - **Rule constraints** — hard checks that the LLM cannot override. If a constraint is violated, the agent refuses; the LLM doesn't get to argue.
-- **Rule bypasses** — hard checks that override the LLM. Certain conditions force a specific output regardless of what the LLM would have said. (E.g., a transaction ≥ $10K MUST emit a CTR alert; that's federal law, not a judgment call.)
+- **Rule bypasses** — hard checks that override the LLM. Certain conditions force a specific output regardless of what the LLM would have said. The catalog below is the source of truth for trigger and action semantics.
 
 This pattern mirrors how real bank investigators work: they exercise professional judgment, constrained by hard compliance rules, and occasionally overridden by mandatory reporting requirements. Encoding the same shape in the agent runtime gives the demo two valuable properties: (1) the LLMs have real agency on the gray-area decisions, (2) the demo is robust to LLM drift on the black-and-white ones.
+
+#### Bypass rule catalog
+
+These are the canonical bypass rules. Agent and phase sections below reference these IDs instead of restating the trigger logic. Do not define bypass triggers or forced outputs anywhere else in the plan.
+
+| Rule ID | Agent | Trigger | Forced output or action | Build phase | Expected tests |
+|---|---|---|---|---|---|
+| A1-B1 | A1 | Transaction amount `>= 10000` | Emit a `Currency Transaction Report` alert to local A2 | P6 | `tests/test_a1.py` |
+| A1-B2 | A1 | Counterparty hash matches a known SDN entry | Emit a `Sanctions Match` alert to local A2 | P6 | `tests/test_a1.py` |
+| A1-B3 | A1 | At least 10 near-CTR transactions on one account within 24 hours | Emit a high-severity `Velocity Spike` alert to local A2 | P6 | `tests/test_a1.py` |
+| A2-B1 | A2 | At least 3 correlated alerts on the same `name_hash` within 30 days | Send a `Sec314bQuery` to F1 | P8 | `tests/test_a2.py` |
+| A2-B2 | A2 | Alert is tied to a known SDN match | Escalate to SAR or sanctions-screening path, depending on available evidence | P8 | `tests/test_a2.py` |
+| A3-B1 | A3 | Missing or invalid `PurposeDeclaration` | Return a deterministic refusal before any P7 primitive or Gemini call | P8a | `tests/test_a3.py` |
+| A3-B2 | A3 | Invalid signature, expired envelope, replayed nonce, missing route approval, or mismatched route approval | Return a deterministic security/routing refusal before any P7 primitive or Gemini call | P8a, P14 | `tests/test_a3.py`, `tests/test_aml_policy.py` |
+| A3-B3 | A3 | P7 privacy budget is exhausted | Return `Sec314bResponse` with `refusal_reason="budget_exhausted"`, empty fields, and empty provenance; skip Gemini | P8a, P7 | `tests/test_a3.py`, `tests/test_budget.py` |
+| F1-B1 | F1 | Missing or empty `PurposeDeclaration.suspicion_rationale` | Refuse the query before any LLM call | P9 | `tests/test_f1.py` |
+| F1-B2 | F1 | Requester quota exceeded, such as more than 20 queries in 1 hour | Escalate to F5 for compliance review | P9, P14 | `tests/test_f1.py`, `tests/test_aml_policy.py` |
+| F1-B3 | F1 | Query references a known SDN entity hash | Route through F3 in parallel | P9 | `tests/test_f1.py` |
+| F2-B1 | F2 | Closed cycle with at least 3 entity hashes spanning at least 3 banks with elevated edge counts | Return `pattern_class="structuring_ring"` with `confidence >= 0.85` | P11 | `tests/test_f2.py` |
+| F2-B2 | F2 | Fee-shaped layering chain with at least 4 hops and 2 to 5 percent attenuation per hop | Return `pattern_class="layering_chain"` with `confidence >= 0.85` | P11 | `tests/test_f2.py` |
+| F3-B1 | F3 | Exact `name_hash` equality with an SDN entry | Set `sdn_match=True` | P10 | `tests/test_f3.py` |
+| F3-B2 | F3 | Exact `name_hash` equality with the S1-D PEP entity | Set `pep_relation=True` | P10 | `tests/test_f3.py` |
+| F4-B1 | F4 | Any contributor evidence references an SDN sanctions match or PEP relation | Set `sar_priority="high"` | P12 | `tests/test_f4.py` |
+| F4-B2 | F4 | Input is missing data needed for a mandatory SAR field | Emit `SARContributionRequest` instead of an incomplete `SARDraft` | P12 | `tests/test_f4.py` |
+| F5-B1 | F5 | More than 10 `Sec314bQuery` events from one investigator in 60 minutes | Emit a `rate_limit` `AuditEvent` | P13 | `tests/test_f5.py` |
+| F5-B2 | F5 | `PurposeDeclaration.suspicion_rationale` lacks ML/TF keywords | Emit a `human_review` `AuditEvent` | P13 | `tests/test_f5.py` |
 
 #### Bank-local and silo-boundary agents (×3 banks)
 
@@ -278,11 +318,8 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Rule constraints (LLM cannot override):**
   - Cannot emit any message addressed to anything other than local A2 (cross-bank channels are LT-blocked for A1 role)
   - Cannot modify transaction or signal data
-  - Cannot suppress a signal that meets a hard-required criterion (see bypasses)
-- **Rule bypasses (override LLM):**
-  - Transaction amount ≥ $10,000 → MUST emit a `Currency Transaction Report` alert (federal law; LLM cannot dismiss)
-  - Counterparty hash matches a known SDN entry → MUST emit a `Sanctions Match` alert
-  - Velocity spike (e.g., 10+ near-CTR transactions on one account within 24h) → MUST emit a high-severity alert
+  - Cannot suppress a signal that meets a hard-required criterion (`A1-B1` through `A1-B3`)
+- **Rule bypasses:** `A1-B1` through `A1-B3` in the bypass rule catalog.
 
 **Agent A2: Investigator agent** (one per bank, identical role; outside TEE; the protagonist)
 
@@ -296,9 +333,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
   - Cannot escalate to SAR without a peer-bank corroborating signal (rule prevents single-bank speculation from becoming a SAR)
   - Cannot answer incoming peer `Sec314bQuery` messages; the policy adapter routes those only to local A3
   - Cannot call P7 or read raw transactions directly
-- **Rule bypasses (override LLM):**
-  - 3+ correlated alerts on the same `name_hash` within 30 days → MUST send `Sec314bQuery` regardless of LLM judgment
-  - Alert tied to a known SDN match → MUST escalate to SAR
+- **Rule bypasses:** `A2-B1` and `A2-B2` in the bypass rule catalog.
 
 **Agent A3: Silo responder agent** (one per bank, identical role; inside the bank trusted/TEE boundary)
 
@@ -310,11 +345,9 @@ This pattern mirrors how real bank investigators work: they exercise professiona
   - Cannot include customer names in outbound `Sec314bResponse`.
   - Cannot answer a query unless the purpose declaration is present and was approved by F1.
   - Every numeric/list value in `Sec314bResponse.fields` must trace to a stats-primitives call.
-  - When the per-(investigator, requesting-bank, responding-bank) rho budget is exhausted, A3 returns `Sec314bResponse { refusal_reason: "budget_exhausted", fields: {}, provenance: [] }`.
+  - Budget exhaustion behavior is handled by `A3-B3`; A3 cannot retry around it.
   - Cannot send messages to A2, A1, other banks, or F-agents other than F1.
-- **Rule bypasses (override LLM):**
-  - Missing or invalid `PurposeDeclaration` → MUST refuse before any primitive call.
-  - P7 budget exhaustion → MUST return the deterministic refusal and skip the Gemini call.
+- **Rule bypasses:** `A3-B1` through `A3-B3` in the bypass rule catalog.
 
 #### Federation-layer agents (in assumed TEE)
 
@@ -326,9 +359,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
   - Cannot retain customer identifiers between queries (stateless by orchestrator design; adapter rejects identifier-bearing payloads)
   - Cannot forward a query without a valid `Sec314bQuery.purpose` field
   - Cannot send the same query body to peers that contains customer-name strings (AML adapter redacts at the channel)
-- **Rule bypasses (override LLM):**
-  - Quota exceeded (e.g., 20+ queries from one investigator in 1 hour) → MUST escalate to F5 for compliance review
-  - Query references a known SDN entity → MUST also route through F3 in parallel
+- **Rule bypasses:** `F1-B1` through `F1-B3` in the bypass rule catalog.
 
 **Agent F2: Graph-analysis agent**
 
@@ -337,9 +368,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Rule constraints (LLM cannot override):**
   - Cannot see raw transactions (input is DP-noised aggregates only; F2 has no DB handle)
   - Cannot output individual-customer identifiers (output schema restricts to entity-hash IDs)
-- **Rule bypasses (override LLM):**
-  - Closed cycle with ≥3 entities spanning ≥3 banks → MUST surface as high-confidence structuring ring (regardless of LLM uncertainty)
-  - Loop in transfer graph with ≥4 hops and per-hop fees ≈ 2–5% → MUST surface as high-confidence layering
+- **Rule bypasses:** `F2-B1` and `F2-B2` in the bypass rule catalog.
 
 **Agent F3: Sanctions / PEP screening agent**
 
@@ -348,9 +377,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Rule constraints (LLM cannot override):**
   - Cannot return list contents (output is binary + relation type only)
   - Cannot retain queried entity hashes between requests
-- **Rule bypasses (override LLM):**
-  - Exact hash equality with SDN entry → MUST flag as match regardless of LLM judgment
-  - Hash equality with planted PEP entity → MUST flag as PEP-related
+- **Rule bypasses:** `F3-B1` and `F3-B2` in the bypass rule catalog.
 
 **Agent F4: SAR drafter agent**
 
@@ -360,9 +387,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
   - Must include `purpose_declaration` field linking back to §314(b) authority
   - Must include per-bank attribution for each piece of evidence
   - Cannot include customer-name strings (AML adapter redacts; uses `name_hash` references instead)
-- **Rule bypasses (override LLM):**
-  - Mandatory SAR fields (filing-institution, filing-date, suspicious-amount-range, typology-code) MUST be populated — LLM can word them but cannot omit them
-  - If any contributor included a sanctions match → MUST set `sar_priority = high` regardless of LLM judgment
+- **Rule bypasses:** `F4-B1` and `F4-B2` in the bypass rule catalog.
 
 **Agent F5: Compliance auditor agent**
 
@@ -371,9 +396,7 @@ This pattern mirrors how real bank investigators work: they exercise professiona
 - **Rule constraints (LLM cannot override):**
   - Read-only on the audit stream (cannot block or modify agent behavior)
   - Cannot suppress audit events from being logged
-- **Rule bypasses (override LLM):**
-  - Single `Sec314bQuery` with a purpose declaration that doesn't reference suspected ML/TF activity → MUST emit `HUMAN_REVIEW` annotation regardless of LLM judgment
-  - >10 §314(b) queries from one investigator in 60 minutes → MUST emit rate-limit warning
+- **Rule bypasses:** `F5-B1` and `F5-B2` in the bypass rule catalog.
 
 ### 8.4 Threat model
 
@@ -493,14 +516,14 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer and shared message schemas are complete, with a schema follow-up needed for the A3 role and the signed security envelope introduced by the TEE/MITM separation.
+The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, and base agent runtime are complete, with a schema follow-up still needed for signed security-envelope fields, `RouteApproval`, and the audit hash-chain introduced by the TEE/MITM separation.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
 - **P2** Bank data layer + planted scenarios ✓
 - **P3** Bank data validation + checksum test ✓
 - **P4** Shared message schemas ✓
-- **P5** Agent runtime base class →
+- **P5** Agent runtime base class ✓
 - **P6** A1 transaction-monitoring agent ·
 - **P7** Bank-local stats-primitives layer + DP ·
 - **P8** A2 investigator agent ·
@@ -522,7 +545,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 
 ---
 
-### Done parts (P0–P4)
+### Done parts (P0–P5)
 
 **P0 — Repo scaffold + proxy chain smoke** ✓
 
@@ -623,8 +646,12 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P5 — Agent runtime base class**
 
-- *Goal:* A single `Agent` base class that encapsulates the LLM call + the rule-constraint check + the rule-bypass check pattern that every agent follows. Centralizes Gemini calling, retry logic, audit emission, structured-output parsing, and constraint/bypass plumbing so every concrete agent just declares its prompt + schema + rules.
-- *Files:* `backend/__init__.py`, `backend/agents/__init__.py`, `backend/agents/base.py`, `backend/agents/llm_client.py` (thin wrapper around the LT-proxied OpenAI-compatible Gemini endpoint), `tests/test_agent_base.py`.
+- *Goal:* A single `Agent` base class that encapsulates the LLM call + the rule-constraint check + the rule-bypass check pattern that every agent follows. Centralizes Gemini calling, retry logic, audit emission, structured-output parsing, and constraint/bypass plumbing so every concrete agent just declares its prompt + schema + rules. The runtime must be node-aware: A2, F1, and each A3 silo can point at its own local Lobster Trap/LiteLLM stack instead of a single global proxy URL.
+- *Files:* `backend/__init__.py`, `backend/agents/__init__.py`, `backend/agents/base.py`, `backend/agents/rules.py`, `backend/agents/llm_client.py` (thin wrapper around a node-local LT-proxied OpenAI-compatible Gemini endpoint), `backend/runtime/__init__.py`, `backend/runtime/context.py` (Pydantic config for node identity and local LLM endpoint), `tests/test_agent_base.py`, `tests/test_llm_client.py`.
+- *Runtime config boundary objects:*
+  - `LLMClientConfig`: `base_url`, `api_key_env`, `default_model`, `timeout_seconds`, `max_retries`, `stub_mode`, `node_id`. `base_url` defaults to `http://127.0.0.1:8080/v1/chat/completions` only for local mode; cloud-demo nodes pass their own local LT URL.
+  - `AgentRuntimeContext`: `run_id`, `node_id`, `trust_domain`, `llm: LLMClientConfig`, `audit: AuditEmitter | None`, `metadata: dict[str, str] = {}`. This is passed into each agent at construction time.
+  - `TrustDomain`: enum-like values `investigator`, `federation`, `bank_silo`. P15 later expands this into full node config, but P5 establishes the boundary.
 - *Class shape:*
   ```python
   InT = TypeVar("InT", bound=BaseModel)
@@ -639,19 +666,41 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
       constraint_rules: list[ConstraintRule[InT, OutT]]
       llm: LLMClient
       audit: AuditEmitter
+      runtime: AgentRuntimeContext
       def run(self, input: InT) -> OutT: ...
   ```
-- *`run()` flow:*
-  1. **Bypass check first.** Iterate `bypass_rules`; if any triggers, emit a `bypass_triggered` audit event and return the forced output without calling Gemini.
-  2. **LLM call.** Send the input + system prompt to Gemini through the LT-proxied LiteLLM endpoint. Request structured output targeting `output_schema.model_json_schema()`. Retry once on malformed JSON; on second failure, raise `LLMOutputUnparseable` (caught by orchestrator as a refusal).
-  3. **Constraint check.** Iterate `constraint_rules`; on violation, emit a `constraint_violation` audit event and either retry the LLM call once (with the violation message appended to the prompt) or raise `ConstraintViolation` if retry also fails.
-  4. **Audit emit.** Always emit a `message_sent` event with the input/output pair and any retries observed.
+- *`run()` flow, in order:*
+  1. **Input validation.** Validate `input` with Pydantic/`TypeAdapter` before any rule or LLM call. Emit `constraint_violation` and raise `InvalidAgentInput` if the caller passed the wrong boundary object.
+  2. **Bypass check.** Iterate `bypass_rules`; if any triggers, emit `bypass_triggered`, build the forced `OutT`, validate it, emit `message_sent`, and return without calling Gemini.
+  3. **Prompt assembly.** Load `system_prompt` from the concrete agent's prompt file or inline test fixture, serialize the validated input to canonical JSON, attach `_lobstertrap` metadata (`agent_id`, `role`, `bank_id`, `trust_domain`, `run_id`, declared intent), and prepare the structured-output schema from `output_schema.model_json_schema()`.
+  4. **LLM call.** Send the request through `runtime.llm.base_url`, not a hardcoded global URL. In local mode this is the P0 localhost LT endpoint; in cloud-demo mode it is the node-local LT endpoint. The client uses OpenAI-compatible chat completions via LiteLLM.
+  5. **Structured-output parse.** Parse the response content into `OutT` using `output_schema.model_validate_json()` or `model_validate()`. If JSON is malformed or schema validation fails, retry once with the schema and parse error included in the repair prompt. On second failure, emit `constraint_violation` and raise `LLMOutputUnparseable`.
+  6. **Constraint check.** Iterate `constraint_rules`; on violation, emit `constraint_violation`. Retry the LLM once with the violation message appended. If the retry still violates a constraint, raise `ConstraintViolation`.
+  7. **Audit emit.** Emit `message_sent` with `run_id`, `node_id`, `agent_id`, `role`, `input_schema`, `output_schema`, retry count, bypass name if applicable, model name, and status. Do not log raw customer names or secrets.
+  8. **Return validated output.** Only a validated `OutT` leaves `run()`.
 - *Bypass and constraint rule shape:*
   - `BypassRule`: `name`, `trigger(input) -> bool`, `force_output(input) -> OutT`, `reason` (human-readable).
   - `ConstraintRule`: `name`, `check(input, output) -> bool` (True = ok), `violation_msg(input, output) -> str`.
-- *LLM client:* talks to `http://127.0.0.1:8080/v1/chat/completions` (Lobster Trap front-end). Carries agent role, bank, and declared intent in the request body's `_lobstertrap` field because current LT reads declared metadata from that field. The application-level message envelope still carries `sender_role`, `sender_bank_id`, and `recipient_agent_id`; P14's Python AML policy adapter uses those fields for role routing and redaction. Falls back to a deterministic stub if `LLM_STUB_MODE=1` env var is set (for unit tests without API calls).
+- *LLM client specifics:*
+  - `LLMClient.chat_structured(prompt, input_model, output_schema, metadata) -> dict`.
+  - Uses `LLMClientConfig.base_url`, so A2/F1/A3 nodes can each point at their own local LT/LiteLLM stack.
+  - Carries agent role, bank, trust domain, node id, run id, and declared intent in the request body's `_lobstertrap` field because current LT reads declared metadata from that field.
+  - The application-level message envelope still carries `sender_role`, `sender_bank_id`, and `recipient_agent_id`; P14's Python AML policy adapter uses those fields for role routing and redaction.
+  - Falls back to a deterministic stub if `LLM_STUB_MODE=1` or `LLMClientConfig.stub_mode=True`.
+  - Uses exponential backoff only for provider/proxy errors; constraint failures retry immediately once with a repair prompt.
+  - Never reads API keys from code. The configured `api_key_env` names the env var to read.
 - *Out of scope for this part:* no concrete agents yet, no Lobster Trap policy authoring (that's P14), no orchestrator (P15). The base class is exercised by a `TrivialEchoAgent` in the test.
-- *Acceptance:* `tests/test_agent_base.py` defines a `TrivialEchoAgent` with one bypass rule (force-echo input if input contains "FORCE") and one constraint rule (output length ≤ 100 chars), runs it against the LLM stub. Tests cover: (a) normal LLM path returns Pydantic-valid output, (b) bypass triggers without LLM call, (c) constraint violation triggers retry, (d) audit channel records every event with correct kind.
+- *Acceptance:* `tests/test_agent_base.py` defines a `TrivialEchoAgent` with one bypass rule (force-echo input if input contains `"FORCE"`) and one constraint rule (output length ≤ 100 chars), runs it against the LLM stub. Tests cover:
+  - normal path returns Pydantic-valid output
+  - bypass triggers without an LLM call and still emits audit
+  - malformed JSON triggers one parse-repair retry
+  - constraint violation triggers one repair retry
+  - second constraint failure raises `ConstraintViolation`
+  - audit channel records `bypass_triggered`, `constraint_violation`, and `message_sent` with `run_id`, `node_id`, `role`, `phase`, and `status`
+  - `LLMClientConfig.base_url` is honored, so two test agents can point at different fake LT endpoints
+  - `LLM_STUB_MODE=1` prevents network calls
+- *What was built:* `backend/runtime/context.py` defines strict Pydantic runtime config objects (`TrustDomain`, `LLMClientConfig`, `AgentRuntimeContext`). `backend/agents/rules.py` defines typed `BypassRule` and `ConstraintRule` objects. `backend/agents/llm_client.py` defines the OpenAI-compatible structured-output client that sends `_lobstertrap` metadata, honors node-local `base_url`, supports provider retries, and has deterministic stub mode. `backend/agents/base.py` defines the generic `Agent` runtime, P5 exceptions, and in-memory audit sink. `shared/enums.py` now includes the `A3` role needed by the split silo-responder architecture.
+- *Acceptance (current):* `uv run pytest tests/test_agent_base.py tests/test_llm_client.py` passes 10 focused P5 tests. `uv run pytest` passes the full 78-test suite. `uv run python -m compileall backend shared tests` passes. `git diff --check` reports only CRLF normalization warnings.
 - *Risks specific to this part:* (a) Gemini's structured-output mode occasionally returns invalid JSON — mitigation: one retry with `response_format` re-asserted; on second failure raise rather than half-parse. (b) LT may rate-limit during retry storms — mitigation: exponential backoff on LLM-side errors, not on constraint-side errors. (c) The generics typing (`Agent[InT, OutT]`) needs Pydantic v2's `TypeAdapter` to validate at runtime — mitigation: explicit `output_schema.model_validate(raw_json)` rather than relying on TypeVar resolution.
 - *Depends on:* P0, P4.
 - *Scope check:* one focused session. Stops at "trivial echo agent works end-to-end against the stub; a single opt-in test confirms it also works against live Gemini."
@@ -659,18 +708,15 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 **P6 — A1 transaction-monitoring agent**
 
 - *Goal:* Full LLM agent that reviews a batch of `suspicious_signals` + correlated transaction rows for one bank and emits `Alert` messages to local A2. Constraints prevent any non-A2 destination; bypasses force-emit on hard-required regulatory criteria (CTR threshold, SDN, velocity spikes).
-- *Files:* `backend/agents/a1_monitoring.py`, `backend/agents/prompts/a1_system.md` (the system prompt — Markdown file rather than inline string so it can be reviewed and refined), `tests/test_a1.py`.
+- *Files:* `backend/agents/a1_monitoring.py`, `backend/agents/prompts/a1_system.md` (the system prompt — Markdown file rather than inline string so it can be reviewed and refined), `tests/test_a1.py`. P6 creates a minimal `data/mock_sdn_list.json` test stub if P10 has not populated the full mock list yet.
 - *Inputs:* a batch of `SignalCandidate` records (read from local SQLite via a small helper module `backend/silos/local_reader.py` — A1 reads its own bank's raw data; only the cross-bank-response path is gated by P7). Each candidate carries: `signal_id`, `transaction_id`, `amount`, `transaction_type`, `channel`, `timestamp`, `account_id`, `customer_kyc_tier`, `recent_velocity` (count of near-CTR txns on this account in last 7 days), `counterparty_account_id_hashed`, plus a fetched `signal_type` and `severity` from the bank's pre-existing rule-based scorer.
 - *Output:* a list of `Alert` records or an empty list per candidate. The LLM returns a structured `A1BatchResult { decisions: list[A1Decision] }` where each `A1Decision = {signal_id, action: "emit"|"suppress", alert: Alert | None, llm_rationale: str}`.
-- *Rule bypasses (override LLM):*
-  - Transaction amount ≥ $10,000 → MUST emit a `Currency Transaction Report` alert (federal law).
-  - Counterparty hash matches a known SDN entry → MUST emit a `Sanctions Match` alert. (The "known SDN hash list" is loaded from `data/mock_sdn_list.json`, written in P10 but a stub file is created here with the S1-D PEP hash for testing.)
-  - 10+ near-CTR transactions on one account within 24 hours → MUST emit a high-severity `Velocity Spike` alert.
+- *Rule bypasses:* implement `A1-B1` through `A1-B3` from the Section 8.3 bypass rule catalog.
 - *Rule constraints (LLM cannot override):*
   - `Alert.recipient_agent_id` must equal the local A2's agent_id; LT-blocked otherwise.
   - `Alert.evidence` items reference hashed identifiers only (no customer names; no raw `account_id` strings without hashing).
   - LLM cannot suppress a signal that meets a bypass criterion.
-- *Approach (Gemini call):* system prompt declares A1's role and the bypass criteria (so the LLM doesn't waste tokens reasoning about CTR-threshold cases that are already decided); user message is the batch of candidates as JSON; structured output is the `A1BatchResult` schema. Use `gemini-2.5-flash` (cheaper, fine for this volume); fallback to `gemini-2.5-pro` if structured-output parsing fails twice.
+- *Approach (Gemini call):* system prompt declares A1's role and the bypass criteria from the catalog (so the LLM doesn't waste tokens reasoning about CTR-threshold cases that are already decided); user message is the batch of candidates as JSON; structured output is the `A1BatchResult` schema. Use `gemini-2.5-flash` (cheaper, fine for this volume); fallback to `gemini-2.5-pro` if structured-output parsing fails twice.
 - *Out of scope for this part:* no cross-bank communication, no DP, no peer-A2 interaction. A1 is local-bank-only.
 - *Acceptance:* `tests/test_a1.py` runs A1 on a deterministic batch of 50 signals from `data/silos/bank_alpha.db`:
   - At least 5 S1-related transactions in the batch produce `amount_near_ctr_threshold` alerts (allowing for LLM judgment on the legitimate-looking ones).
@@ -718,9 +764,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   2. **`cross_bank_query`** - only entered when the LLM decides to escalate. Drafts a `Sec314bQuery` with a structured `PurposeDeclaration`. Picks one of the three query shapes from P4 (entity_presence, aggregate_activity, counterparty_linkage). Sent to F1.
   3. **`synthesize`** - entered when the aggregated `Sec314bResponse` arrives from F1. Reasons about whether peer-bank signals corroborate the local suspicion. Decides between SAR-draft contribution and dismiss.
   4. **`recommend_sar_or_dismiss`** - emits either `SARContribution -> F4` or `DismissalRationale -> F5`.
-- *Rule bypasses (override LLM):*
-  - 3+ correlated alerts on the same `name_hash` within 30 days -> MUST send `Sec314bQuery` regardless of LLM judgment. Triggered in `triage`.
-  - Alert tied to a known SDN match -> MUST escalate to SAR or sanctions screening, depending on the available evidence. Triggered in `triage`.
+- *Rule bypasses:* implement `A2-B1` and `A2-B2` from the Section 8.3 bypass rule catalog.
 - *Rule constraints (LLM cannot override):*
   - Cannot include customer-name strings in `Sec314bQuery`, `SARContribution`, or `DismissalRationale`.
   - Cannot send `Sec314bQuery` without a populated `PurposeDeclaration`.
@@ -748,10 +792,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   2. **`select_primitives`** - Gemini maps the typed `query_shape` and payload to one or more allowed P7 primitive calls.
   3. **`invoke_primitives`** - deterministic code calls P7, handles budget refusal, and collects `(value, PrimitiveCallRecord)` tuples.
   4. **`compose_response`** - Gemini writes the minimal `Sec314bResponse` fields and rationale from the primitive results. The constraint layer rejects any field without matching provenance.
-- *Rule bypasses (override LLM):*
-  - Invalid or missing purpose declaration -> deterministic refusal before any primitive call.
-  - Invalid signature, expired envelope, replayed nonce, or missing route approval -> deterministic refusal before any primitive call.
-  - P7 budget exhaustion -> deterministic `budget_exhausted` response; skip the LLM.
+- *Rule bypasses:* implement `A3-B1` through `A3-B3` from the Section 8.3 bypass rule catalog.
 - *Rule constraints (LLM cannot override):*
   - Cannot call primitives outside the allowlist for the query shape.
   - Cannot pass broad discovery arguments such as all known hashes; P7 caps list sizes and A3 checks them first.
@@ -776,15 +817,12 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Inputs:* `Sec314bQuery` from any bank's A2.
 - *Outputs:* one redacted `Sec314bQuery` per target peer A3 (sent via orchestrator); one aggregated `Sec314bResponse` back to the original requester after peer responses come in; a `GraphPatternRequest` to F2 when the query shape indicates pattern detection; a `SanctionsCheckRequest` to F3 in parallel when the query references hashes that look like potential SDN matches.
 - *Approach (Gemini calls):*
-  1. **Purpose-declaration validation** — Gemini reads the `PurposeDeclaration` and returns `{valid: bool, reason}`. The bypass on missing-or-empty `suspicion_rationale` short-circuits this (deterministic refusal before LLM call).
+  1. **Purpose-declaration validation** — Gemini reads the `PurposeDeclaration` and returns `{valid: bool, reason}`. `F1-B1` short-circuits this before the LLM call.
   2. **Target-bank selection** — LLM reasons about which peer banks the query is relevant to (e.g., a S2-shaped query about Alpha+Beta need not broadcast to Gamma). Returns `target_bank_ids` (must be a subset of the requester's stated targets — constraint).
   3. **Route approval** — deterministic code signs a `RouteApproval` per responding bank, binding the responder, the original `query_id`, and the approved query body hash.
   4. **Redaction** — LLM rewrites the query body for peer consumption. Customer names should already be absent (constraint at A2 + LT redaction in transit); F1 also strips any `requesting_investigator_id` that isn't strictly necessary for the peer to answer.
   5. **Aggregation** — when peer responses arrive, F1 verifies response signatures and composes a single `Sec314bResponse` to the requester. Provenance from each peer is preserved verbatim; aggregate `rho_debited_total` is the sum across peer responses.
-- *Rule bypasses (override LLM):*
-  - Missing or empty `PurposeDeclaration.suspicion_rationale` → MUST refuse the query before any LLM call.
-  - Quota exceeded for this requester (e.g., 20+ queries in 1 hour) → MUST escalate to F5 for compliance review.
-  - Query references a known SDN entity hash → MUST route through F3 in parallel.
+- *Rule bypasses:* implement `F1-B1` through `F1-B3` from the Section 8.3 bypass rule catalog.
 - *Rule constraints:*
   - Cannot retain customer identifiers between queries (F1 is stateless across queries — enforced by clearing state per call).
   - Cannot forward a query without a valid `PurposeDeclaration`.
@@ -810,9 +848,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Inputs:* `SanctionsCheckRequest { entity_hashes }` from A2 or F1.
 - *Outputs:* `SanctionsCheckResponse { results: dict[hash → {sdn_match, pep_relation}] }`. No list contents leaked.
 - *Approach (Gemini call):* the LLM's job is fuzzy-match reasoning — in production this would consider name variants, transliteration, alias chains. For the demo, the mock list is keyed by exact `name_hash` so the LLM is mostly confirming exact matches. The prompt instructs the LLM to also return uncertainty when a hash matches a known SDN root but with a relation indicator (parent company, beneficial owner, etc.). The structured output is the response schema.
-- *Rule bypasses (override LLM):*
-  - Exact `name_hash` equality with an SDN entry → MUST flag `sdn_match=True` regardless of LLM judgment.
-  - Exact `name_hash` equality with the S1-D PEP entity → MUST flag `pep_relation=True` regardless of LLM judgment.
+- *Rule bypasses:* implement `F3-B1` and `F3-B2` from the Section 8.3 bypass rule catalog.
 - *Rule constraints:*
   - Output schema strictly excludes list contents — `notes` and `source` from the mock list never appear in `SanctionsCheckResponse`.
   - Cannot retain queried entity hashes between requests (stateless).
@@ -836,10 +872,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   1. The LLM reasons over the three per-bank aggregates as JSON. Each aggregate has an `edge_count_distribution` (how many edges have how many transactions, keyed by hashed counterparty pair) and a `bucketed_flow_histogram`.
   2. Cross-bank pattern detection: the LLM looks for hashed counterparties that appear in multiple banks' aggregates with elevated edge counts and similar flow buckets — the structural fingerprint of a structuring ring.
   3. Returns `pattern_class`, `confidence`, the suspect hash set, and a regulator-quality narrative (≤500 chars).
-- *Rule bypasses (override LLM) — typology pattern matchers:*
-  - **Closed-cycle structuring ring** — if ≥3 entity hashes appear in ≥3 banks' aggregates with elevated edge counts forming a cycle (each hash's transactions both flow in from and out to other hashes in the set) → MUST surface as `pattern_class="structuring_ring"`, `confidence >= 0.85` regardless of LLM uncertainty.
-  - **Fee-shaped layering chain** — if a sequence of hashes shows decreasing flow amounts across 4+ hops with attenuation 2–5% per hop → MUST surface as `pattern_class="layering_chain"`, `confidence >= 0.85`.
-  - These pattern matchers run on the DP-noised aggregates; calibration is loose enough to survive Gaussian noise at the planted-ring scale. (Verified by the data layer's structural design — ring's signal is much larger than σ at the default rho budget.)
+- *Rule bypasses:* implement `F2-B1` and `F2-B2` from the Section 8.3 bypass rule catalog. These pattern matchers run on the DP-noised aggregates; calibration is loose enough to survive Gaussian noise at the planted-ring scale. (Verified by the data layer's structural design — ring's signal is much larger than σ at the default rho budget.)
 - *Rule constraints:*
   - Cannot see raw transactions (input is DP-noised aggregates only; structurally enforced — F2 has no DB handle).
   - Cannot output customer-name strings (output schema is hash-only).
@@ -867,9 +900,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - `contributors` — one entry per contributing bank with the bank_id, investigator_id (kept internal to the SAR, not exposed cross-bank), and a short summary of evidence contributed
   - `related_query_ids` — the §314(b) queries that produced the cross-bank evidence
 - *LLM-authored narrative:* a 200–400 word account suitable for regulator review. Must reference: (a) the §314(b) authority underlying the cross-bank information sharing, (b) which evidence came from which bank (using bank_ids, not customer names), (c) the typology and confidence from F2, (d) any sanctions/PEP findings from F3.
-- *Rule bypasses (override LLM):*
-  - Any contributor's evidence references an SDN sanctions match → MUST set `sar_priority = "high"` regardless of LLM judgment.
-  - Mandatory fields MUST be populated; F4 cannot emit a `SARDraft` with `mandatory_fields_complete = False`. If any contributing input is missing data needed for a mandatory field, F4 emits a `SARContributionRequest` back to the relevant A2.
+- *Rule bypasses:* implement `F4-B1` and `F4-B2` from the Section 8.3 bypass rule catalog.
 - *Rule constraints:*
   - Cannot include customer-name strings (uses hashes + bank_ids only).
   - Narrative must include the §314(b) authority phrase.
@@ -893,9 +924,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - F5 batches incoming events into windows (e.g., the last 60 seconds of activity). For each window, it sends the structured event list to Gemini with a prompt asking "does anything here exceed §314(b) authorization or pattern-match a fishing expedition?"
   - The structured output is `F5BatchResult { findings: list[F5Finding] }` where each finding has a kind, a referenced event_id, and a rationale.
   - F5 emits each finding as an `AuditEvent`.
-- *Rule bypasses (override LLM):*
-  - >10 `Sec314bQuery` events from one investigator in 60 minutes → MUST emit a `rate_limit` warning regardless of LLM judgment.
-  - A `Sec314bQuery` whose `PurposeDeclaration.suspicion_rationale` does not contain any ML/TF-related keywords (mining a small dictionary like "money laundering", "structuring", "layering", "PEP", "sanctions", "terrorist financing") → MUST emit a `human_review` annotation.
+- *Rule bypasses:* implement `F5-B1` and `F5-B2` from the Section 8.3 bypass rule catalog.
 - *Rule constraints:*
   - Read-only on the audit stream (cannot block or modify agent behavior).
   - Cannot suppress audit events from being logged.
@@ -948,11 +977,12 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P15 — Agent orchestrator / message bus**
 
-- *Goal:* A single process that instantiates all 14 agent instances (3×A1, 3×A2, 3×A3, F1, F2, F3, F4, F5), wires each bank's A3 to its local P7 stats-primitives layer, routes messages between agents, and writes the audit stream. The orchestrator is the demo's runtime — drive its `step()` method to advance the federation timeline visibly.
-- *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the terminal UI), `backend/inbox.py` (per-agent inbox), `tests/test_orchestrator.py`.
+- *Goal:* Runtime that can run in two modes: local deterministic mode for tests and cloud-demo mode with explicit nodes for each silo, investigator, and federation stack. Local mode instantiates all 14 agent instances in one process. Cloud-demo mode deploys separate service processes for the three A3 silo nodes, the A2 investigator nodes, and the F1-F5 federation node; messages cross service boundaries through signed envelopes and each node's local Lobster Trap/LiteLLM stack.
+- *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the terminal UI), `backend/inbox.py` (per-agent inbox), `backend/runtime/node_config.py` (node identity, service URLs, trust-domain config), `backend/runtime/transport.py` (HTTP/gRPC transport abstraction), `tests/test_orchestrator.py`.
 - *Architecture:*
-  - In-process message bus — no external broker (Kafka, NATS, etc.) needed for the demo. Each agent instance holds an inbox (`asyncio.Queue`); the bus has a routing table keyed by `recipient_agent_id`.
-  - `Orchestrator.__init__()` instantiates: 3 A1 instances (one per bank), 3 A2 instances (one per bank), 3 A3 instances (one per bank), one each of F1–F5. Wires each bank's A3 to its bank's stats-primitives layer handle.
+  - **Local mode:** in-process message bus for fast tests and deterministic demo dry-runs. Each agent instance holds an inbox (`asyncio.Queue`); the bus has a routing table keyed by `recipient_agent_id`.
+  - **Cloud-demo mode:** each trust domain runs as a service with a local policy/LLM/security stack. Bank silo nodes run `A3 + P7 + local DB + local LT/LiteLLM + policy adapter + envelope verifier + replay cache + audit forwarder`. Investigator nodes run `A2 + local LT/LiteLLM + policy adapter + envelope signer/verifier + replay cache`. The federation node runs `F1-F5 + federation LT/LiteLLM + policy adapter + route approval signer + aggregate audit stream + replay cache`.
+  - `Orchestrator.__init__()` in local mode instantiates: 3 A1 instances (one per bank), 3 A2 instances (one per bank), 3 A3 instances (one per bank), one each of F1–F5. Wires each bank's A3 to its bank's stats-primitives layer handle.
   - `Orchestrator.step()` is the visible-progression entry point. Each call: pops one message off any non-empty inbox in priority order (alerts → cross-bank-queries → responses → SAR contributions → SAR drafts → audit annotations), routes it to the addressed agent, awaits the agent's return value, fans out any resulting messages to addressed inboxes, emits all AuditEvents to the audit channel, returns.
   - `Orchestrator.run_until_idle()` calls `step()` in a loop until all inboxes are empty (or until a terminal event like a `SARDraft` lands).
 - *Audit channel (in `audit.py`):*
@@ -961,15 +991,18 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Every message routed by the bus is copied to the audit channel as kind `message_sent`; constraint violations, bypass triggers, rho debits, LT verdicts, signature checks, replay rejections, and route approvals all produce additional events.
   - Audit events form a hash chain through `prev_event_hash` and `event_hash`; tests verify tampering changes the chain head.
 - *Bank↔primitives wiring:* on init, the orchestrator constructs each bank's `StatsPrimitivesLayer` (from P7) and passes a handle to that bank's A3 only. A2 receives alert evidence and aggregated responses but no DB or P7 handle.
+- *Cloud node wiring:* in cloud-demo mode, no process gets all handles. Each A3 service receives only its own P7 handle and bank database path. The federation service receives only service URLs and public verification keys for A2/A3 nodes. Investigator services receive only F1's URL and verification key.
 - *F5 wiring:* F5 is optional at construction time. When enabled, it subscribes to the audit channel via `audit.subscribe()`. F5's findings are themselves AuditEvents (kind `human_review` or `rate_limit`). This avoids a build-order cycle: P13 is tested against an `AuditSource` protocol first, then P15 wires it into the real orchestrator.
-- *Out of scope for this part:* no HTTP/WebSocket API (this is single-process); no distributed deployment; no persistence beyond the audit channel's ringbuffer; no agent hot-reload.
+- *Out of scope for this part:* no production-grade Kubernetes operator; no multi-region failover; no real bank network connectivity; no agent hot-reload. Cloud-demo mode is for visible trust boundaries, not production operations.
 - *Acceptance:* `tests/test_orchestrator.py`:
   - Instantiate the orchestrator (with stubbed LLM agents that return canned outputs for predictability); drop a hand-crafted `Alert` into Bank Alpha's A2 inbox; call `run_until_idle()`; verify the audit channel contains at least: the original alert routed, A2's `Sec314bQuery`, F1's broadcasts to peer A3 responders, peer A3s' responses, F1's aggregated response, A2's `SARContribution`, F4's `SARDraft`, and F5's audit annotations.
   - Verify each cross-bank message audit event includes the rho debit from the corresponding primitive call (chained correctly through provenance).
   - Verify tampering with an audit event breaks the audit hash-chain validation.
   - Verify replaying a previously accepted message id or nonce is rejected.
+  - Verify cloud-demo node config cannot construct a service that has both `A2` and a P7 handle, or both `F1` and a bank database path.
+  - Verify cloud-demo routing sends A2 queries to F1, F1 queries to peer A3 endpoints, A3 responses back to F1, and F1 aggregates back to A2.
   - Verify `step()` is deterministic given stubbed LLM outputs (same sequence of events across runs).
-- *Risks specific to this part:* (a) `asyncio` orchestration is easy to deadlock if priorities are wrong — mitigation: priority queue with explicit ordering; test exhaustively. (b) The audit channel's ringbuffer may overflow during long runs — mitigation: 10K entries is well over the demo's ~50 events; UI handles ringbuffer reads gracefully. (c) Wiring 14 agents + 3 primitives layers is mostly plumbing — keep `__init__` clean by extracting a `bank_setup(bank_id) -> BankRuntime` helper.
+- *Risks specific to this part:* (a) `asyncio` orchestration is easy to deadlock if priorities are wrong — mitigation: priority queue with explicit ordering; test exhaustively. (b) The audit channel's ringbuffer may overflow during long runs — mitigation: 10K entries is well over the demo's ~50 events; UI handles ringbuffer reads gracefully. (c) Wiring 14 agents + 3 primitives layers is mostly plumbing — keep `__init__` clean by extracting a `bank_setup(bank_id) -> BankRuntime` helper. (d) Cloud-demo mode can consume time fast — mitigation: keep service transport thin and fall back to local mode if deployment work runs hot.
 - *Depends on:* P5, P7, P8, P8a, P9, P10, P11, P12, P14. P13 is optional for the first orchestrator pass; when present, it plugs into the `AuditSource` interface built here.
 - *Scope check:* one to two focused sessions. Mostly plumbing once the agent contracts are stable.
 
@@ -1071,7 +1104,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **Why It Matters** — already AML-correct.
   - **Current Build State** — update to mark P0–P22 status accurately as of submission.
   - **Data** — already AML-correct.
-  - **Architecture** — replace the legacy clinical mermaid diagram with AML diagrams. Three diagrams: (1) high-level federation architecture (banks ↔ federation ↔ LT/LLM), (2) canonical-flow sequence diagram (the 10-step demo flow), (3) trust-boundary diagram (which mechanism polices which boundary).
+  - **Architecture** — replace the legacy clinical mermaid diagram with AML diagrams. Four diagrams: (1) explicit cloud-demo node topology with one stack per trust domain, (2) high-level federation architecture (investigator nodes ↔ federation node ↔ bank silo nodes), (3) canonical-flow sequence diagram (the 10-step demo flow), (4) trust-boundary diagram (which mechanism polices which boundary).
   - **Privacy Model** — already AML-correct.
   - **P0 Proxy Chain** — already correct.
   - **Running the demo** — concrete commands: `uv sync && data/scripts/build_banks.py && data/scripts/plant_scenarios.py && data/scripts/validate_banks.py && python -m backend.demo.canonical_flow --ui --live`. Document the `GEMINI_API_KEY` requirement and the offline-stub alternative.
@@ -1081,7 +1114,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **Acknowledgments** — Veea LT, Gemini, OpenDP, Lobster Trap policy framework, FinCEN published typologies, FFIEC BSA Examination Manual.
   - **License** — TBD likely MIT.
 - *Mermaid diagrams (new):*
-  - **Federation architecture** — 3 bank boxes, each containing A1/A2/A3/stats-primitives/SQLite; federation box containing F1–F5; LT/LiteLLM/Gemini sidecar; explicit trust-boundary line between outside-TEE A2 and inside-bank A3/P7.
+  - **Federation architecture** — explicit nodes: three bank silo boxes, each containing A3/P7/SQLite/local LT/local LiteLLM/local policy/envelope/replay stack; investigator boxes containing A2/local LT/local LiteLLM; federation box containing F1-F5/federation LT/federation LiteLLM/route signer/aggregate audit. Trust-boundary lines must make clear that F1 is separate from bank silos and that F2-F5 are federation agents, not silo agents.
   - **Canonical flow sequence** — 10-step sequence with the agents on swim-lanes and the LT verdicts as note annotations.
   - **Trust-boundary mapping** — table-style mermaid showing which mechanism polices which boundary (LT for NL channels, schemas for structure, P7 for data plane, DP for aggregate leakage).
 - *Out of scope for this part:* no major restructuring beyond replacing the clinical sections; no fluff. The README is reference, not marketing.
@@ -1100,7 +1133,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Slide structure (9 slides):*
   1. **Title + framing** — "Federated Cross-Bank AML Investigation". Sub-line: "8 agent roles. 3 banks. 1 ring no single bank can see."
   2. **Problem** — §314(b) friction stack (4 frictions, ordered). One-line claim: "the statute has been law for 25 years; banks barely use it." Cite the four frictions visually.
-  3. **What we built** — architecture diagram (same as README's Architecture mermaid, exported as PNG). 3 banks × (A1 + outside-TEE A2 + inside-bank A3 + stats-primitives + SQLite) + 5 federation agents + LT + LiteLLM + Gemini.
+  3. **What we built** — architecture diagram (same as README's Architecture mermaid, exported as PNG). Three explicit bank silo stacks (A3 + P7 + local DB + local LT/LiteLLM + policy/security), investigator stacks (A2 + local LT/LiteLLM), and one separate federation stack (F1-F5 + federation LT/LiteLLM + route signer + aggregate audit).
   4. **Demo walkthrough** — the 10-step canonical flow with screenshots from the terminal UI (taken from P21's screencast). Show LT verdicts overlaying each step. Land the moment where F2 identifies the structuring ring.
   5. **Where DP fits (and where it doesn't)** — the per-query-shape table from the README. Note: "DP earns its keep on aggregate counts; binary presence relies on hash linkage; we're explicit about which is which."
   6. **What we address vs. don't** — the friction stack revisited. We address 3 of 4 (infrastructure, technical-not-contractual privacy, query-primitive ontology); we do not address legal-team risk aversion (the largest friction). Honest scoping.
