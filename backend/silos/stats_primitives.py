@@ -6,6 +6,7 @@ import contextlib
 import json
 import math
 import sqlite3
+import threading
 from collections import Counter
 from collections.abc import Iterator
 from datetime import date, timedelta
@@ -103,8 +104,22 @@ class PrimitiveResult(PrimitiveModel):
 
     @property
     def record(self) -> PrimitiveCallRecord:
+        """Single-record convenience accessor; raises on multi-record results.
+
+        Most P7 primitives return one `PrimitiveCallRecord`, so `result.record`
+        is a readable shortcut for `result.records[0]` in tests and in code
+        that knows the primitive is single-record. `pattern_aggregate_for_f2`
+        returns TWO records (one per histogram component) and callers of that
+        primitive MUST iterate `result.records` directly — accessing `.record`
+        on a multi-record result raises `ValueError` to fail loud rather than
+        silently returning the first record.
+        """
         if len(self.records) != 1:
-            raise ValueError("primitive result does not contain exactly one record")
+            raise ValueError(
+                "primitive result does not contain exactly one record; "
+                "use result.records directly for multi-record primitives "
+                "such as pattern_aggregate_for_f2"
+            )
         return self.records[0]
 
 
@@ -125,6 +140,30 @@ class BankStatsPrimitives:
         self.db_path = db_path or bank_db_path(bank_id)
         self.ledger = ledger or PrivacyBudgetLedger()
         self.rng = rng or np.random.default_rng()
+        # numpy.random.Generator is not thread-safe (documented). Concurrent
+        # `rng.normal()` calls can correlate samples or corrupt internal
+        # state, breaking the audit-replay determinism we just secured by
+        # reordering debit-before-noise. We serialize the actual noise
+        # sample with this lock — the critical section is one numpy call,
+        # so contention is negligible. The ledger has its own lock for
+        # debit RMW; this is the matching lock on the RNG side.
+        self._rng_lock = threading.Lock()
+
+    def _sample_gaussian_noise(
+        self,
+        value: float,
+        *,
+        sensitivity: float,
+        rho: float,
+    ) -> "GaussianMechanismResult":  # noqa: F821 — forward ref to dp module
+        """Thread-safe Gaussian sample wrapper around `add_gaussian_noise`."""
+        with self._rng_lock:
+            return add_gaussian_noise(
+                value,
+                sensitivity=sensitivity,
+                rho=rho,
+                rng=self.rng,
+            )
 
     def count_entities_by_name_hash(
         self,
@@ -214,11 +253,10 @@ class BankStatsPrimitives:
         if not debit.allowed:
             return _budget_refusal()
 
-        noisy = add_gaussian_noise(
+        noisy = self._sample_gaussian_noise(
             float(true_value),
             sensitivity=1.0,
             rho=rho,
-            rng=self.rng,
         )
         released = _nonnegative_int(noisy.value)
         return PrimitiveResult(
@@ -287,11 +325,10 @@ class BankStatsPrimitives:
 
         noised = [
             _nonnegative_int(
-                add_gaussian_noise(
+                self._sample_gaussian_noise(
                     float(count),
                     sensitivity=1.0,
                     rho=rho,
-                    rng=self.rng,
                 ).value
             )
             for count in true_histogram
@@ -428,22 +465,20 @@ class BankStatsPrimitives:
 
         edge_noised = [
             _nonnegative_int(
-                add_gaussian_noise(
+                self._sample_gaussian_noise(
                     float(count),
                     sensitivity=edge_sensitivity,
                     rho=rho_per_component,
-                    rng=self.rng,
                 ).value
             )
             for count in edge_true
         ]
         flow_noised = [
             _nonnegative_int(
-                add_gaussian_noise(
+                self._sample_gaussian_noise(
                     float(count),
                     sensitivity=1.0,
                     rho=rho_per_component,
-                    rng=self.rng,
                 ).value
             )
             for count in flow_true
@@ -596,10 +631,37 @@ def _budget_refusal() -> PrimitiveResult:
     return PrimitiveResult(refusal_reason=REFUSAL_BUDGET_EXHAUSTED)
 
 
+_ARGS_HASH_FLOAT_PRECISION = 9
+
+
 def _args_hash(args: dict[str, object]) -> str:
-    """Hash canonical JSON args for stable audit replay."""
-    canonical = json.dumps(args, sort_keys=True, separators=(",", ":"))
+    """Hash canonical JSON args for stable audit replay.
+
+    Floats are rounded to a fixed precision before JSON serialization.
+    Python's `repr(float)` has been platform-stable shortest-round-trip
+    since 3.1, but rounding inputs gives an extra margin against tiny
+    arithmetic drift in upstream callers (e.g., a rho computed from
+    arithmetic on another platform's libm). The precision is well above
+    what ledger ρ values actually use (typically 2 decimal places),
+    well inside IEEE-754 double range (~15–17 significant digits).
+    """
+    canonical = json.dumps(
+        _canonicalize_floats(args),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hash_identifier(canonical)
+
+
+def _canonicalize_floats(value: object) -> object:
+    """Recursively round floats so the args_hash is stable across small drift."""
+    if isinstance(value, float):
+        return round(value, _ARGS_HASH_FLOAT_PRECISION)
+    if isinstance(value, dict):
+        return {k: _canonicalize_floats(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonicalize_floats(v) for v in value]
+    return value
 
 
 def _require_non_empty(values: list[str], field_name: str) -> None:

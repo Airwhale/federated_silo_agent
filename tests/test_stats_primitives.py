@@ -176,6 +176,91 @@ def test_budget_exhaustion_returns_structural_refusal() -> None:
     assert result.refusal_reason == REFUSAL_BUDGET_EXHAUSTED
 
 
+def test_concurrent_dp_primitive_calls_serialize_rng_access() -> None:
+    """The primitives layer serializes RNG access across threads.
+
+    numpy.random.Generator is not thread-safe. Concurrent `rng.normal()`
+    calls can correlate samples or corrupt internal state, which would
+    break the audit-replay determinism property the debit-before-noise
+    reorder secures. BankStatsPrimitives holds a `threading.Lock` over
+    `_sample_gaussian_noise` so that the noise step runs atomically.
+    """
+    import threading
+
+    layer = primitive_layer(rho_max=10.0)
+    name_hash, _signal_type = sample_name_hash_with_signal()
+    barrier = threading.Barrier(8)
+    results: list[int] = []
+    errors: list[BaseException] = []
+
+    def worker(slot: int) -> None:
+        # Each thread gets its own RequesterKey so they each have their
+        # own budget bucket, so the only contention is on the RNG itself.
+        key = RequesterKey(
+            requesting_investigator_id=f"investigator-{slot}",
+            requesting_bank_id=BankId.BANK_BETA,
+            responding_bank_id=BankId.BANK_ALPHA,
+        )
+        try:
+            barrier.wait(timeout=5.0)
+            result = layer.alert_count_for_entity(
+                name_hash=name_hash,
+                window=FULL_WINDOW,
+                requester=key,
+                rho=0.02,
+            )
+            assert isinstance(result.value, int)
+            results.append(result.value)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    assert not errors, f"thread errors: {errors}"
+    assert len(results) == 8
+
+
+def test_args_hash_is_stable_under_small_float_drift() -> None:
+    """args_hash canonicalizes floats before hashing so tiny drift is invisible.
+
+    rho values arriving from arithmetic on different platforms could differ
+    in the last few bits of their double-precision representation. The
+    args_hash rounds floats to 9 decimal places before JSON serialization,
+    so values within that precision produce the same hash.
+    """
+    from backend.silos.stats_primitives import _args_hash
+
+    base = {"rho": 0.02, "requester": "investigator|bank_alpha|bank_beta"}
+    drifted = {"rho": 0.02 + 1e-15, "requester": "investigator|bank_alpha|bank_beta"}
+    different = {"rho": 0.03, "requester": "investigator|bank_alpha|bank_beta"}
+
+    assert _args_hash(base) == _args_hash(drifted)
+    assert _args_hash(base) != _args_hash(different)
+
+
+def test_record_property_raises_on_multi_record_result() -> None:
+    """PrimitiveResult.record is a single-record convenience; multi-record raises.
+
+    `pattern_aggregate_for_f2` returns two records (one per histogram
+    component). Callers of that primitive must iterate `result.records`;
+    accessing `.record` raises ValueError citing the multi-record case.
+    """
+    layer = primitive_layer()
+    result = layer.pattern_aggregate_for_f2(
+        window=FULL_WINDOW,
+        requester=requester(),
+        rho=0.04,
+    )
+
+    assert len(result.records) == 2  # confirms this is a multi-record primitive
+    with pytest.raises(ValueError, match="multi-record"):
+        _ = result.record
+
+
 def test_primitive_call_closes_database_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
