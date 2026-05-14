@@ -10,7 +10,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 DEFAULT_DELTA = 1e-6
-OPEN_DP_RHO_TOLERANCE = 1e-8
+# OpenDP's Gaussian privacy map is computed from the released sigma (rounded
+# to 6 decimal places by sigma_for_zcdp for stable provenance/audit replay).
+# That rounding produces small drift in the recovered rho — bounded by the
+# derivative of rho = sensitivity^2 / (2 * sigma^2) at the local sigma. For
+# sensitivity=1 and rho up to 1.0, the drift can reach ~1e-6, so the
+# OpenDP-map equality check uses 1e-5 to give a safe margin without
+# accepting actually-wrong calibrations.
+OPEN_DP_RHO_TOLERANCE = 1e-5
 
 dp.enable_features("contrib")
 

@@ -343,6 +343,35 @@ def test_cross_bank_name_hashes_use_short_token_shape() -> None:
         EntityPresencePayload(name_hashes=["a" * 64])
 
 
+def test_hash_list_payloads_capped_at_one_hundred_entries() -> None:
+    """Schema-level cap on hash-list fields keeps SQL IN() clauses bounded.
+
+    The P7 primitives layer mirrors this cap (MAX_HASH_LIST_LENGTH=100)
+    to stay well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER (default 999).
+    """
+    too_many = [f"{i:016x}" for i in range(101)]
+    just_under = [f"{i:016x}" for i in range(100)]
+
+    # Boundary: exactly 100 hashes is fine.
+    EntityPresencePayload(name_hashes=just_under)
+
+    # Over the cap: each payload must reject.
+    with pytest.raises(ValidationError):
+        EntityPresencePayload(name_hashes=too_many)
+    with pytest.raises(ValidationError):
+        AggregateActivityPayload(
+            name_hashes=too_many,
+            window_start=date(2026, 5, 1),
+            window_end=date(2026, 5, 13),
+        )
+    with pytest.raises(ValidationError):
+        SanctionsCheckRequest(
+            **message_header(recipient_agent_id="federation.F3"),
+            entity_hashes=too_many,
+            requesting_context="Screen hashed entities for sanctions or PEP exposure.",
+        )
+
+
 def test_query_defaults_to_peer_bank_targets() -> None:
     query = Sec314bQuery(
         **message_header(),

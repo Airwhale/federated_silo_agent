@@ -10,6 +10,7 @@ from backend.silos import stats_primitives
 from backend.silos.budget import PrivacyBudgetLedger, RequesterKey
 from backend.silos.local_reader import bank_db_path
 from backend.silos.stats_primitives import (
+    MAX_HASH_LIST_LENGTH,
     REFUSAL_BUDGET_EXHAUSTED,
     BankStatsPrimitives,
     DateWindow,
@@ -173,6 +174,41 @@ def test_budget_exhaustion_returns_structural_refusal() -> None:
     assert result.value is None
     assert result.records == []
     assert result.refusal_reason == REFUSAL_BUDGET_EXHAUSTED
+
+
+def test_hash_list_inputs_capped_at_runtime_layer() -> None:
+    """Hash-list primitives refuse oversize inputs before issuing SQL.
+
+    The P4 schema caps `name_hashes`/`account_hashes`/`entity_hashes` at
+    100 entries to stay well under SQLite's SQLITE_LIMIT_VARIABLE_NUMBER
+    (default 999) on `IN ({placeholders})` queries. The primitives layer
+    mirrors that cap as defense-in-depth so a direct call (tests, future
+    internal flows) raises a clear error instead of hitting the SQLite
+    cliff with a cryptic 'too many SQL variables' message.
+    """
+    layer = primitive_layer()
+    oversize = [f"{i:016x}" for i in range(MAX_HASH_LIST_LENGTH + 1)]
+
+    with pytest.raises(ValueError, match="at most"):
+        layer.count_entities_by_name_hash(
+            name_hashes=oversize,
+            requester=requester(),
+        )
+
+    with pytest.raises(ValueError, match="at most"):
+        layer.flow_histogram(
+            name_hashes=oversize,
+            window=FULL_WINDOW,
+            requester=requester(),
+            rho=0.01,
+        )
+
+    with pytest.raises(ValueError, match="at most"):
+        layer.counterparty_edge_existence(
+            counterparty_hashes=oversize,
+            window=FULL_WINDOW,
+            requester=requester(),
+        )
 
 
 def test_failed_dp_primitive_does_not_debit_budget(tmp_path) -> None:

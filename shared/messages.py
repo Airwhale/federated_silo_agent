@@ -208,7 +208,7 @@ class EntityPresencePayload(StrictModel):
     """Query for whether hashed entities have relevant local signals."""
 
     query_shape: Literal["entity_presence"] = QueryShape.ENTITY_PRESENCE.value
-    name_hashes: list[CrossBankHashToken] = Field(min_length=1)
+    name_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date | None = None
     window_end: date | None = None
 
@@ -225,7 +225,7 @@ class AggregateActivityPayload(StrictModel):
     """Query for DP-protected aggregate activity about hashed entities."""
 
     query_shape: Literal["aggregate_activity"] = QueryShape.AGGREGATE_ACTIVITY.value
-    name_hashes: list[CrossBankHashToken] = Field(min_length=1)
+    name_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date
     window_end: date
     metrics: list[NonEmptyStr] = Field(default_factory=lambda: ["alert_count"])
@@ -240,7 +240,7 @@ class CounterpartyLinkagePayload(StrictModel):
     """Query for counterparty linkage around hashed account identifiers."""
 
     query_shape: Literal["counterparty_linkage"] = QueryShape.COUNTERPARTY_LINKAGE.value
-    account_hashes: list[CrossBankHashToken] = Field(min_length=1)
+    account_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     window_start: date
     window_end: date
     max_hops: int = Field(default=1, ge=1, le=2)
@@ -414,7 +414,7 @@ class SanctionsCheckRequest(Message):
     message_type: Literal["sanctions_check_request"] = (
         MessageType.SANCTIONS_CHECK_REQUEST.value
     )
-    entity_hashes: list[CrossBankHashToken] = Field(min_length=1)
+    entity_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     requesting_context: MediumText
 
     @field_validator("requesting_context")

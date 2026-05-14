@@ -40,6 +40,12 @@ DEFAULT_EDGE_COUNT_BUCKETS: tuple[tuple[int, int | None], ...] = (
     (5, None),
 )
 REFUSAL_BUDGET_EXHAUSTED = "budget_exhausted"
+# Defense-in-depth cap on hash-list inputs. P4 schemas enforce
+# max_length=100 at the Sec314bQuery boundary; this cap mirrors that bound
+# at the primitives layer so direct calls (tests, future internal flows)
+# also fail loudly before hitting SQLite's SQLITE_LIMIT_VARIABLE_NUMBER
+# (default 999) on `IN ({placeholders})` queries.
+MAX_HASH_LIST_LENGTH = 100
 
 PrimitiveValue: TypeAlias = int | list[int] | dict[str, bool] | BankAggregate
 
@@ -576,6 +582,13 @@ def _args_hash(args: dict[str, object]) -> str:
 def _require_non_empty(values: list[str], field_name: str) -> None:
     if not values:
         raise ValueError(f"{field_name} must not be empty")
+    if len(values) > MAX_HASH_LIST_LENGTH:
+        raise ValueError(
+            f"{field_name} must contain at most {MAX_HASH_LIST_LENGTH} entries "
+            f"(got {len(values)}); SQLite IN() clauses are bounded by "
+            "SQLITE_LIMIT_VARIABLE_NUMBER. Batch the query if larger sets "
+            "are needed."
+        )
 
 
 def _require_no_dp(rho: float) -> None:
