@@ -34,8 +34,8 @@ class ConstraintViolation(AgentRuntimeError):
     """Raised when repaired LLM output still violates deterministic rules."""
 
 
-class AgentAuditEvent(BaseModel):
-    """Small runtime audit event emitted by the P5 agent base class."""
+class RuntimeAuditEvent(BaseModel):
+    """Runtime-only audit event emitted before wire AuditEvent conversion."""
 
     event_id: str = Field(default_factory=lambda: str(uuid4()))
     kind: AuditEventKind
@@ -58,7 +58,7 @@ class AgentAuditEvent(BaseModel):
 class AuditEmitter(Protocol):
     """Minimal audit sink needed by the base runtime."""
 
-    def emit(self, event: AgentAuditEvent) -> None:
+    def emit(self, event: RuntimeAuditEvent) -> None:
         """Record one audit event."""
 
 
@@ -66,9 +66,9 @@ class InMemoryAuditEmitter:
     """Test and local-development audit sink."""
 
     def __init__(self) -> None:
-        self.events: list[AgentAuditEvent] = []
+        self.events: list[RuntimeAuditEvent] = []
 
-    def emit(self, event: AgentAuditEvent) -> None:
+    def emit(self, event: RuntimeAuditEvent) -> None:
         self.events.append(event)
 
 
@@ -290,7 +290,7 @@ class Agent(Generic[InT, OutT]):
         bypass_name: str | None = None,
     ) -> None:
         self.audit.emit(
-            AgentAuditEvent(
+            RuntimeAuditEvent(
                 kind=kind,
                 run_id=self.runtime.run_id,
                 node_id=self.runtime.node_id,
@@ -305,3 +305,8 @@ class Agent(Generic[InT, OutT]):
                 bypass_name=bypass_name,
             )
         )
+
+
+# Compatibility alias for older imports. New code should use RuntimeAuditEvent
+# and reserve shared.messages.AuditEvent for the signed wire-level event.
+AgentAuditEvent = RuntimeAuditEvent

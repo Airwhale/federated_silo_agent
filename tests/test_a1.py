@@ -20,7 +20,7 @@ from backend.silos.local_reader import read_signal_candidates
 from shared.enums import AgentRole, AuditEventKind, BankId, SignalType
 
 
-TEST_SDN_HASHES = frozenset({"sdn_counterparty_hash_0001"})
+TEST_SDN_HASHES = frozenset({"661f729972ae2156"})
 
 
 def runtime() -> AgentRuntimeContext:
@@ -162,6 +162,26 @@ def test_mixed_batch_bypass_is_materialized_before_llm_call() -> None:
     assert output.decisions[1].action == "suppress"
     assert audit.events[0].kind == AuditEventKind.BYPASS_TRIGGERED
     assert audit.events[0].rule_name == "A1-B1"
+
+
+def test_bypass_policy_constraint_rejects_suppressed_bypass_decision() -> None:
+    candidate = synthetic_ctr_candidate()
+    agent, _llm, _audit = agent_with_responses()
+    input_data = agent.build_input([candidate])
+    bad_output = A1BatchResult(
+        decisions=[
+            A1Decision(
+                signal_id=candidate.signal_id,
+                action="suppress",
+                alert=None,
+                llm_rationale="Incorrectly suppressed CTR threshold candidate.",
+            )
+        ]
+    )
+
+    violations = agent._constraint_violations(input_data, bad_output)
+
+    assert violations[0][0].name == "bypass_decisions_match_policy"
 
 
 def test_normal_candidate_path_calls_llm_stub_and_validates_alert() -> None:

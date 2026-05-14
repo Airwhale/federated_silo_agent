@@ -48,8 +48,8 @@ from shared.messages import (
 )
 
 
-HASH_A = "a" * 64
-HASH_B = "b" * 64
+HASH_A = "a" * 16
+HASH_B = "b" * 16
 ARGS_HASH = "c" * 64
 
 
@@ -336,6 +336,11 @@ def test_query_shape_must_match_payload_shape() -> None:
             purpose_declaration=purpose(),
             requested_rho_per_primitive=0.02,
         )
+
+
+def test_cross_bank_name_hashes_use_short_token_shape() -> None:
+    with pytest.raises(ValidationError):
+        EntityPresencePayload(name_hashes=["a" * 64])
 
 
 def test_query_defaults_to_peer_bank_targets() -> None:

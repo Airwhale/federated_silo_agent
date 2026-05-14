@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from shared.enums import BankId
-from shared.messages import Alert, Sha256Hex
+from shared.messages import Alert, CrossBankHashToken, Sha256Hex
 
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -42,7 +42,7 @@ class SignalCandidate(A1Model):
     timestamp: datetime
     account_id: NonEmptyStr
     account_id_hash: Sha256Hex
-    customer_name_hash: HashText
+    customer_name_hash: CrossBankHashToken
     customer_kyc_tier: NonEmptyStr
     transaction_id_hash: Sha256Hex
     recent_near_ctr_count_24h: int = Field(ge=0)

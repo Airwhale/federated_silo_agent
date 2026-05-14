@@ -185,8 +185,8 @@ def build_constraint_rules(
             ),
         ),
         ConstraintRule(
-            name="bypass_candidates_must_emit",
-            check=lambda input_data, output: bypass_candidates_emit(
+            name="bypass_decisions_match_policy",
+            check=lambda input_data, output: bypass_decisions_match_policy(
                 input_data,
                 output,
                 sdn_hashes,
@@ -360,7 +360,7 @@ def alerts_route_to_local_a2(
     return True
 
 
-def bypass_candidates_emit(
+def bypass_decisions_match_policy(
     input_data: A1BatchInput,
     output: A1BatchResult,
     sdn_hashes: frozenset[str],
@@ -512,7 +512,7 @@ def synthetic_ctr_candidate() -> SignalCandidate:
         timestamp=datetime(2026, 5, 13, 12, 0, 0),
         account_id="synthetic_acct_A1_B1",
         account_id_hash=hash_identifier("synthetic_acct_A1_B1"),
-        customer_name_hash="synthetic_entity_hash_A1_B1",
+        customer_name_hash=hash_identifier("synthetic_entity_hash_A1_B1")[:16],
         customer_kyc_tier="small_business",
         transaction_id_hash=hash_identifier("synthetic_txn_A1_B1_ctr"),
         recent_near_ctr_count_24h=1,
@@ -522,7 +522,7 @@ def synthetic_ctr_candidate() -> SignalCandidate:
     )
 
 
-def synthetic_sdn_candidate(sdn_hash: str = "sdn_counterparty_hash_0001") -> SignalCandidate:
+def synthetic_sdn_candidate(sdn_hash: str = "661f729972ae2156") -> SignalCandidate:
     """Build a synthetic SDN bypass candidate for tests and demo output."""
     return SignalCandidate(
         signal_id="synthetic_A1_B2_sdn",
@@ -533,7 +533,7 @@ def synthetic_sdn_candidate(sdn_hash: str = "sdn_counterparty_hash_0001") -> Sig
         timestamp=datetime(2026, 5, 13, 12, 0, 0),
         account_id="synthetic_acct_A1_B2",
         account_id_hash=hash_identifier("synthetic_acct_A1_B2"),
-        customer_name_hash="synthetic_entity_hash_A1_B2",
+        customer_name_hash=hash_identifier("synthetic_entity_hash_A1_B2")[:16],
         customer_kyc_tier="commercial",
         transaction_id_hash=hash_identifier("synthetic_txn_A1_B2_sdn"),
         recent_near_ctr_count_24h=1,
@@ -554,7 +554,7 @@ def synthetic_velocity_candidate() -> SignalCandidate:
         timestamp=datetime(2026, 5, 13, 12, 0, 0),
         account_id="synthetic_acct_A1_B3",
         account_id_hash=hash_identifier("synthetic_acct_A1_B3"),
-        customer_name_hash="synthetic_entity_hash_A1_B3",
+        customer_name_hash=hash_identifier("synthetic_entity_hash_A1_B3")[:16],
         customer_kyc_tier="small_business",
         transaction_id_hash=hash_identifier("synthetic_txn_A1_B3_velocity"),
         recent_near_ctr_count_24h=10,

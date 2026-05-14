@@ -1,7 +1,7 @@
 {
   "entities": [
     {
-      "name_hash": "sdn_counterparty_hash_0001",
+      "name_hash": "661f729972ae2156",
       "source": "SDN",
       "notes": "P6 synthetic SDN counterparty fixture"
     },

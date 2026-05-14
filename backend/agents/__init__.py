@@ -9,6 +9,7 @@ from backend.agents.base import (
     InMemoryAuditEmitter,
     InvalidAgentInput,
     LLMOutputUnparseable,
+    RuntimeAuditEvent,
 )
 from backend.agents.llm_client import (
     ChatCompletionRequest,
@@ -37,4 +38,5 @@ __all__ = [
     "LLMProviderError",
     "LLMResponse",
     "LobsterTrapMetadata",
+    "RuntimeAuditEvent",
 ]
