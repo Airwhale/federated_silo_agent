@@ -45,7 +45,14 @@ class MessageType(StrEnum):
 
 
 class SignalType(StrEnum):
-    """Local alert signal types surfaced by A1."""
+    """Local alert signal types surfaced by A1.
+
+    `CTR_REPORT` is distinct from `STRUCTURING`. A Currency Transaction Report
+    is the federal reporting requirement triggered by single transactions at
+    or above $10,000 (FFIEC BSA/AML Examination Manual). Structuring is the
+    deliberate splitting of sub-$10K transactions to evade the CTR threshold.
+    They are opposite typologies, not synonyms.
+    """
 
     STRUCTURING = "structuring"
     LAYERING = "layering"
@@ -53,6 +60,7 @@ class SignalType(StrEnum):
     COUNTERPARTY_RISK = "counterparty_risk"
     SANCTIONS_MATCH = "sanctions_match"
     PEP_RELATION = "pep_relation"
+    CTR_REPORT = "ctr_report"
 
 
 class TypologyCode(StrEnum):

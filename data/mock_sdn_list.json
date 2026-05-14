@@ -1,0 +1,14 @@
+{
+  "entities": [
+    {
+      "name_hash": "sdn_counterparty_hash_0001",
+      "source": "SDN",
+      "notes": "P6 synthetic SDN counterparty fixture"
+    },
+    {
+      "name_hash": "9ca42fcf00e1dea0",
+      "source": "PEP",
+      "notes": "S1-D planted PEP entity hash for later F3 tests"
+    }
+  ]
+}

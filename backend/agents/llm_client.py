@@ -121,6 +121,16 @@ class LLMClient:
         self.request_urls: list[str] = []
         self.requests: list[ChatCompletionRequest] = []
 
+    def set_stub_responses(self, responses: Sequence[StubResponse]) -> None:
+        """Replace the stub-response queue and reset the cursor.
+
+        Public test affordance so tests don't have to reach into the
+        private `_stub_responses` list. Always resets the stub index to
+        zero so the next call returns the first new response.
+        """
+        self._stub_responses = list(responses)
+        self._stub_index = 0
+
     def chat_structured(
         self,
         *,

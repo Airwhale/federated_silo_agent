@@ -524,7 +524,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 - **P3** Bank data validation + checksum test ✓
 - **P4** Shared message schemas ✓
 - **P5** Agent runtime base class ✓
-- **P6** A1 transaction-monitoring agent ·
+- **P6** A1 transaction-monitoring agent ✓
 - **P7** Bank-local stats-primitives layer + DP ·
 - **P8** A2 investigator agent ·
 - **P8a** A3 silo responder agent ·
@@ -545,7 +545,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 
 ---
 
-### Done parts (P0–P5)
+### Done parts (P0–P6)
 
 **P0 — Repo scaffold + proxy chain smoke** ✓
 
@@ -700,7 +700,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - `LLMClientConfig.base_url` is honored, so two test agents can point at different fake LT endpoints
   - `LLM_STUB_MODE=1` prevents network calls
 - *What was built:* `backend/runtime/context.py` defines strict Pydantic runtime config objects (`TrustDomain`, `LLMClientConfig`, `AgentRuntimeContext`). `backend/agents/rules.py` defines typed `BypassRule` and `ConstraintRule` objects. `backend/agents/llm_client.py` defines the OpenAI-compatible structured-output client that sends `_lobstertrap` metadata, honors node-local `base_url`, supports provider retries, and has deterministic stub mode. `backend/agents/base.py` defines the generic `Agent` runtime, P5 exceptions, and in-memory audit sink. `shared/enums.py` now includes the `A3` role needed by the split silo-responder architecture.
-- *Acceptance (current):* `uv run pytest tests/test_agent_base.py tests/test_llm_client.py` passes 10 focused P5 tests. `uv run pytest` passes the full 78-test suite. `uv run python -m compileall backend shared tests` passes. `git diff --check` reports only CRLF normalization warnings.
+- *Acceptance (current):* `uv run pytest tests/test_agent_base.py tests/test_llm_client.py` passes 10 focused P5 tests. `uv run pytest` passes the full 86-test suite. `uv run python -m compileall backend shared tests` passes. `git diff --check` reports only CRLF normalization warnings.
 - *Risks specific to this part:* (a) Gemini's structured-output mode occasionally returns invalid JSON — mitigation: one retry with `response_format` re-asserted; on second failure raise rather than half-parse. (b) LT may rate-limit during retry storms — mitigation: exponential backoff on LLM-side errors, not on constraint-side errors. (c) The generics typing (`Agent[InT, OutT]`) needs Pydantic v2's `TypeAdapter` to validate at runtime — mitigation: explicit `output_schema.model_validate(raw_json)` rather than relying on TypeVar resolution.
 - *Depends on:* P0, P4.
 - *Scope check:* one focused session. Stops at "trivial echo agent works end-to-end against the stub; a single opt-in test confirms it also works against live Gemini."
@@ -708,23 +708,42 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 **P6 — A1 transaction-monitoring agent**
 
 - *Goal:* Full LLM agent that reviews a batch of `suspicious_signals` + correlated transaction rows for one bank and emits `Alert` messages to local A2. Constraints prevent any non-A2 destination; bypasses force-emit on hard-required regulatory criteria (CTR threshold, SDN, velocity spikes).
-- *Files:* `backend/agents/a1_monitoring.py`, `backend/agents/prompts/a1_system.md` (the system prompt — Markdown file rather than inline string so it can be reviewed and refined), `tests/test_a1.py`. P6 creates a minimal `data/mock_sdn_list.json` test stub if P10 has not populated the full mock list yet.
-- *Inputs:* a batch of `SignalCandidate` records (read from local SQLite via a small helper module `backend/silos/local_reader.py` — A1 reads its own bank's raw data; only the cross-bank-response path is gated by P7). Each candidate carries: `signal_id`, `transaction_id`, `amount`, `transaction_type`, `channel`, `timestamp`, `account_id`, `customer_kyc_tier`, `recent_velocity` (count of near-CTR txns on this account in last 7 days), `counterparty_account_id_hashed`, plus a fetched `signal_type` and `severity` from the bank's pre-existing rule-based scorer.
-- *Output:* a list of `Alert` records or an empty list per candidate. The LLM returns a structured `A1BatchResult { decisions: list[A1Decision] }` where each `A1Decision = {signal_id, action: "emit"|"suppress", alert: Alert | None, llm_rationale: str}`.
-- *Rule bypasses:* implement `A1-B1` through `A1-B3` from the Section 8.3 bypass rule catalog.
-- *Rule constraints (LLM cannot override):*
-  - `Alert.recipient_agent_id` must equal the local A2's agent_id; LT-blocked otherwise.
-  - `Alert.evidence` items reference hashed identifiers only (no customer names; no raw `account_id` strings without hashing).
-  - LLM cannot suppress a signal that meets a bypass criterion.
+- *Files:* `backend/agents/a1_models.py`, `backend/agents/a1_monitoring.py`, `backend/agents/prompts/a1_system.md` (the system prompt, kept in Markdown rather than inline text), `backend/silos/__init__.py`, `backend/silos/local_reader.py`, `data/mock_sdn_list.json`, `tests/test_a1.py`. P6 creates a minimal `data/mock_sdn_list.json` test stub if P10 has not populated the full mock list yet.
+- *Inputs:* a batch of `SignalCandidate` records read from local SQLite via `backend/silos/local_reader.py`. A1 reads only its own bank's raw data; only the cross-bank-response path is gated by P7. Each candidate carries: `signal_id`, `transaction_id`, `amount`, `transaction_type`, `channel`, `timestamp`, `account_id`, `customer_name_hash`, `customer_kyc_tier`, `recent_near_ctr_count_24h`, `counterparty_account_id_hashed`, plus a fetched `source_signal_type` and `source_severity` from the bank's pre-existing rule-based scorer.
+- *Output:* a list of `Alert` records or an empty list per candidate. The LLM returns a structured `A1BatchResult { decisions: list[A1Decision] }` where each `A1Decision = {signal_id, action: "emit"|"suppress", alert: Alert | None, llm_rationale: str, bypass_rule_id: A1-B1|A1-B2|A1-B3|None}`. The `A1Decision` Pydantic model carries a `model_validator` enforcing `action="emit" ↔ alert is not None` and `action="suppress" ↔ alert is None`; this is a boundary-schema invariant, not a deterministic `ConstraintRule`.
+- *Rule bypasses:* implement `A1-B1` through `A1-B3` from the Section 8.3 bypass rule catalog. The A1-B1 (CTR threshold) bypass emits an `Alert` with `signal_type = SignalType.CTR_REPORT`, not `SignalType.STRUCTURING`. A Currency Transaction Report is the federal reporting obligation for transactions ≥ $10K; structuring is the opposite typology (sub-$10K splitting to evade the threshold). The mapper in `map_signal_type` enforces this.
+- *Rule constraints (LLM cannot override) — implemented as `ConstraintRule` objects in `backend/agents/a1_monitoring.py`:*
+  1. **`one_decision_per_candidate`** — output must contain exactly one `A1Decision` per input `signal_id`; no missing, duplicate, or invented signals.
+  2. **`alert_routing`** — every emitted `Alert.recipient_agent_id` is the local A2's agent_id, `sender_agent_id` is the local A1, and `sender_bank_id` is the agent's bank.
+  3. **`bypass_candidates_must_emit`** — any candidate matching `A1-B1`, `A1-B2`, or `A1-B3` MUST result in `action="emit"` with a populated `alert`; the LLM cannot suppress a bypass-matching candidate.
+  4. **`alert_matches_candidate`** — every emitted `Alert.transaction_id` and `Alert.account_id` matches the source candidate's IDs; the LLM cannot invent or cross-link.
+  5. **`evidence_uses_hashed_identifiers`** — `Alert.evidence[*].account_hashes` and `transaction_hashes` carry SHA-256 hashes of the raw IDs, never the raw strings; defense in depth against ID-leakage in cross-bank evidence.
 - *Approach (Gemini call):* system prompt declares A1's role and the bypass criteria from the catalog (so the LLM doesn't waste tokens reasoning about CTR-threshold cases that are already decided); user message is the batch of candidates as JSON; structured output is the `A1BatchResult` schema. Use `gemini-2.5-flash` (cheaper, fine for this volume); fallback to `gemini-2.5-pro` if structured-output parsing fails twice.
 - *Out of scope for this part:* no cross-bank communication, no DP, no peer-A2 interaction. A1 is local-bank-only.
+- *Demo hook:* P6 includes a stub-friendly local demo command:
+  ```powershell
+  uv run python -m backend.agents.a1_monitoring demo --bank bank_alpha --limit 50 --stub
+  ```
+  The command loads a deterministic Bank Alpha batch, runs A1, and prints a Rich table with `signal_id`, `amount`, source signal, A1 decision, bypass rule if any, and short rationale. The visible demo point is that A1 converts noisy local monitoring signals into structured `Alert` messages for local A2, while still having only single-bank visibility.
+- *Demo examples shown by the command:*
+  - **LLM judgment:** a normal sub-CTR signal where A1 decides to emit or suppress.
+  - **Mandatory bypass:** a synthetic `>= $10K` transaction triggers `A1-B1` with no LLM call.
+  - **Planted scenario:** at least one S1-related near-CTR signal is emitted, but A1 cannot know it is part of a three-bank ring.
 - *Acceptance:* `tests/test_a1.py` runs A1 on a deterministic batch of 50 signals from `data/silos/bank_alpha.db`:
-  - At least 5 S1-related transactions in the batch produce `amount_near_ctr_threshold` alerts (allowing for LLM judgment on the legitimate-looking ones).
-  - A synthetic ≥$10K transaction injected into the batch triggers the CTR bypass with `action="emit"` regardless of LLM judgment.
-  - A synthetic SDN-hash-match transaction triggers the SDN bypass.
+  - The local reader exposes ≥5 S1-related `amount_near_ctr_threshold` candidates to A1.
+  - **Full LLM path on planted S1 candidates:** running A1 with a stub LLM that mirrors realistic triage emits Alerts for ≥5 S1-related candidates; every emitted Alert is addressed to local A2 with hashed evidence; `llm.call_count == 1` confirms the LLM path was exercised (not a bypass-only path).
+  - A synthetic ≥$10K transaction triggers the CTR bypass (`A1-B1`) with `action="emit"` regardless of LLM judgment.
+  - A synthetic SDN-hash-match transaction triggers the SDN bypass (`A1-B2`).
+  - A synthetic account with ≥10 near-CTR transactions in 24h triggers the velocity bypass (`A1-B3`).
+  - A normal non-bypass candidate path calls the P5 LLM stub and returns a valid `A1BatchResult`.
+  - Malformed LLM output gets repaired by the P5 base runtime.
+  - A bad alert recipient is caught by constraint retry or raises `ConstraintViolation`.
   - Every emitted `Alert` passes Pydantic validation against P4 schemas.
   - No alert addressed to anything other than local A2.
-- *Risks specific to this part:* (a) the LLM may over-suppress to reduce alert volume — mitigation: the prompt explicitly says "the bank already runs a rule-based scorer; your job is to triage, not to second-guess obvious cases" and severity score is in the input. (b) Gemini latency on batches >50 — mitigation: cap batch at 50; orchestrator chunks larger inputs.
+  - The demo command runs in `--stub` mode and prints loaded, emitted, and suppressed counts plus visible bypass labels.
+- *What was built:* `backend/agents/a1_models.py` defines strict A1 boundary models (`SignalCandidate`, `A1BatchInput`, `A1Decision`, `A1BatchResult`) with a `model_validator` enforcing the `action ↔ alert` invariant. `backend/silos/local_reader.py` reads typed local suspicious-signal batches from each bank SQLite database. The 24h near-CTR velocity is computed via a single batched SQL (`SELECT ... WHERE account_id IN (...)`) over the candidate set, replacing the previous N+1 per-candidate pattern. `backend/agents/a1_monitoring.py` implements the A1 agent, A1-B1/A1-B2/A1-B3 bypasses, the five post-LLM `ConstraintRule` objects, safe evidence hashing, the `map_signal_type` mapper (CTR→`CTR_REPORT`, SDN→`SANCTIONS_MATCH`, velocity→`RAPID_MOVEMENT`), synthetic demo candidates, and the Rich/Typer demo command. `backend/agents/prompts/a1_system.md` stores the A1 system prompt. `data/mock_sdn_list.json` provides the P6 SDN test fixture. `shared/enums.py` gains `SignalType.CTR_REPORT` with a docstring distinguishing it from `STRUCTURING`. `LLMClient.set_stub_responses(...)` is a public test-affordance setter that replaces the stub queue and resets the cursor (so tests no longer reach into the private `_stub_responses` list).
+- *Acceptance (current):* `uv run pytest tests/test_a1.py` passes 9 focused P6 tests (8 originally + 1 end-to-end S1 LLM-path test added during review). `uv run python -m backend.agents.a1_monitoring demo --bank bank_alpha --limit 10 --stub` runs and prints the local A1 table with LLM-judgment rows, an S1 local row, and A1-B1/A1-B2 bypass rows. `uv run pytest` passes the full 87-test suite. `uv run python -m compileall backend shared tests` passes. `git diff --check` reports only CRLF normalization warnings.
+- *Risks specific to this part:* (a) the LLM may over-suppress to reduce alert volume — mitigation: the prompt explicitly says "the bank already runs a rule-based scorer; your job is to triage, not to second-guess obvious cases" and severity score is in the input. (b) Gemini latency on batches >50 — mitigation: cap batch at 50; orchestrator chunks larger inputs. (c) The 24h velocity SQL fans out to every candidate account in one query — for a 50-row batch this is one SQL hitting at most 50 accounts; if A1 ever needs larger batches or longer windows, revisit the query plan.
 - *Depends on:* P3 (data), P5 (base class).
 - *Scope check:* one to two focused sessions — prompt engineering takes longer than code here.
 
