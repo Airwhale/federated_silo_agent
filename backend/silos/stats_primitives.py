@@ -266,8 +266,8 @@ class BankStatsPrimitives:
         # lands in exactly one bucket (the `for ... break` loop in
         # `_amount_histogram` enforces this), so the Gaussian mechanism applied
         # to each bucket sees disjoint data. Under zCDP parallel composition,
-        # using the full ρ per bucket pays only ρ total. This gives sigma =
-        # 1/sqrt(2ρ) per bucket, √N times less noise than serial composition.
+        # using the full rho per bucket pays only rho total. This gives sigma =
+        # 1/sqrt(2*rho) per bucket, sqrt(N) times less noise than serial composition.
         bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho)
         validate_opendp_gaussian_map(sensitivity=1.0, rho=rho, sigma=bucket_sigma)
         # Commit the debit BEFORE drawing noise so audit-replay is deterministic.
@@ -380,7 +380,8 @@ class BankStatsPrimitives:
 
         # Sequential composition between the two components (edge distribution
         # and flow histogram) because they share the same underlying data
-        # (every transaction contributes to both views). Split ρ = ρ_edge + ρ_flow.
+        # (every transaction contributes to both views). Split rho into edge
+        # and flow components.
         rho_per_component = rho / 2.0
         edge_true = _edge_count_distribution(counterparty_counts)
         flow_true = _amount_histogram(amounts, DEFAULT_AMOUNT_BUCKETS)
@@ -388,11 +389,11 @@ class BankStatsPrimitives:
         # Within each component, buckets are a disjoint partition of the data
         # (one counterparty's edge count is in exactly one bucket; one
         # transaction's amount is in exactly one bucket). zCDP parallel
-        # composition lets us use the full per-component ρ on each bucket.
+        # composition lets us use the full per-component rho on each bucket.
         #
         # Edge sensitivity is the L2 norm of the change vector, not L1.
         # One transaction can move one counterparty between two adjacent buckets,
-        # producing a change vector [+1, -1, 0, ...] with L2 norm √2. The
+        # producing a change vector [+1, -1, 0, ...] with L2 norm sqrt(2). The
         # Gaussian mechanism under zCDP is calibrated on L2 sensitivity.
         edge_sensitivity = math.sqrt(2.0)
         edge_sigma = sigma_for_zcdp(sensitivity=edge_sensitivity, rho=rho_per_component)
@@ -613,8 +614,8 @@ def _amount_histogram(
 
 
 def _edge_count_distribution(counterparty_counts: Counter[str]) -> list[int]:
-    # One transaction can move one counterparty between two adjacent edge-count
-    # buckets, L₁ change = 2.
+    # One transaction can move one counterparty between two adjacent buckets;
+    # calibration above uses the resulting L2 sensitivity sqrt(2).
     distribution = [0 for _ in DEFAULT_EDGE_COUNT_BUCKETS]
     for count in counterparty_counts.values():
         for index, (lower, upper) in enumerate(DEFAULT_EDGE_COUNT_BUCKETS):

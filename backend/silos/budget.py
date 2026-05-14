@@ -33,8 +33,8 @@ class RequesterKey(BudgetModel):
         A naive `"|".join(...)` would collide on adversarial inputs like
         `requesting_investigator_id="user|1"` at bank_a vs investigator
         `"user"` at bank_id `"1|bank_a"`. Encoding each component with its
-        byte length removes the ambiguity: parsing the key requires
-        consuming exactly N bytes for a `N:` prefix, so no concatenation
+        character length removes the ambiguity: parsing the key requires
+        consuming exactly N characters for a `N:` prefix, so no concatenation
         of valid components can be misread as a different triple.
         """
         return "|".join(
