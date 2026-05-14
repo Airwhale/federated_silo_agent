@@ -285,7 +285,14 @@ class HealthSnapshot(UiModel):
 
 
 class ProbeResult(UiModel):
-    """Outcome of one adversarial probe."""
+    """Outcome of one adversarial probe.
+
+    Carries the full state bundle that ``DemoControlService.run_probe``
+    commits to the session under one short critical section. Handlers
+    set the relevant ``envelope`` / ``route_approval`` / ``dp_ledger``
+    fields here instead of mutating session state directly, so probe
+    execution can run outside the session lock.
+    """
 
     probe_id: UUID = Field(default_factory=uuid4)
     probe_kind: ProbeKind
@@ -297,4 +304,5 @@ class ProbeResult(UiModel):
     envelope: EnvelopeVerificationSnapshot | None = None
     replay: ReplayCacheSnapshot | None = None
     route_approval: RouteApprovalSnapshot | None = None
+    dp_ledger: DpLedgerSnapshot | None = None
     timeline_event: TimelineEventSnapshot

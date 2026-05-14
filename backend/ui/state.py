@@ -357,54 +357,74 @@ class DemoControlService:
 
     def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
         session = self._session(session_id)
-        # Each probe handler may mutate several session fields; serialize
-        # the whole run+append so a concurrent reader of `component_snapshot`
-        # or `to_snapshot` cannot see a half-applied probe outcome. The
-        # current P9a probes are deterministic and fast — A3SiloResponderAgent
-        # is constructed per call without LLM, P7 ledger debits are O(1) — so
-        # holding the lock for the full dispatch is correct.
-        # TODO(P15): when LLM-driven probes land (LT injection, A3 with
-        # policy adapter), refactor probe handlers to return a state-update
-        # bundle, run the handler outside the lock, and commit the bundle
-        # atomically at the end so a slow probe cannot block other reads.
-        with session.lock:
-            try:
-                if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
-                    result = self._unsigned_message_probe(session, request)
-                elif request.probe_kind == ProbeKind.BODY_TAMPER:
-                    result = self._body_tamper_probe(session, request)
-                elif request.probe_kind == ProbeKind.WRONG_ROLE:
-                    result = self._wrong_role_probe(session, request)
-                elif request.probe_kind == ProbeKind.REPLAY_NONCE:
-                    result = self._replay_probe(session, request)
-                elif request.probe_kind == ProbeKind.ROUTE_MISMATCH:
-                    result = self._route_mismatch_probe(session, request)
-                elif request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
-                    result = self._budget_exhaustion_probe(session, request)
-                else:
-                    result = self._placeholder_probe(session, request)
-            except Exception as exc:  # noqa: BLE001
-                # Probe handlers call into real agent code
-                # (A3SiloResponderAgent, PrivacyBudgetLedger, etc.).
-                # An unexpected internal failure should surface as a
-                # structured timeline entry, not a 500. The judge
-                # console can then render the breakdown distinctly
-                # from a "security layer blocked the probe" outcome.
-                # `accepted=False` because the attack did not
-                # demonstrably succeed; `blocked_by=INTERNAL_ERROR`
-                # marks the entry as a code failure rather than a
-                # policy enforcement.
-                result = _probe_result(
-                    request,
-                    accepted=False,
-                    blocked_by=SecurityLayer.INTERNAL_ERROR,
-                    reason=_truncate_detail(
-                        f"Probe handler raised {type(exc).__name__}: {exc}"
-                    ),
-                )
+        # Probe handlers run *outside* the session lock so a slow probe
+        # (future LLM-driven LT injection, A3 with policy adapter, etc.)
+        # cannot block other reads on the same session. The handlers
+        # produce a `ProbeResult` whose `envelope` / `route_approval` /
+        # `dp_ledger` fields carry the full state bundle to commit;
+        # `_commit_probe_outcome` takes the lock briefly to apply the
+        # bundle and append the timeline event in one critical section.
+        try:
+            result = self._dispatch_probe(session, request)
+        except Exception as exc:  # noqa: BLE001
+            # Probe handlers call into real agent code
+            # (A3SiloResponderAgent, PrivacyBudgetLedger, etc.).
+            # An unexpected internal failure should surface as a
+            # structured timeline entry, not a 500. The judge
+            # console can then render the breakdown distinctly
+            # from a "security layer blocked the probe" outcome.
+            # `accepted=False` because the attack did not
+            # demonstrably succeed; `blocked_by=INTERNAL_ERROR`
+            # marks the entry as a code failure rather than a
+            # policy enforcement.
+            result = _probe_result(
+                request,
+                accepted=False,
+                blocked_by=SecurityLayer.INTERNAL_ERROR,
+                reason=_truncate_detail(
+                    f"Probe handler raised {type(exc).__name__}: {exc}"
+                ),
+            )
 
-            session.append_event(result.timeline_event)
+        self._commit_probe_outcome(session, result)
         return result
+
+    def _dispatch_probe(
+        self,
+        session: DemoSessionRuntime,
+        request: ProbeRequest,
+    ) -> ProbeResult:
+        if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
+            return self._unsigned_message_probe(session, request)
+        if request.probe_kind == ProbeKind.BODY_TAMPER:
+            return self._body_tamper_probe(session, request)
+        if request.probe_kind == ProbeKind.WRONG_ROLE:
+            return self._wrong_role_probe(session, request)
+        if request.probe_kind == ProbeKind.REPLAY_NONCE:
+            return self._replay_probe(session, request)
+        if request.probe_kind == ProbeKind.ROUTE_MISMATCH:
+            return self._route_mismatch_probe(session, request)
+        if request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
+            return self._budget_exhaustion_probe(session, request)
+        return self._placeholder_probe(session, request)
+
+    def _commit_probe_outcome(
+        self,
+        session: DemoSessionRuntime,
+        result: ProbeResult,
+    ) -> None:
+        # Short critical section: copy the probe's state bundle onto
+        # the session and append the timeline event so a concurrent
+        # reader sees either the full prior state or the full new
+        # state, never a half-applied probe outcome.
+        with session.lock:
+            if result.envelope is not None:
+                session.latest_envelope = result.envelope
+            if result.route_approval is not None:
+                session.latest_route = result.route_approval
+            if result.dp_ledger is not None:
+                session.dp_ledger = result.dp_ledger
+            session.append_event(result.timeline_event)
 
     def system_snapshot(self) -> SystemSnapshot:
         return SystemSnapshot(
@@ -491,7 +511,6 @@ class DemoControlService:
                 blocked_by=SecurityLayer.SIGNATURE,
                 detail=str(exc),
             )
-            session.latest_envelope = envelope
             return _probe_result(
                 request,
                 accepted=False,
@@ -523,7 +542,6 @@ class DemoControlService:
                 blocked_by=SecurityLayer.SIGNATURE,
                 detail=str(exc),
             )
-            session.latest_envelope = envelope
             return _probe_result(
                 request,
                 accepted=False,
@@ -563,7 +581,6 @@ class DemoControlService:
                 blocked_by=SecurityLayer.ALLOWLIST,
                 detail=str(exc),
             )
-            session.latest_envelope = envelope
             return _probe_result(
                 request,
                 accepted=False,
@@ -594,7 +611,6 @@ class DemoControlService:
                 blocked_by=SecurityLayer.REPLAY,
                 detail=str(exc),
             )
-            session.latest_envelope = envelope
             return _probe_result(
                 request,
                 accepted=False,
@@ -667,8 +683,6 @@ class DemoControlService:
             binding_status="mismatched",
             detail="Routed query body no longer matches the signed route approval.",
         )
-        session.latest_envelope = envelope
-        session.latest_route = route
         return _probe_result(
             request,
             accepted=False,
@@ -690,7 +704,7 @@ class DemoControlService:
             responding_bank_id=BankId.BANK_BETA,
         )
         debit = ledger.debit(requester, 0.02)
-        session.dp_ledger = DpLedgerSnapshot(
+        dp_ledger = DpLedgerSnapshot(
             status=SnapshotStatus.LIVE,
             entries=[
                 DpLedgerEntrySnapshot(
@@ -708,6 +722,7 @@ class DemoControlService:
             accepted=False,
             blocked_by=SecurityLayer.P7_BUDGET,
             reason="Requested rho would exceed the requester-bank budget.",
+            dp_ledger=dp_ledger,
         )
 
     def _placeholder_probe(
@@ -941,6 +956,7 @@ def _unexpected_acceptance(
     envelope: EnvelopeVerificationSnapshot | None = None,
     replay: ReplayCacheSnapshot | None = None,
     route_approval: RouteApprovalSnapshot | None = None,
+    dp_ledger: DpLedgerSnapshot | None = None,
 ) -> ProbeResult:
     """Build the structured "probe attack succeeded" outcome.
 
@@ -959,6 +975,7 @@ def _unexpected_acceptance(
         envelope=envelope,
         replay=replay,
         route_approval=route_approval,
+        dp_ledger=dp_ledger,
     )
 
 
@@ -971,6 +988,7 @@ def _probe_result(
     envelope: EnvelopeVerificationSnapshot | None = None,
     replay: ReplayCacheSnapshot | None = None,
     route_approval: RouteApprovalSnapshot | None = None,
+    dp_ledger: DpLedgerSnapshot | None = None,
 ) -> ProbeResult:
     event = TimelineEventSnapshot(
         component_id=request.target_component,
@@ -989,16 +1007,6 @@ def _probe_result(
         envelope=envelope,
         replay=replay,
         route_approval=route_approval,
+        dp_ledger=dp_ledger,
         timeline_event=event,
     )
-
-
-def security_error_layer(exc: SecurityEnvelopeError) -> SecurityLayer:
-    """Map envelope exceptions to UI layer labels."""
-    if isinstance(exc, SignatureInvalid):
-        return SecurityLayer.SIGNATURE
-    if isinstance(exc, PrincipalNotAllowed):
-        return SecurityLayer.ALLOWLIST
-    if isinstance(exc, ReplayDetected):
-        return SecurityLayer.REPLAY
-    return SecurityLayer.FRESHNESS

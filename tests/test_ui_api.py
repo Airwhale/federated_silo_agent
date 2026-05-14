@@ -363,6 +363,46 @@ def test_truncate_detail_clamps_oversized_strings_with_ellipsis() -> None:
     assert clamped.startswith("y")
 
 
+def test_probe_handler_runs_outside_session_lock(monkeypatch) -> None:
+    # Round 10 refactor: probe handlers run outside session.lock so a
+    # slow probe (future LLM/LT injection) does not block reads on the
+    # same session. The handler must not hold the lock during its work;
+    # only the short `_commit_probe_outcome` critical section takes it.
+    import threading
+    from backend.ui import state as state_module
+
+    test_client = client()
+    session_id_str = create_session(test_client)
+    saw_lock_unlocked = threading.Event()
+
+    def slow_probe(self, session, request):  # type: ignore[no-untyped-def]
+        # If the session lock were held during the handler, this
+        # acquire-immediate from a sibling thread would block.
+        # `RLock.acquire(blocking=False)` succeeds only if no one
+        # else holds the lock.
+        if session.lock.acquire(blocking=False):
+            saw_lock_unlocked.set()
+            session.lock.release()
+        return state_module._unexpected_acceptance(
+            request,
+            reason="probe ran outside session lock (test)",
+        )
+
+    monkeypatch.setattr(state_module.DemoControlService, "_body_tamper_probe", slow_probe)
+
+    response = test_client.post(
+        f"/sessions/{session_id_str}/probes",
+        json={
+            "probe_kind": "body_tamper",
+            "target_component": "F1",
+            "attacker_profile": "valid_but_malicious",
+        },
+    )
+
+    assert response.status_code == 200
+    assert saw_lock_unlocked.is_set(), "probe handler held session.lock during execution"
+
+
 def test_probe_handler_internal_error_surfaces_as_structured_result(monkeypatch) -> None:
     # If a probe handler raises an unexpected exception, run_probe must
     # return a structured ProbeResult with blocked_by=internal_error and
