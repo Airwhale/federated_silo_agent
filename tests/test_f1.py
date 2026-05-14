@@ -495,6 +495,46 @@ def test_f1_converts_negotiable_silo_refusal_into_one_retry_request(
     assert retry.route_approval.approved_query_body_hash == approved_body_hash(retry)
 
 
+def test_f1_invalid_rho_retry_is_labeled_with_valid_rho(
+    fixture: F1Fixture,
+) -> None:
+    # `invalid_rho` retries upgrade rho (e.g. 0.0 -> DEFAULT_RETRY_RHO) rather
+    # than lowering it, so the audit label must differ from `retry_with_lower_rho`.
+    # Locks in the decision-label fidelity Gemini flagged on PR #4 round 1.
+    query = signed_query(
+        fixture,
+        target_bank_ids=[BankId.BANK_BETA],
+        metrics=["alert_count"],
+        requested_rho=0.0,
+    )
+    route_result = fixture.agent.run(f1_input(query))
+    assert route_result.route_plan is not None
+    refusal = signed_a3_response(
+        fixture,
+        bank_id=BankId.BANK_BETA,
+        query=query,
+        refusal_reason="invalid_rho",
+    )
+
+    result = fixture.agent.run(
+        F1TurnInput(
+            payload=F1AggregationInput(
+                original_query=query,
+                routed_requests=route_result.route_plan.peer_requests,
+                responses=[refusal],
+            )
+        )
+    )
+
+    assert result.action == "retry_plan"
+    assert result.route_plan is not None
+    note = result.route_plan.negotiation_notes[0]
+    assert note.refusal_reason == "invalid_rho"
+    assert note.decision == "retry_with_valid_rho"
+    retry = result.route_plan.peer_requests[0]
+    assert retry.requested_rho_per_primitive == 0.02
+
+
 def test_f1_retry_count_uses_route_approval_not_nonce_text(
     fixture: F1Fixture,
 ) -> None:

@@ -998,9 +998,16 @@ def _response_refusal_notes(notes: list[F1NegotiationNote]) -> list[ResponseRefu
 def _retry_decision(
     reason: str,
 ) -> str:
+    # `invalid_rho` retries upgrade rho (e.g. 0.0 -> DEFAULT_RETRY_RHO) rather
+    # than lowering it, so the audit label has to differ from `budget_exhausted`
+    # which actually halves rho. Mislabeling muddies the audit trail for F5/UI.
     if reason == "budget_exhausted":
         return "retry_with_lower_rho"
-    return "retry_with_supported_metric" if reason == "unsupported_metric_combination" else "retry_with_lower_rho"
+    if reason == "invalid_rho":
+        return "retry_with_valid_rho"
+    if reason == "unsupported_metric_combination":
+        return "retry_with_supported_metric"
+    return "retry_with_lower_rho"
 
 
 def _terminal_note(bank_id: BankId, reason: str, detail: str) -> F1NegotiationNote:

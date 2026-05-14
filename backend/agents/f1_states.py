@@ -65,6 +65,7 @@ class F1NegotiationNote(F1Model):
     refusal_reason: NonEmptyStr
     decision: Literal[
         "retry_with_lower_rho",
+        "retry_with_valid_rho",
         "retry_with_supported_metric",
         "partial_result",
         "terminal_refusal",
