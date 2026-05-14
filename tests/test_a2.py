@@ -292,22 +292,35 @@ def test_empty_peer_response_emits_dismissal_without_llm() -> None:
     assert result.dismissal.recipient_agent_id == "federation.F5"
 
 
+def test_correlated_alert_summary_entity_hashes_capped_at_one_hundred() -> None:
+    """`CorrelatedAlertSummary.entity_hashes` is bounded at 100 entries.
+
+    Matches the `max_length=100` cap on `EvidenceItem.entity_hashes` and the
+    other cross-bank-bound hash-list fields. Defense-in-depth against a
+    pathologically large correlation history payload reaching A2's
+    bypass-counter inner loop.
+    """
+    too_many = [f"{i:016x}" for i in range(101)]
+    with pytest.raises(ValidationError, match="at most 100"):
+        CorrelatedAlertSummary(
+            alert_id=uuid4(),
+            entity_hashes=too_many,
+            signal_type=SignalType.STRUCTURING.value,
+            created_at=datetime(2026, 5, 13, 12, 0, tzinfo=UTC),
+        )
+
+
 def test_correlated_alert_bypass_dedupes_hashes_within_one_summary() -> None:
     """A single summary mentioning the same hash twice still counts as one alert.
 
     The A2-B1 threshold is `>= 3 correlated alerts on the same name_hash within
     30 days`. The correlated-alert counter dedupes entity_hashes within each
     summary so duplicate entries inside one summary cannot prematurely
-    trigger the bypass. We send TWO summaries each repeating HASH_A multiple
-    times — that's still only 2 correlated alerts (plus the current one = 3
-    total), which is exactly at the threshold but verifying we don't see
-    e.g. 7+ from naive counting.
+    trigger the bypass.
 
-    Without dedup, summary 1 (`[HASH_A, HASH_A, HASH_A]`) would contribute 3
-    increments and summary 2 (`[HASH_A, HASH_A]`) another 2, giving count=6.
-    With dedup, each summary contributes exactly 1, giving count=3. The
-    bypass should fire AT threshold (3) with the dedup logic, NOT
-    over-aggressively (>=2) with the naive count.
+    Without dedup, this one summary (`[HASH_A, HASH_A, HASH_A]`) would
+    contribute 3 increments and trigger the bypass. With dedup, it contributes
+    exactly 1 increment, leaving the total below threshold.
     """
     alert_obj = alert()
     prior_time = alert_obj.created_at - timedelta(days=3)
@@ -323,7 +336,7 @@ def test_correlated_alert_bypass_dedupes_hashes_within_one_summary() -> None:
         TriageDecision(action="dismiss", reason="Not enough corroboration."),
     )
 
-    # One summary with duplicates → count=2 (initial 1 + this summary's 1).
+    # One summary with duplicates -> count=2 (initial 1 + this summary's 1).
     # Below threshold 3, so bypass must NOT fire and we go through the LLM.
     result = agent.run(
         agent.build_alert_input(alert_obj, correlated_alerts=one_only)
@@ -508,6 +521,36 @@ def test_response_in_reply_to_mismatch_is_rejected() -> None:
                     alert=alert_obj,
                     original_query=original_query,
                     response=response,
+                    investigator_id="investigator-alpha-1",
+                )
+            )
+        )
+    assert llm.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("update", "match"),
+    [
+        ({"sender_agent_id": "bank_beta.A3"}, "sender_agent_id"),
+        ({"sender_role": AgentRole.A3}, "sender_role"),
+        ({"sender_bank_id": BankId.BANK_BETA}, "sender_bank_id"),
+    ],
+)
+def test_peer_response_must_come_from_f1(update: dict[str, object], match: str) -> None:
+    alert_obj = alert()
+    original_query = query(alert_obj)
+    bad_response = peer_response(original_query, corroborating=True).model_copy(
+        update=update
+    )
+    agent, llm, _audit = agent_with_responses()
+
+    with pytest.raises(InvalidAgentInput, match=match):
+        agent.run(
+            A2TurnInput(
+                payload=A2PeerResponseInput(
+                    alert=alert_obj,
+                    original_query=original_query,
+                    response=bad_response,
                     investigator_id="investigator-alpha-1",
                 )
             )

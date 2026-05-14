@@ -277,7 +277,7 @@ QueryPayload: TypeAlias = Annotated[
 
 
 class Sec314bQuery(Message):
-    """A Section 314(b) query routed from one A2 to peer-bank A2s via F1."""
+    """A Section 314(b) query routed from A2 to peer-bank A3s via F1."""
 
     message_type: Literal["sec314b_query"] = MessageType.SEC314B_QUERY.value
     query_id: UUID = Field(default_factory=uuid4)
@@ -336,7 +336,7 @@ class HistogramResponseValue(StrictModel):
 class HashListResponseValue(StrictModel):
     """Hash-list response value."""
 
-    hash_list: list[OpaqueHashToken]
+    hash_list: list[OpaqueHashToken] = Field(max_length=100)
 
 
 ResponseValue: TypeAlias = (

@@ -32,6 +32,7 @@ from shared.messages import (
     EvidenceItem,
     GraphPatternRequest,
     GraphPatternResponse,
+    HashListResponseValue,
     IntResponseValue,
     LtVerdictPayload,
     MessageSentPayload,
@@ -382,6 +383,8 @@ def test_hash_list_payloads_capped_at_one_hundred_entries() -> None:
             entity_hashes=too_many,
             requesting_context="Screen hashed entities for sanctions or PEP exposure.",
         )
+    with pytest.raises(ValidationError):
+        HashListResponseValue(hash_list=too_many)
 
 
 def test_query_defaults_to_peer_bank_targets() -> None:

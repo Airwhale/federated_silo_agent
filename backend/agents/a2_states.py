@@ -48,7 +48,7 @@ class CorrelatedAlertSummary(A2Model):
     """Safe alert-history summary available to A2 without raw DB access."""
 
     alert_id: UUID
-    entity_hashes: list[CrossBankHashToken] = Field(min_length=1)
+    entity_hashes: list[CrossBankHashToken] = Field(min_length=1, max_length=100)
     signal_type: NonEmptyStr
     created_at: datetime
 

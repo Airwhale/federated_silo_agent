@@ -353,9 +353,12 @@ class A2InvestigatorAgent(Agent[A2TurnInput, A2TurnResult]):
                 continue
             # Dedup within a single summary: a summary that mentions the
             # same `name_hash` twice still counts as ONE correlated alert
-            # for that hash. Iterating `summary.entity_hashes` directly
-            # would double-count; the set intersection collapses repeats.
-            summary_matches = current_hashes & set(summary.entity_hashes)
+            # for that hash. `set.intersection(iterable)` returns a set, so
+            # repeats in `summary.entity_hashes` collapse — preserving the
+            # dedup invariant without allocating a temporary set from the
+            # full list. (CPython iterates the argument and tests each
+            # value against the base set's hash table.)
+            summary_matches = current_hashes.intersection(summary.entity_hashes)
             for hash_value in summary_matches:
                 # `hash_value` is guaranteed in `counts` because
                 # `summary_matches` is a subset of `current_hashes`, and
@@ -388,6 +391,12 @@ class A2InvestigatorAgent(Agent[A2TurnInput, A2TurnResult]):
             raise InvalidAgentInput(
                 "original_query must include the local alert_id in supporting_alert_ids"
             )
+        if payload.response.sender_agent_id != "federation.F1":
+            raise InvalidAgentInput("Sec314bResponse.sender_agent_id must be federation.F1")
+        if payload.response.sender_role != AgentRole.F1:
+            raise InvalidAgentInput("Sec314bResponse.sender_role must be F1")
+        if payload.response.sender_bank_id != BankId.FEDERATION:
+            raise InvalidAgentInput("Sec314bResponse.sender_bank_id must be federation")
         if payload.response.recipient_agent_id != self.agent_id:
             raise InvalidAgentInput("A2 response input must be addressed to this A2")
         if payload.response.in_reply_to != payload.original_query.query_id:
