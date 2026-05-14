@@ -2,7 +2,7 @@
 
 **Multi-agent cross-bank AML investigation system with privacy-preserving federation.**
 
-Three synthetic banks each run a transaction-monitoring agent, an outside-TEE investigator agent, and an inside-bank silo responder agent. When suspicious activity surfaces at one bank, the investigator agent asks the federation coordinator to query peer banks. Peer-bank evidence is answered by each bank's silo responder inside that bank's trusted boundary, using deterministic stats primitives rather than exposing raw data to the investigator. Specialist federation agents coordinate graph analysis, sanctions or PEP screening, SAR drafting, and compliance audit. **Every cross-bank conversation is policed by Veea Lobster Trap plus an AML policy adapter. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data crosses bank boundaries.**
+Three synthetic banks each run a transaction-monitoring agent, an outside-TEE investigator agent, and an inside-bank silo responder agent. When suspicious activity surfaces at one bank, the investigator agent asks the federation coordinator to query peer banks. Peer-bank evidence is answered by each bank's silo responder inside that bank's trusted boundary, using deterministic stats primitives rather than exposing raw data to the investigator. When pooled statistical intermediaries need the requesting bank's own slice, F1 asks that bank's A3 through a separate local-contribution route, not a peer-bank Section 314(b) disclosure. Specialist federation agents coordinate graph analysis, sanctions or PEP screening, SAR drafting, and compliance audit. **Every cross-bank conversation is policed by Veea Lobster Trap plus an AML policy adapter. Banks share hash-based entity tokens rather than customer identities; aggregate-count queries are protected by differential privacy where it applies. No customer data crosses bank boundaries.**
 
 Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab.ai/ai-hackathons/techex-intelligent-enterprise-solutions-hackathon), May 11 to 19, 2026. Primary submission track: **Track 4, Data & Intelligence**. Partner-award strategy: **Gemini** powers the LLM agents through Google services; **Veea Lobster Trap** is the policy substrate. Pitch comp: **Verafin to Nasdaq, $2.75B in 2020** for the non-private version of this market.
 
@@ -63,7 +63,7 @@ User or analyst
 | P6 | Done | A1 transaction-monitoring agent over local bank data. |
 | P7 | Done | Bank-local stats primitives with DP accounting, OpenDP checks, provenance, and budget ledger snapshots. |
 | P8 | Done | A2 outside-TEE investigator agent with typed query drafting, peer-response synthesis, and routing guardrails. |
-| P8a | Next | A3 inside-bank silo responder, including signed-envelope, route-approval, replay, and P7 invocation checks. |
+| P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
@@ -157,10 +157,11 @@ flowchart TB
 
 The diagram is logical. The planned cloud demo should run the policy and model-egress stack per trust domain, not as one shared gateway. Each bank silo, investigator node, and federation node owns its local Lobster Trap, LiteLLM route, policy adapter, envelope signer/verifier, replay cache, and audit forwarder.
 
-Four paths matter:
+Five paths matter:
 
 - **LLM path:** agent to local Lobster Trap to local LiteLLM to Gemini. OpenRouter can be used as a development fallback through the same LiteLLM boundary.
 - **Coordinator path:** A2 sends approved cross-bank questions only to F1. F1 routes to peer A3 responders and aggregates responses back to A2.
+- **Local contribution path:** when F1/F2 need the requesting bank's own statistical intermediaries, F1 asks that bank's A3 through `LocalSiloContributionRequest`. This is same-bank data-plane access, not a peer Section 314(b) disclosure.
 - **Cross-bank response data path:** A3 to stats primitives to local SQLite. This is deterministic and bank-local. A2 has no raw database or P7 stats-primitive handle.
 - **System-state path:** the UI reads typed snapshots from the control API for signing, envelope verification, replay, route approval, DP ledger, LT/LiteLLM health, and audit-chain status. It does not scrape logs and does not get write privileges over trust decisions.
 
@@ -187,16 +188,21 @@ The design assumes a possible man-in-the-middle attacker on inter-agent network 
 Planned message-security controls:
 
 - **mTLS service identity** between A2, F1, A3, Lobster Trap, LiteLLM, and supporting services.
-- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `Sec314bResponse`, SAR contributions, and audit events.
-- **Request/response binding** through `message_id`, `query_id`, `in_reply_to`, route approval metadata, and a hash of the exact approved query body.
+- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `LocalSiloContributionRequest`, `Sec314bResponse`, SAR contributions, and audit events. Hackathon scope uses Ed25519, not a production PKI.
+- **Principal allowlist** that binds `agent_id`, role, bank id, `signing_key_id`, public key, allowed message types, allowed recipients, and allowed routes.
+- **Request/response binding** through `message_id`, `query_id`, `in_reply_to`, route approval metadata, route kind, and a hash of the exact approved query body.
 - **Replay protection** through timestamp, expiration, nonce, and an idempotency cache.
-- **Silo-side re-validation** where A3 treats F1 approval as necessary but not sufficient. A3 still checks role, purpose, target bank, query shape, primitive allowlist, and DP budget.
+- **Silo-side re-validation** where A3 treats F1 approval as necessary but not sufficient. A3 still checks verified principal, route kind, purpose, target bank, query shape, primitive allowlist, and DP budget.
 - **Audit hash chain** so deleted or modified audit events are detectable.
 - **TEE attestation hook** for deployments that claim the federation layer or silo responder is running inside a specific trusted execution environment.
 
-The practical rule is: F1 may approve and route, but each silo remains sovereign over whether it can answer. A3 can return a refusal such as `invalid_purpose`, `unsupported_query_shape`, `route_violation`, or `budget_exhausted`.
+The practical rule is: F1 may approve and route, but each silo remains sovereign over whether it can answer. Peer disclosure uses `route_kind="peer_314b"`. Same-bank pooled intermediaries use `route_kind="local_contribution"` and are not modeled as peer targets. A3 can return a refusal such as `unsupported_query_shape`, `unsupported_metric`, `unsupported_metric_combination`, `invalid_rho`, `route_violation`, `signature_invalid`, `envelope_invalid`, `replay_detected`, `budget_exhausted`, or `provenance_violation`.
 
-For the judge console, the security-envelope layer should expose redacted state such as `signing_key_id`, canonical body hash, signature verification status, nonce freshness, replay-cache hit or miss, route-approval binding status, and audit-chain head. It must never expose private signing keys, API keys, raw customer names, or raw account identifiers.
+DP-backed aggregate metrics require an explicit positive `requested_rho_per_primitive`. A3 refuses zero-rho aggregate requests rather than silently substituting defaults, accepts one aggregate metric class per request, refuses mixed aggregate metric requests before any DP primitive runs, and refuses multi-hash `alert_count` fan-out until a batched primitive exists.
+
+Trust model note: A3 verifies F1's signed envelope and F1's signed `RouteApproval`; it does not independently re-verify the original A2 signature. F1 is responsible for authenticating A2 on ingress and transitively vouching for the request when it routes to A3.
+
+For the judge console, the security-envelope layer should expose redacted state such as `signing_key_id`, canonical body hash, signature verification status, nonce freshness, replay-cache hit or miss, route kind, route-approval binding status, and audit-chain head. It must never expose private signing keys, API keys, raw customer names, or raw account identifiers.
 
 ## P0 Proxy Chain
 
@@ -265,15 +271,25 @@ federated_silo_agent/
     start_lobstertrap.ps1          native Windows Lobster Trap launcher
     smoke_lobstertrap.py           local policy smoke
     smoke_proxy.py                 live proxy-chain smoke
-      smoke_openrouter.py            OpenRouter-backed proxy-chain smoke
-      p0_cases.py                    shared P0 prompt cases
+    smoke_openrouter.py            OpenRouter-backed proxy-chain smoke
+    p0_cases.py                    shared P0 prompt cases
+  backend/
+    agents/                        A1, A2, A3, and planned F-agent implementations
+    silos/                         bank-local stats primitives, DP, and budget ledger
+    security/                      P8a signing, allowlist, canonical JSON, and replay helpers
   shared/
     enums.py                        shared enum values
     messages.py                     Pydantic v2 message contracts
   tests/
+    test_agent_base.py
+    test_a1.py
+    test_a2.py
+    test_budget.py
     test_data_checksum.py
+    test_dp_composition.py
     test_messages.py
     test_p0_cases.py
+    test_stats_primitives.py
   plan.md
   README.md
 ```
@@ -314,7 +330,7 @@ The live benign Gemini proxy check is intentionally separate because it spends p
 - [Veea Lobster Trap](https://github.com/veeainc/lobstertrap), the policy proxy for LLM-channel governance.
 - [Google Gemini](https://ai.google.dev/), the target LLM provider for the hackathon build.
 - [LiteLLM](https://github.com/BerriAI/litellm), the OpenAI-compatible routing layer.
-- [OpenDP](https://github.com/opendp/opendp), the planned library for differential privacy primitives.
+- [OpenDP](https://github.com/opendp/opendp), used for differential privacy checks around the stats primitives.
 - [Synthea](https://synthetichealth.github.io/synthea/), used in the archived clinical prototype.
 
 ## License

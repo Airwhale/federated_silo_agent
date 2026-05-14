@@ -715,6 +715,7 @@ name = "federated-silo-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "duckdb" },
     { name = "httpx" },
     { name = "litellm", extra = ["proxy"] },
@@ -740,6 +741,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=46.0.3" },
     { name = "duckdb", specifier = ">=1.5.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "litellm", extras = ["proxy"], specifier = ">=1.75" },

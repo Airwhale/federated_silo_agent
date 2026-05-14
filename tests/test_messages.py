@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,6 +14,7 @@ from shared.enums import (
     PatternClass,
     PrivacyUnit,
     QueryShape,
+    RouteKind,
     ResponseValueKind,
     SARPriority,
     SignalType,
@@ -35,11 +36,13 @@ from shared.messages import (
     HashListResponseValue,
     IntResponseValue,
     LtVerdictPayload,
+    LocalSiloContributionRequest,
     MessageSentPayload,
     PrimitiveCallRecord,
     PUBLIC_MESSAGE_MODELS,
     PurposeDeclaration,
     RhoDebitedPayload,
+    RouteApproval,
     SARContribution,
     SARDraft,
     SanctionsCheckRequest,
@@ -116,9 +119,28 @@ def valid_query(query_id: UUID | None = None) -> Sec314bQuery:
     )
 
 
+def route_approval(
+    *,
+    query_id: UUID,
+    route_kind: RouteKind = RouteKind.PEER_314B,
+    requesting_bank_id: BankId = BankId.BANK_ALPHA,
+    responding_bank_id: BankId = BankId.BANK_BETA,
+) -> RouteApproval:
+    return RouteApproval(
+        query_id=query_id,
+        route_kind=route_kind,
+        approved_query_body_hash="d" * 64,
+        requesting_bank_id=requesting_bank_id,
+        responding_bank_id=responding_bank_id,
+        approved_by_agent_id="federation.F1",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+
+
 def valid_models() -> list[BaseModel]:
     alert_id = uuid4()
     query = valid_query()
+    local_source_query_id = uuid4()
     evidence = EvidenceItem(
         summary="Near-threshold cash activity tied to hashed entity.",
         entity_hashes=[HASH_A],
@@ -154,6 +176,33 @@ def valid_models() -> list[BaseModel]:
             evidence=[evidence],
         ),
         query,
+        LocalSiloContributionRequest(
+            **message_header(
+                sender_agent_id="federation.F1",
+                sender_role=AgentRole.F1,
+                sender_bank_id=BankId.FEDERATION,
+                recipient_agent_id="bank_alpha.A3",
+            ),
+            source_query_id=local_source_query_id,
+            requesting_investigator_id="investigator-alpha-1",
+            requesting_bank_id=BankId.BANK_ALPHA,
+            responding_bank_id=BankId.BANK_ALPHA,
+            query_shape=QueryShape.AGGREGATE_ACTIVITY,
+            query_payload=AggregateActivityPayload(
+                name_hashes=[HASH_A],
+                window_start=date(2026, 5, 1),
+                window_end=date(2026, 5, 13),
+                metrics=["pattern_aggregate_for_f2"],
+            ),
+            purpose_declaration=purpose(),
+            requested_rho_per_primitive=0.04,
+            route_approval=route_approval(
+                query_id=local_source_query_id,
+                route_kind=RouteKind.LOCAL_CONTRIBUTION,
+                requesting_bank_id=BankId.BANK_ALPHA,
+                responding_bank_id=BankId.BANK_ALPHA,
+            ),
+        ),
         Sec314bResponse(
             **message_header(
                 sender_agent_id="bank_beta.A2",
@@ -286,6 +335,37 @@ def test_agent_message_discriminated_union_uses_message_type() -> None:
     assert parsed.message_type == MessageType.SEC314B_QUERY.value
 
 
+def test_agent_message_union_accepts_local_silo_contribution_request() -> None:
+    source_query_id = uuid4()
+    request = LocalSiloContributionRequest(
+        **message_header(
+            sender_agent_id="federation.F1",
+            sender_role=AgentRole.F1,
+            sender_bank_id=BankId.FEDERATION,
+            recipient_agent_id="bank_alpha.A3",
+        ),
+        source_query_id=source_query_id,
+        requesting_investigator_id="investigator-alpha-1",
+        requesting_bank_id=BankId.BANK_ALPHA,
+        responding_bank_id=BankId.BANK_ALPHA,
+        query_shape=QueryShape.ENTITY_PRESENCE,
+        query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
+        purpose_declaration=purpose(),
+        route_approval=route_approval(
+            query_id=source_query_id,
+            route_kind=RouteKind.LOCAL_CONTRIBUTION,
+            requesting_bank_id=BankId.BANK_ALPHA,
+            responding_bank_id=BankId.BANK_ALPHA,
+        ),
+    )
+    adapter = TypeAdapter(AgentMessage)
+
+    parsed = adapter.validate_json(request.model_dump_json())
+
+    assert isinstance(parsed, LocalSiloContributionRequest)
+    assert parsed.message_type == MessageType.LOCAL_SILO_CONTRIBUTION_REQUEST.value
+
+
 def test_wrong_top_level_message_type_fails() -> None:
     payload = valid_query().model_dump(mode="json")
     payload["message_type"] = MessageType.ALERT.value
@@ -412,6 +492,52 @@ def test_query_targets_must_not_include_requesting_bank() -> None:
             query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
             purpose_declaration=purpose(),
             requested_rho_per_primitive=0.0,
+        )
+
+
+def test_peer_route_approval_cannot_target_requesting_bank() -> None:
+    with pytest.raises(ValidationError):
+        route_approval(
+            query_id=uuid4(),
+            route_kind=RouteKind.PEER_314B,
+            requesting_bank_id=BankId.BANK_ALPHA,
+            responding_bank_id=BankId.BANK_ALPHA,
+        )
+
+
+def test_local_route_approval_must_target_requesting_bank() -> None:
+    with pytest.raises(ValidationError):
+        route_approval(
+            query_id=uuid4(),
+            route_kind=RouteKind.LOCAL_CONTRIBUTION,
+            requesting_bank_id=BankId.BANK_ALPHA,
+            responding_bank_id=BankId.BANK_BETA,
+        )
+
+
+def test_sec314b_query_route_approval_must_target_peer_in_query() -> None:
+    query_id = uuid4()
+    with pytest.raises(ValidationError):
+        Sec314bQuery(
+            **message_header(
+                sender_agent_id="federation.F1",
+                sender_role=AgentRole.F1,
+                sender_bank_id=BankId.FEDERATION,
+                recipient_agent_id="bank_gamma.A3",
+            ),
+            query_id=query_id,
+            requesting_investigator_id="investigator-alpha-1",
+            requesting_bank_id=BankId.BANK_ALPHA,
+            target_bank_ids=[BankId.BANK_BETA],
+            query_shape=QueryShape.ENTITY_PRESENCE,
+            query_payload=EntityPresencePayload(name_hashes=[HASH_A]),
+            purpose_declaration=purpose(),
+            route_approval=route_approval(
+                query_id=query_id,
+                route_kind=RouteKind.PEER_314B,
+                requesting_bank_id=BankId.BANK_ALPHA,
+                responding_bank_id=BankId.BANK_GAMMA,
+            ),
         )
 
 

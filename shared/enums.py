@@ -33,6 +33,7 @@ class MessageType(StrEnum):
 
     ALERT = "alert"
     SEC314B_QUERY = "sec314b_query"
+    LOCAL_SILO_CONTRIBUTION_REQUEST = "local_silo_contribution_request"
     SEC314B_RESPONSE = "sec314b_response"
     SANCTIONS_CHECK_REQUEST = "sanctions_check_request"
     SANCTIONS_CHECK_RESPONSE = "sanctions_check_response"
@@ -79,6 +80,13 @@ class QueryShape(StrEnum):
     ENTITY_PRESENCE = "entity_presence"
     AGGREGATE_ACTIVITY = "aggregate_activity"
     COUNTERPARTY_LINKAGE = "counterparty_linkage"
+
+
+class RouteKind(StrEnum):
+    """F1-to-A3 route kinds with different disclosure semantics."""
+
+    PEER_314B = "peer_314b"
+    LOCAL_CONTRIBUTION = "local_contribution"
 
 
 class PatternClass(StrEnum):
