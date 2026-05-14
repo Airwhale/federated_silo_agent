@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from backend.security import (
     PrincipalAllowlist,
@@ -280,3 +282,34 @@ def test_signing_key_pair_repr_does_not_expose_private_key() -> None:
     key_pair = generate_key_pair("demo-key")
 
     assert key_pair.private_key not in repr(key_pair)
+
+
+def _malformed_entry_kwargs(public_key: str) -> dict:
+    return dict(
+        agent_id="federation.F1",
+        role=AgentRole.F1,
+        bank_id=BankId.FEDERATION,
+        signing_key_id="f1-key",
+        public_key=public_key,
+        allowed_message_types=[MessageType.SEC314B_QUERY.value],
+        allowed_recipients=["bank_alpha.A3"],
+        allowed_routes=[RouteKind.PEER_314B],
+    )
+
+
+def test_principal_allowlist_entry_rejects_non_base64_public_key() -> None:
+    # Lock in the config-time probe-load. A bad-base64 public_key should fail
+    # at allowlist construction with a ValidationError, not surface as a raw
+    # exception mid-request the first time the key is touched.
+    with pytest.raises(ValidationError):
+        PrincipalAllowlistEntry(**_malformed_entry_kwargs("!!!not-valid-base64!!!"))
+
+
+def test_principal_allowlist_entry_rejects_wrong_length_public_key() -> None:
+    # An Ed25519 raw public key is exactly 32 bytes. A valid-base64 but
+    # wrong-length value used to raise a bare `ValueError` from
+    # `Ed25519PublicKey.from_public_bytes` inside `verify_message`. The
+    # field validator catches it at construction instead.
+    short_key = base64.b64encode(b"too-short").decode("ascii")
+    with pytest.raises(ValidationError):
+        PrincipalAllowlistEntry(**_malformed_entry_kwargs(short_key))

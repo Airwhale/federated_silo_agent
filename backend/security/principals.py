@@ -5,11 +5,19 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from backend.security.exceptions import PrincipalNotAllowed, SecurityEnvelopeError
+from backend.security.exceptions import (
+    PrincipalNotAllowed,
+    SecurityEnvelopeError,
+    SignatureInvalid,
+)
 from backend.security.replay import ReplayCache
-from backend.security.signing import verify_message_signature, verify_model_signature
+from backend.security.signing import (
+    load_public_key,
+    verify_message_signature,
+    verify_model_signature,
+)
 from shared.enums import AgentRole, BankId, RouteKind
 
 
@@ -30,6 +38,32 @@ class PrincipalAllowlistEntry(BaseModel):
     allowed_routes: list[RouteKind] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid", strict=True)
+
+    @field_validator("public_key")
+    @classmethod
+    def public_key_must_load(cls, value: str) -> str:
+        """Probe-load the key at construction so config errors fail at startup.
+
+        Without this validator a malformed `public_key` (e.g. valid base64 but
+        wrong byte length for Ed25519) would only surface mid-request when
+        `Ed25519PublicKey.from_public_bytes` raises a bare `ValueError`, which
+        escapes `A3.run`'s `SecurityEnvelopeError`/`InvalidAgentInput` exception
+        chain and breaks the "A3 always returns a Sec314bResponse" contract.
+        Probing the key once at allowlist-construction time keeps the request
+        path clean: malformed envelopes still raise `SignatureInvalid` from
+        per-request verification, while operator config errors raise
+        `pydantic.ValidationError` at startup with a clear message.
+        """
+        try:
+            load_public_key(value)
+        except SignatureInvalid as exc:
+            raise ValueError(
+                f"public_key is not valid base64-encoded Ed25519 bytes: {exc}"
+            ) from exc
+        except ValueError as exc:
+            # cryptography.hazmat raises ValueError for wrong-length raw keys.
+            raise ValueError(f"public_key is not a valid Ed25519 raw key: {exc}") from exc
+        return value
 
 
 class VerifiedPrincipal(BaseModel):
