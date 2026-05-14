@@ -349,7 +349,26 @@ class A2InvestigatorAgent(Agent[A2TurnInput, A2TurnResult]):
             # `CorrelatedAlertSummary.created_at_must_be_aware`. The
             # subtraction therefore cannot raise TypeError at runtime.
             age = current_time - summary.created_at
-            if age < timedelta(0) or age > timedelta(days=CORRELATION_WINDOW_DAYS):
+            if age < timedelta(0):
+                # A future-dated correlated alert is anomalous — could be
+                # clock skew between bank nodes, a misordered ingestion, or
+                # an attempt to inject fake correlations. Drop it, but
+                # surface the anomaly in the audit channel so it's not
+                # silently swallowed. Status="filtered" distinguishes this
+                # from a hard refusal.
+                self._emit(
+                    kind=AuditEventKind.CONSTRAINT_VIOLATION,
+                    phase="correlation",
+                    status="filtered",
+                    detail=(
+                        f"correlated summary {summary.alert_id} is dated "
+                        f"{-age} in the future relative to the current alert; "
+                        "filtered from A2-B1 bypass counting"
+                    ),
+                    rule_name="future_dated_correlated_alert",
+                )
+                continue
+            if age > timedelta(days=CORRELATION_WINDOW_DAYS):
                 continue
             # Dedup within a single summary: a summary that mentions the
             # same `name_hash` twice still counts as ONE correlated alert

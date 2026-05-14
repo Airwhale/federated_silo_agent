@@ -378,6 +378,15 @@ def test_correlated_alert_bypass_emits_query_without_llm() -> None:
 
 
 def test_future_correlated_alerts_do_not_trigger_bypass() -> None:
+    """Future-dated correlated alerts are filtered AND audited.
+
+    A correlated alert dated after the current alert is anomalous — likely
+    clock skew, a misordered ingestion, or an attempted injection. The
+    bypass counter must filter these out (so they cannot prematurely trip
+    A2-B1), and each filtered entry should emit a CONSTRAINT_VIOLATION
+    audit event with status="filtered" so the anomaly is visible in the
+    audit channel rather than silently swallowed.
+    """
     alert_obj = alert()
     future_time = alert_obj.created_at + timedelta(days=3)
     correlated = [
@@ -394,7 +403,7 @@ def test_future_correlated_alerts_do_not_trigger_bypass() -> None:
             created_at=future_time,
         ),
     ]
-    agent, llm, _audit = agent_with_responses(
+    agent, llm, audit = agent_with_responses(
         TriageDecision(action="dismiss", reason="Future summaries are ignored.")
     )
 
@@ -402,6 +411,16 @@ def test_future_correlated_alerts_do_not_trigger_bypass() -> None:
 
     assert llm.call_count == 1
     assert result.action == "dismiss"
+
+    # Two future-dated summaries → two filtered audit events.
+    filtered = [
+        event
+        for event in audit.events
+        if event.kind == AuditEventKind.CONSTRAINT_VIOLATION
+        and event.rule_name == "future_dated_correlated_alert"
+    ]
+    assert len(filtered) == 2
+    assert all(event.status == "filtered" for event in filtered)
 
 
 def test_inbound_peer_query_is_rejected_before_llm() -> None:

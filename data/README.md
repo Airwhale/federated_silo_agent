@@ -67,6 +67,7 @@ The generated SQLite files are bank-local silos. In the planned runtime:
 - A3 is the inside-bank silo responder. It answers approved F1-routed queries by invoking P7 stats primitives against its own bank database.
 - F1 and the federation agents never read these SQLite files directly.
 - Ground-truth tables are for validation and tests only. They are not part of the federation runtime path.
+- The planned judge UI may inspect silo state, but that inspection is still scoped by trust boundary. Raw synthetic transactions are only visible inside the owning bank's silo inspector; cross-boundary panels show typed state such as primitive provenance, DP budget, signing/envelope verification, replay status, route-approval status, and audit-chain metadata.
 
 ## Reproducibility
 
