@@ -704,7 +704,9 @@ class SARDraft(Message):
         if self.suspicious_amount_range is not None:
             low, high = self.suspicious_amount_range
             if low > high:
-                raise ValueError("suspicious_amount_range lower bound cannot exceed upper")
+                raise ValueError(
+                    "suspicious_amount_range lower bound must be less than or equal to upper bound"
+                )
 
         if self.mandatory_fields_complete:
             missing = [
