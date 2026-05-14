@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -27,11 +28,20 @@ class RequesterKey(BudgetModel):
 
     @property
     def stable_key(self) -> str:
+        """Length-prefixed components prevent delimiter-collision attacks.
+
+        A naive `"|".join(...)` would collide on adversarial inputs like
+        `requesting_investigator_id="user|1"` at bank_a vs investigator
+        `"user"` at bank_id `"1|bank_a"`. Encoding each component with its
+        byte length removes the ambiguity: parsing the key requires
+        consuming exactly N bytes for a `N:` prefix, so no concatenation
+        of valid components can be misread as a different triple.
+        """
         return "|".join(
             (
-                self.requesting_investigator_id,
-                self.requesting_bank_id.value,
-                self.responding_bank_id.value,
+                f"{len(self.requesting_investigator_id)}:{self.requesting_investigator_id}",
+                f"{len(self.requesting_bank_id.value)}:{self.requesting_bank_id.value}",
+                f"{len(self.responding_bank_id.value)}:{self.responding_bank_id.value}",
             )
         )
 
@@ -55,7 +65,15 @@ class BudgetSnapshot(BudgetModel):
 
 
 class PrivacyBudgetLedger:
-    """In-memory zCDP rho ledger with a persistence-friendly snapshot."""
+    """In-memory zCDP rho ledger with a persistence-friendly snapshot.
+
+    Thread-safe: `debit` performs a read-modify-write that must be atomic
+    across concurrent callers. An internal `threading.Lock` serializes
+    `debit`, `spent`, and `remaining`, so two concurrent investigators
+    racing on the same `RequesterKey` cannot exceed the cap. Single-process
+    demo runs see negligible contention; production multi-threaded servers
+    rely on this lock for correctness.
+    """
 
     def __init__(
         self,
@@ -67,40 +85,45 @@ class PrivacyBudgetLedger:
             raise ValueError("rho_max must be positive")
         self.rho_max = rho_max
         self._spent_by_key = dict(spent_by_key or {})
+        self._lock = threading.Lock()
 
     def spent(self, requester: RequesterKey) -> float:
-        return self._spent_by_key.get(requester.stable_key, 0.0)
+        with self._lock:
+            return self._spent_by_key.get(requester.stable_key, 0.0)
 
     def remaining(self, requester: RequesterKey) -> float:
-        return max(self.rho_max - self.spent(requester), 0.0)
+        with self._lock:
+            return max(self.rho_max - self._spent_by_key.get(requester.stable_key, 0.0), 0.0)
 
     def debit(self, requester: RequesterKey, rho: float) -> BudgetDebit:
         if rho < 0.0:
             raise ValueError("rho must be non-negative")
 
-        current = self.spent(requester)
-        if current + rho > self.rho_max:
+        with self._lock:
+            current = self._spent_by_key.get(requester.stable_key, 0.0)
+            if current + rho > self.rho_max:
+                return BudgetDebit(
+                    allowed=False,
+                    requester_key=requester,
+                    rho_requested=rho,
+                    rho_spent=current,
+                    rho_remaining=max(self.rho_max - current, 0.0),
+                    refusal_reason="budget_exhausted",
+                )
+
+            updated = current + rho
+            self._spent_by_key[requester.stable_key] = updated
             return BudgetDebit(
-                allowed=False,
+                allowed=True,
                 requester_key=requester,
                 rho_requested=rho,
-                rho_spent=current,
-                rho_remaining=max(self.rho_max - current, 0.0),
-                refusal_reason="budget_exhausted",
+                rho_spent=updated,
+                rho_remaining=max(self.rho_max - updated, 0.0),
             )
 
-        updated = current + rho
-        self._spent_by_key[requester.stable_key] = updated
-        return BudgetDebit(
-            allowed=True,
-            requester_key=requester,
-            rho_requested=rho,
-            rho_spent=updated,
-            rho_remaining=max(self.rho_max - updated, 0.0),
-        )
-
     def to_snapshot(self) -> BudgetSnapshot:
-        return BudgetSnapshot(rho_max=self.rho_max, spent_by_key=self._spent_by_key)
+        with self._lock:
+            return BudgetSnapshot(rho_max=self.rho_max, spent_by_key=dict(self._spent_by_key))
 
     @classmethod
     def from_snapshot(cls, snapshot: BudgetSnapshot) -> PrivacyBudgetLedger:

@@ -58,3 +58,33 @@ def test_budget_snapshot_round_trips() -> None:
     assert restored.rho_max == 0.1
     assert restored.spent(key) == 0.04
     assert math.isclose(restored.remaining(key), 0.06)
+
+
+def test_stable_key_resists_adversarial_delimiter_collisions() -> None:
+    """An investigator id containing the `|` separator must not collide.
+
+    Without length-prefixed components, an adversarial investigator id of
+    `"investigator|bank_alpha"` querying `bank_beta` would produce the same
+    naive joined key as investigator `"investigator"` at a fabricated bank
+    `"bank_alpha|bank_beta"`. Length-prefixing the components prevents this.
+    """
+    adversarial = RequesterKey(
+        requesting_investigator_id="investigator|bank_alpha",
+        requesting_bank_id=BankId.BANK_GAMMA,
+        responding_bank_id=BankId.BANK_BETA,
+    )
+    benign = RequesterKey(
+        requesting_investigator_id="investigator",
+        requesting_bank_id=BankId.BANK_ALPHA,
+        responding_bank_id=BankId.BANK_BETA,
+    )
+
+    assert adversarial.stable_key != benign.stable_key
+
+    # Concrete budget-isolation check: debiting the adversarial key must not
+    # touch the benign key's allowance, and vice versa.
+    ledger = PrivacyBudgetLedger(rho_max=0.05)
+    assert ledger.debit(adversarial, 0.04).allowed
+    assert ledger.spent(benign) == 0.0
+    assert ledger.debit(benign, 0.05).allowed
+    assert ledger.spent(adversarial) == 0.04

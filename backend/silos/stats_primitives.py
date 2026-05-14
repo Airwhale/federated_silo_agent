@@ -194,18 +194,22 @@ class BankStatsPrimitives:
         with self._connect() as con:
             true_value = int(con.execute(query, params).fetchone()[0])
 
+        # Commit the debit BEFORE drawing noise so audit-replay is deterministic:
+        # every committed debit corresponds to exactly one RNG advance. If we
+        # sampled noise first and then a concurrent caller raced our debit to
+        # exhaustion, the RNG state would drift between original run and replay.
         sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho)
         validate_opendp_gaussian_map(sensitivity=1.0, rho=rho, sigma=sigma)
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return _budget_refusal()
+
         noisy = add_gaussian_noise(
             float(true_value),
             sensitivity=1.0,
             rho=rho,
             rng=self.rng,
         )
-        debit = self.ledger.debit(requester, rho)
-        if not debit.allowed:
-            return _budget_refusal()
-
         released = _nonnegative_int(noisy.value)
         return PrimitiveResult(
             value=released,
@@ -258,30 +262,30 @@ class BankStatsPrimitives:
             max_transactions=max_transactions,
         )
         true_histogram = _amount_histogram(amounts, amount_buckets)
-        # Serial composition over disjoint histogram buckets; parallel composition
-        # would permit full ρ per bucket but adds complexity for marginal utility gain.
-        rho_per_bucket = rho / len(amount_buckets)
-        bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho_per_bucket)
-        validate_opendp_gaussian_map(
-            sensitivity=1.0,
-            rho=rho_per_bucket,
-            sigma=bucket_sigma,
-        )
+        # Parallel composition over disjoint histogram buckets: each transaction
+        # lands in exactly one bucket (the `for ... break` loop in
+        # `_amount_histogram` enforces this), so the Gaussian mechanism applied
+        # to each bucket sees disjoint data. Under zCDP parallel composition,
+        # using the full ρ per bucket pays only ρ total. This gives sigma =
+        # 1/sqrt(2ρ) per bucket, √N times less noise than serial composition.
+        bucket_sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho)
+        validate_opendp_gaussian_map(sensitivity=1.0, rho=rho, sigma=bucket_sigma)
+        # Commit the debit BEFORE drawing noise so audit-replay is deterministic.
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return _budget_refusal()
+
         noised = [
             _nonnegative_int(
                 add_gaussian_noise(
                     float(count),
                     sensitivity=1.0,
-                    rho=rho_per_bucket,
+                    rho=rho,
                     rng=self.rng,
                 ).value
             )
             for count in true_histogram
         ]
-        debit = self.ledger.debit(requester, rho)
-        if not debit.allowed:
-            return _budget_refusal()
-
         return PrimitiveResult(
             value=noised,
             records=[
@@ -374,51 +378,63 @@ class BankStatsPrimitives:
             str(row["counterparty_account_id_hashed"]) for row in rows
         )
 
+        # Sequential composition between the two components (edge distribution
+        # and flow histogram) because they share the same underlying data
+        # (every transaction contributes to both views). Split ρ = ρ_edge + ρ_flow.
         rho_per_component = rho / 2.0
         edge_true = _edge_count_distribution(counterparty_counts)
-        # Serial composition over disjoint histogram buckets; parallel composition
-        # would permit full ρ per bucket but adds complexity for marginal utility gain.
-        edge_rho_per_bucket = rho_per_component / len(DEFAULT_EDGE_COUNT_BUCKETS)
-        edge_sigma = sigma_for_zcdp(sensitivity=2.0, rho=edge_rho_per_bucket)
+        flow_true = _amount_histogram(amounts, DEFAULT_AMOUNT_BUCKETS)
+
+        # Within each component, buckets are a disjoint partition of the data
+        # (one counterparty's edge count is in exactly one bucket; one
+        # transaction's amount is in exactly one bucket). zCDP parallel
+        # composition lets us use the full per-component ρ on each bucket.
+        #
+        # Edge sensitivity is the L2 norm of the change vector, not L1.
+        # One transaction can move one counterparty between two adjacent buckets,
+        # producing a change vector [+1, -1, 0, ...] with L2 norm √2. The
+        # Gaussian mechanism under zCDP is calibrated on L2 sensitivity.
+        edge_sensitivity = math.sqrt(2.0)
+        edge_sigma = sigma_for_zcdp(sensitivity=edge_sensitivity, rho=rho_per_component)
         validate_opendp_gaussian_map(
-            sensitivity=2.0,
-            rho=edge_rho_per_bucket,
+            sensitivity=edge_sensitivity,
+            rho=rho_per_component,
             sigma=edge_sigma,
         )
-        flow_true = _amount_histogram(amounts, DEFAULT_AMOUNT_BUCKETS)
-        flow_rho_per_bucket = rho_per_component / len(DEFAULT_AMOUNT_BUCKETS)
-        flow_sigma = sigma_for_zcdp(sensitivity=1.0, rho=flow_rho_per_bucket)
+        flow_sigma = sigma_for_zcdp(sensitivity=1.0, rho=rho_per_component)
         validate_opendp_gaussian_map(
             sensitivity=1.0,
-            rho=flow_rho_per_bucket,
+            rho=rho_per_component,
             sigma=flow_sigma,
         )
+
+        # Commit the debit BEFORE drawing noise so audit-replay is deterministic.
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return _budget_refusal()
+
         edge_noised = [
             _nonnegative_int(
                 add_gaussian_noise(
                     float(count),
-                    sensitivity=2.0,
-                    rho=edge_rho_per_bucket,
+                    sensitivity=edge_sensitivity,
+                    rho=rho_per_component,
                     rng=self.rng,
                 ).value
             )
             for count in edge_true
         ]
-
         flow_noised = [
             _nonnegative_int(
                 add_gaussian_noise(
                     float(count),
                     sensitivity=1.0,
-                    rho=flow_rho_per_bucket,
+                    rho=rho_per_component,
                     rng=self.rng,
                 ).value
             )
             for count in flow_true
         ]
-        debit = self.ledger.debit(requester, rho)
-        if not debit.allowed:
-            return _budget_refusal()
 
         aggregate = BankAggregate(
             bank_id=self.bank_id,
@@ -443,7 +459,7 @@ class BankStatsPrimitives:
                     rho_debited=rho_per_component,
                     eps_delta=eps_delta_display(rho=rho_per_component),
                     sigma_applied=edge_sigma,
-                    sensitivity=2.0,
+                    sensitivity=edge_sensitivity,
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                 ),
                 self._record(

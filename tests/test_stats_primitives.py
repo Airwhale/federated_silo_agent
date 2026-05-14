@@ -196,9 +196,52 @@ def test_failed_dp_primitive_does_not_debit_budget(tmp_path) -> None:
     assert ledger.spent(key) == 0.0
 
 
-def test_failed_noise_sampling_does_not_debit_budget(
+def test_budget_refusal_does_not_advance_rng_state() -> None:
+    """If a debit fails, the RNG must not advance (audit-replay determinism).
+
+    The DP primitives commit the budget debit BEFORE drawing noise. This
+    means an exhausted-budget refusal must short-circuit without consuming
+    any random samples, so a fresh replay against the same seed reaches
+    the same RNG state as the original successful run.
+    """
+    ledger = PrivacyBudgetLedger(rho_max=0.005)  # too low for one alert_count call
+    key = requester()
+    rng = np.random.default_rng(20260513)
+    layer = BankStatsPrimitives(
+        bank_id=BankId.BANK_ALPHA,
+        ledger=ledger,
+        rng=rng,
+    )
+    name_hash, _signal_type = sample_name_hash_with_signal()
+
+    # Snapshot the RNG state, run a call that must refuse, and verify the
+    # RNG produces the same next sample as a fresh generator with the same seed.
+    refused = layer.alert_count_for_entity(
+        name_hash=name_hash,
+        window=FULL_WINDOW,
+        requester=key,
+        rho=0.02,
+    )
+    assert refused.refusal_reason == REFUSAL_BUDGET_EXHAUSTED
+    assert ledger.spent(key) == 0.0
+
+    expected_next_sample = np.random.default_rng(20260513).normal()
+    assert rng.normal() == expected_next_sample
+
+
+def test_failed_noise_sampling_after_debit_spends_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Documented trade-off: noise failures AFTER debit are budget-spending.
+
+    The audit-replay determinism property (every committed debit corresponds
+    to exactly one RNG advance) requires that we commit the budget before
+    sampling noise. If the noise mechanism fails after the debit commits,
+    the budget is consumed. This is acceptable because (a) the failure is
+    exotic — OpenDP's Gaussian mechanism doesn't fail under normal use —
+    and (b) preserving determinism for the regulator-audit case is more
+    valuable than recovering budget for an unexpected mechanism crash.
+    """
     ledger = PrivacyBudgetLedger(rho_max=1.0)
     key = requester()
     layer = BankStatsPrimitives(
@@ -221,4 +264,5 @@ def test_failed_noise_sampling_does_not_debit_budget(
             rho=0.02,
         )
 
-    assert ledger.spent(key) == 0.0
+    # Budget IS spent — the debit committed before the noise call failed.
+    assert ledger.spent(key) == 0.02
