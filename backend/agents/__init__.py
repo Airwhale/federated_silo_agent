@@ -1,6 +1,7 @@
 """Agent runtime exports."""
 
 from backend.agents.a2_investigator import A2InvestigatorAgent
+from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.base import (
     Agent,
     AgentAuditEvent,
@@ -27,6 +28,7 @@ __all__ = [
     "AgentAuditEvent",
     "AgentRuntimeError",
     "A2InvestigatorAgent",
+    "A3SiloResponderAgent",
     "AuditEmitter",
     "BypassRule",
     "ChatCompletionRequest",

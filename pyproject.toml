@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Federated privacy-preserving cross-bank AML investigation platform"
 requires-python = ">=3.11"
 dependencies = [
+    "cryptography>=46.0.3",
     "duckdb>=1.5.2",
     "httpx>=0.28.1",
     "litellm[proxy]>=1.75",

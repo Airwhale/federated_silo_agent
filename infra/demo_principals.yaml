@@ -1,0 +1,6 @@
+# Public demo principal allowlist template.
+#
+# P8a implements the loader/checks in Python and tests generate their own
+# ephemeral Ed25519 keys. Runtime private keys must live in a local ignored
+# config file, not here.
+principals: []

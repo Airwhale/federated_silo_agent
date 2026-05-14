@@ -290,7 +290,7 @@ Every cross-boundary message is also assumed to need the security envelope from 
 
 ### 8.3 Agent roles and instances
 
-There are **8 agent roles** and **14 running instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. All roles are Gemini-backed LLM agents that reason about their inputs and decide what to output. Each agent's reasoning is wrapped in deterministic rule checks of two kinds:
+There are **8 agent roles** and **14 running instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. Most roles are Gemini-backed LLM agents that reason about their inputs and decide what to output; A3 defaults to deterministic primitive selection and response construction, with optional Gemini composition guarded by exact provenance matching. Each agent's reasoning is wrapped in deterministic rule checks of two kinds:
 
 - **Rule constraints** — hard checks that the LLM cannot override. If a constraint is violated, the agent refuses; the LLM doesn't get to argue.
 - **Rule bypasses** — hard checks that override the LLM. Certain conditions force a specific output regardless of what the LLM would have said. The catalog below is the source of truth for trigger and action semantics.
@@ -353,10 +353,10 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 
 **Agent A3: Silo responder agent** (one per bank, identical role; inside the bank trusted/TEE boundary)
 
-- **Role:** Receives approved `Sec314bQuery` messages from F1, maps each query to declared P7 stats primitives, invokes those primitives over local bank data, and returns a `Sec314bResponse` with provenance. A3 is not human-facing and does not make SAR or dismissal decisions.
-- **Inputs:** `Sec314bQuery` from F1 only.
+- **Role:** Receives approved peer `Sec314bQuery` messages and same-bank `LocalSiloContributionRequest` messages from F1, maps each request to declared P7 stats primitives, invokes those primitives over local bank data, and returns a `Sec314bResponse` with provenance. A3 is not human-facing and does not make SAR or dismissal decisions.
+- **Inputs:** `Sec314bQuery` or `LocalSiloContributionRequest` from verified F1 only.
 - **Outputs:** `Sec314bResponse` to F1 only.
-- **Reasoning:** Gemini call for primitive selection and response composition, surrounded by deterministic checks. P7 computes every value. The LLM can choose from allowed primitives and explain the response, but it cannot compute or fabricate values.
+- **Reasoning:** Deterministic primitive selection and response-envelope construction, surrounded by signed-envelope, route, purpose, and budget checks. Optional Gemini composition can be enabled only for the primitive-result bundle; P7 computes every value and A3 rejects any composed bundle that changes fields or provenance.
 - **Rule constraints (LLM cannot override):**
   - Cannot include customer names in outbound `Sec314bResponse`.
   - Cannot answer a query unless the purpose declaration is present and was approved by F1.
@@ -444,8 +444,8 @@ Required controls:
 - **Signed message envelopes:** every cross-boundary `Sec314bQuery`, `Sec314bResponse`, SAR contribution, and audit event is signed over canonical JSON with a `signing_key_id`. Hackathon implementation uses Ed25519 keys and signs the canonical body with the `signature` field excluded.
 - **Static principal allowlist:** the runtime loads a versioned allowlist of trusted principals. Each entry binds `agent_id`, `role`, `bank_id`, `signing_key_id`, public key, allowed message types, allowed recipients, and allowed routes. Signature verification must resolve to an allowlisted principal, and the message's declared sender fields must match that verified principal.
 - **Request/response binding:** `Sec314bResponse` includes `in_reply_to`, the original `query_id`, the responding bank, and a hash of the exact F1-approved query body.
-- **Route approval binding:** A3 verifies that the query was approved by F1 for this responding bank before it can invoke P7. F1 approval is necessary, not sufficient.
-- **Replay protection:** every envelope has `message_id`, `nonce`, `created_at`, `expires_at`, and an idempotency cache keyed by sender and nonce.
+- **Route approval binding:** A3 verifies that the query was approved by F1 for this responding bank and route kind (`peer_314b` or `local_contribution`) before it can invoke P7. F1 approval is necessary, not sufficient.
+- **Replay protection:** every envelope has `message_id`, `nonce`, `created_at`, `expires_at`, a five-minute created-at clock-skew check, and an idempotency cache keyed by sender and nonce.
 - **Audit hash chain:** each audit event records the previous audit hash so deletion or mutation is detectable.
 - **TEE attestation hook:** if the demo claims F1 or A3 runs inside a TEE, callers can verify the expected runtime measurement before trusting the channel.
 
@@ -455,7 +455,7 @@ The resulting message path is:
 User -> A2
 A2 signs query -> LT/policy -> F1
 F1 validates and signs route approval -> LT/policy -> A3
-A3 verifies A2 origin, F1 approval, freshness, purpose, target, query shape, and DP budget
+A3 verifies F1 signature, F1 route approval, freshness, route kind, purpose, target, query shape, and DP budget. A3 does not independently re-verify the original A2 signature; F1 transitively vouches for A2 after its own inbound-auth checks.
 A3 calls P7
 A3 signs response and provenance -> LT/policy -> F1
 F1 verifies and aggregates
@@ -476,7 +476,7 @@ The distinction is important: `target_bank_ids` for peer disclosure should stay 
 
 Hackathon scope: do not build a production PKI, certificate rotation service, HSM integration, or external key-management system. Use deterministic demo keys stored outside `.env`, public keys in a checked-in demo allowlist, private keys in local demo config ignored by git, and clear tests proving that tampered bodies, unknown keys, wrong-role keys, expired envelopes, and replayed nonces fail before any A3 primitive or DP budget call.
 
-A3 can refuse with `invalid_purpose`, `route_violation`, `unsupported_query_shape`, `replay_detected`, `signature_invalid`, or `budget_exhausted`. It never returns raw rows as a negotiation fallback.
+A3 can refuse with `unsupported_query_shape`, `unsupported_metric`, `unsupported_metric_combination`, `invalid_rho`, `route_violation`, `signature_invalid`, `envelope_invalid`, `replay_detected`, `budget_exhausted`, or `provenance_violation`. It never returns raw rows as a negotiation fallback.
 
 ---
 
@@ -547,7 +547,7 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, and A2 investigator agent are complete, with a schema follow-up still needed for signed security-envelope fields, `RouteApproval`, and the audit hash-chain introduced by the TEE/MITM separation. P15/P18 now also carry the UI observability contract: system-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state.
+The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, A2 investigator agent, and A3 silo responder plus security-envelope foundation are complete. Audit hash-chain persistence remains a later P13/P14/P15 concern. P15/P18 now also carry the UI observability contract: system-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
@@ -558,7 +558,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 - **P6** A1 transaction-monitoring agent ✓
 - **P7** Bank-local stats-primitives layer + DP ✓
 - **P8** A2 investigator agent ✓
-- **P8a** A3 silo responder agent ·
+- **P8a** A3 silo responder agent ✓
 - **P9** F1 cross-bank coordinator ·
 - **P10** F3 sanctions / PEP screening agent ·
 - **P11** F2 graph-analysis agent ·
@@ -576,7 +576,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 
 ---
 
-### Done parts (P0–P8)
+### Done parts (P0–P8a)
 
 **P0 — Repo scaffold + proxy chain smoke** ✓
 
@@ -659,7 +659,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **`LocalSiloContributionRequest`** (F1 → requesting bank's own A3): local data-plane request for the requester bank's statistical intermediary when F1/F2 need to combine local plus peer evidence. It carries `source_query_id`, `requesting_investigator_id`, `requesting_bank_id`, `query_shape`, `query_payload`, `purpose_declaration`, `requested_rho_per_primitive`, and a signed local `RouteApproval`. It is not a peer-bank §314(b) disclosure.
   - **`Sec314bResponse`** (peer A3 → F1 → requesting A2): `in_reply_to: UUID` (the query_id), `responding_bank_id`, `fields: dict[str, ResponseValue]` (`ResponseValue` is a small union: `{"int":int}|{"float":float}|{"bool":bool}|{"histogram":list[int]}|{"hash_list":list[str]}`), `provenance: list[PrimitiveCallRecord]` (one entry per field), `rho_debited_total: float`, `refusal_reason: str | None`. **Invariant enforced by validator: each key in `fields` has a corresponding `PrimitiveCallRecord.field_name` in `provenance`.**
   - **`PrimitiveCallRecord`**: `field_name`, `primitive_name`, `args_hash` (SHA-256 of canonicalized args; for audit-replay), `privacy_unit` (`"transaction"` for the hackathon P7 build unless explicitly upgraded), `rho_debited` (0.0 for non-DP primitives), `eps_delta_display: tuple[float, float] | None`, `sigma_applied: float | None`, `sensitivity: float`, `returned_value_kind`, `timestamp`.
-  - **`RouteApproval`** (F1 → A3, embedded or referenced by the routed query): `approval_id`, `query_id`, `approved_query_body_hash`, `requesting_bank_id`, `responding_bank_id`, `approved_by_agent_id`, `approved_at`, `expires_at`, `signature`, `signing_key_id`. A3 verifies this before invoking P7.
+  - **`RouteApproval`** (F1 → A3, embedded or referenced by the routed query): `approval_id`, `query_id`, `route_kind ∈ {"peer_314b","local_contribution"}`, `approved_query_body_hash`, `requesting_bank_id`, `responding_bank_id`, `approved_by_agent_id`, `approved_at`, `expires_at`, `signature`, `signing_key_id`. A3 verifies this before invoking P7.
   - **`PrincipalAllowlistEntry`** (runtime trust registry): `agent_id`, `role`, `bank_id`, `signing_key_id`, `public_key`, `allowed_message_types`, `allowed_recipients`, and `allowed_routes`. Used by F1/A3/policy adapter to bind cryptographic identity to permitted behavior.
   - **`SanctionsCheckRequest`** (A2 or F1 → F3): `entity_hashes: list[str]`, `requesting_context: str`.
   - **`SanctionsCheckResponse`** (F3 → caller): `results: dict[hash → {sdn_match: bool, pep_relation: bool}]`. **No list contents disclosed.**
@@ -672,7 +672,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Approach:* Pydantic v2 `BaseModel` with strict mode and `model_config = ConfigDict(extra="forbid")`. Field validators where the constraint is structural: `Sec314bQuery.purpose_declaration.suspicion_rationale` non-empty; `Sec314bResponse.fields.keys()` ⊆ `{p.field_name for p in provenance}`; `SARDraft.mandatory_fields_complete=True` only if all of `filing_institution`, `suspicious_amount_range`, `typology_code`, `narrative` are populated; cross-boundary messages require `expires_at`, `nonce`, `body_hash`, `signature`, and `signing_key_id`. Discriminated unions on `query_shape` and `AuditEvent.kind` so Gemini's structured-output can target each variant.
 - *Out of scope for this part:* no agent code, no LT integration, no DP arithmetic, no SQLite reads. Pure schema + tests.
 - *What was built:* `shared/enums.py` defines the stable enum surface for roles, banks, query shapes, typologies, audit event kinds, privacy units, and response value kinds. `shared/messages.py` defines strict Pydantic v2 models for every P4 contract, including explicit hash-shape aliases (`CrossBankHashToken`, `Sha256Hex`, `OpaqueHashToken`), typed `Sec314bQuery` payload unions, `Sec314bResponse` provenance invariants, SAR completeness checks, customer-name guardrails for safe text fields, and normalized wire-level `AuditEvent` payload unions. `tests/test_messages.py` covers round trips, JSON-schema export, and invalid examples.
-- *Follow-up after TEE/MITM split:* add `A3` to the role enum, add signed-envelope fields, add `RouteApproval`, add `LocalSiloContributionRequest`, add `PrincipalAllowlistEntry`, add audit hash-chain fields, add Ed25519 canonical-sign/verify helpers, and update tests in P8a before P9/P14/P15 rely on them.
+- *Follow-up after TEE/MITM split:* P8a added `A3`, signed-envelope fields, `RouteApproval`, `LocalSiloContributionRequest`, principal allowlist entries, and Ed25519 canonical-sign/verify helpers. Audit hash-chain fields remain for P13/P14/P15.
 - *Acceptance (current):* `uv run pytest tests/test_messages.py` passes 36 schema tests. Every public message model round-trips through JSON and exports JSON schema. Invalid cases fail for extra fields, missing purpose rationale, query-shape mismatch, response fields without matching provenance, response kind/rho mismatches, refusal responses with fields, customer-name strings in evidence, incomplete SAR drafts marked complete, audit kind/payload mismatch, federation-origin bank aggregates, and reversed date windows. Live Gemini schema generation remains optional and is not required for the local P4 contract gate.
 - *Risks specific to this part:* (a) Pydantic v2's strict mode + discriminated unions can be finicky with Gemini's occasional JSON output drift — mitigation: write the schemas with Gemini JSON-mode quirks in mind (avoid deeply nested unions; document known Gemini-output limitations in module docstrings). (b) `Sec314bResponse.fields` is open-ended by design (different query shapes return different field sets); mitigation: schema permits arbitrary string keys but every key must have matching provenance.
 - *Depends on:* P0.
@@ -847,34 +847,38 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P3 (data), P5 (base class), P6 (uses A1 alerts as input).
 - *Scope check:* one to two focused sessions. The state machine is smaller after the A3 split.
 
-**P8a - A3 silo responder agent + security-envelope foundation**
+**P8a - A3 silo responder agent + security-envelope foundation** ✓
 
 - *Goal:* Full LLM agent inside each bank trusted boundary that answers approved peer `Sec314bQuery` messages and requester-bank local contribution requests by selecting P7 primitives, invoking them, and composing provenance-backed responses. A3 is the only LLM-backed agent with a P7 handle. This part also owns the first implementation of the security-envelope and principal-allowlist helpers because A3 is where forged routes must be rejected before any P7 or DP-budget side effect.
-- *Files:* `backend/agents/a3_silo_responder.py`, `backend/agents/prompts/a3_system.md`, `backend/agents/a3_states.py`, `backend/security/{canonical_json.py,signing.py,principals.py,replay.py}`, `shared/messages.py` (if `RouteApproval`, signed-envelope fields, or `LocalSiloContributionRequest` still need to be added), `infra/demo_principals.yaml` (public allowlist only), `tests/test_a3.py`, `tests/test_security_envelope.py`.
+- *Files:* `backend/agents/a3_silo_responder.py`, `backend/agents/prompts/a3_system.md`, `backend/agents/a3_states.py`, `backend/security/{canonical_json.py,signing.py,principals.py,replay.py}`, `shared/messages.py`, `shared/enums.py`, `infra/demo_principals.yaml` (public allowlist template only), `tests/test_a3.py`, `tests/test_security_envelope.py`, `tests/test_messages.py`.
 - *Security sub-slice:*
   - Canonical JSON helper that produces the exact byte string signed by every cross-boundary envelope.
   - Ed25519 `sign_message(...)` and `verify_message(...)` helpers using `signing_key_id`, public keys from the allowlist, and private keys loaded only from local ignored demo config.
-  - `PrincipalAllowlist` service that resolves a verified signing key to one `agent_id`/`role`/`bank_id` principal and checks allowed message types, recipients, and routes.
+  - `PrincipalAllowlist` service that resolves a verified signing key to one `agent_id`/`role`/`bank_id` principal and checks allowed message types, recipients, and routes. Route approvals must be signed by a federation-scoped F1 principal.
   - In-memory replay cache keyed by verified principal and nonce, with expiry handling.
   - Tests for tampered body hash, unknown key, wrong-role key, declared-sender mismatch, expired envelope, replayed nonce, and private-key redaction from state snapshots.
 - *State machine:*
   1. **`validate_inbound_envelope`** - deterministic guard. Requires F1 as verified sender, an Ed25519-valid envelope, a signing key that resolves to an allowlisted F1 principal, a fresh nonce, and a matching `RouteApproval`.
   2. **`classify_route_kind`** - distinguishes peer §314(b) disclosure from requester-bank local contribution. Peer requests require `responding_bank_id != requesting_bank_id`; local contribution requests require `responding_bank_id == requesting_bank_id` and `route_kind="local_contribution"`.
   3. **`validate_query_policy`** - deterministic guard. Requires valid purpose declaration, target bank matching this bank, route approval body hash matching the exact canonical query body, and no customer-name strings.
-  4. **`select_primitives`** - Gemini maps the typed `query_shape` and payload to one or more allowed P7 primitive calls.
+  4. **`select_primitives`** - deterministic code maps the typed `query_shape` and payload to one or more allowed P7 primitive calls.
   5. **`invoke_primitives`** - deterministic code calls P7, handles budget refusal, and collects `(value, PrimitiveCallRecord)` tuples.
-  6. **`compose_response`** - Gemini writes the minimal `Sec314bResponse` fields and rationale from the primitive results. The constraint layer rejects any field without matching provenance.
-- *Rule bypasses:* implement `A3-B1` through `A3-B3` from the Section 8.3 bypass rule catalog.
+  6. **`compose_response`** - deterministic by default. Optional Gemini composition may echo the primitive bundle, but A3 always wraps the `Sec314bResponse` envelope deterministically. The constraint layer rejects any bundle field that does not exactly match primitive values and provenance.
+- *Rule bypasses:* `A3-B1` through `A3-B3` from the Section 8.3 bypass rule catalog are implemented as deterministic refusal paths before primitive or LLM work.
 - *Rule constraints (LLM cannot override):*
   - Cannot call primitives outside the allowlist for the query shape.
   - Cannot pass broad discovery arguments such as all known hashes; P7 caps list sizes and A3 checks them first.
+  - Cannot spend DP budget when `requested_rho_per_primitive <= 0.0`; DP-backed aggregate metrics fail closed with `refusal_reason="invalid_rho"`.
+  - Cannot silently drop metrics or partially spend budget before refusing. A3 accepts one aggregate metric class per request; mixed aggregate metric requests are refused as `unsupported_metric_combination` before any DP primitive runs.
+  - Cannot fan out `alert_count` over multiple name hashes because that would multiply the requested budget. Multi-hash activity should use a batched metric such as `flow_histogram` or a future P7 batched alert-count primitive.
+  - Cannot accept query options that P7 does not implement. Windowed `entity_presence` and `counterparty_linkage.max_hops > 1` fail closed as `unsupported_query_shape`.
   - Cannot return customer names, raw account ids, raw transactions, or unprovenanced values.
   - Cannot answer if the approved query body hash does not match the received query body.
   - Cannot answer if the verified signing principal is unknown, has the wrong role, has the wrong bank or federation scope, or is not allowlisted for `Sec314bQuery` to this A3.
   - Cannot treat a same-bank peer `Sec314bQuery` as a valid §314(b) disclosure. Same-bank work must use the local-contribution route kind.
   - Can only send `Sec314bResponse` to F1.
-- *Approach (Gemini calls):* `gemini-2.5-flash` is enough for primitive selection and compact response composition. Deterministic code owns all value computation and budget checks.
-- *Acceptance:* `tests/test_a3.py`:
+- *Approach (Gemini calls):* A3 does not need Gemini for the default demo path. Deterministic code owns primitive selection, value computation, budget checks, and response-envelope construction. Optional `compose_with_llm=True` runs compact primitive-bundle composition through the proxy chain, guarded by exact provenance matching; the LLM never emits `sender_agent_id`, `in_reply_to`, `nonce`, `expires_at`, or signatures.
+- *Acceptance (current):* `uv run pytest tests/test_a3.py tests/test_security_envelope.py tests/test_messages.py` passes focused P8a checks:
   - **Test 1 (entity presence):** feed A3 an approved `entity_presence` query; A3 calls `count_entities_by_name_hash`; response fields and provenance match.
   - **Test 2 (budget exhaustion):** mock P7 budget exhaustion; A3 returns `refusal_reason="budget_exhausted"`, empty fields, empty provenance, and does not call Gemini.
   - **Test 3 (routing guard):** query from anything other than F1 is rejected before any primitive call.
@@ -882,19 +886,24 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **Test 5 (principal allowlist guard):** query signed by an unknown key or an allowlisted A2 key pretending to be F1 is rejected before any primitive call.
   - **Test 6 (local contribution):** a `LocalSiloContributionRequest` from F1 to Alpha.A3 for an Alpha-originated query is accepted, invokes Alpha P7, and is marked as local contribution in provenance/audit metadata.
   - **Test 7 (self-target peer rejection):** a peer `Sec314bQuery` with `requesting_bank_id == responding_bank_id` is rejected unless it uses the local-contribution route kind.
-  - **Test 8 (provenance guard):** mock Gemini adding an extra field; A3 retries once and then refuses if the field still lacks provenance.
+  - **Test 8 (provenance guard):** mock Gemini changing primitive values; A3 retries once and then refuses if the response still does not exactly match provenance.
+  - **Test 9 (budget semantics):** zero rho for DP-backed metrics refuses before primitives, mixed aggregate metrics refuse before partial execution, and multi-hash `alert_count` refuses before N×rho fan-out.
+  - **Test 10 (unsupported query options):** windowed `entity_presence` and multi-hop `counterparty_linkage` refuse before primitive calls until matching P7 primitives exist.
+  - **Test 11 (replay state):** replay cache uses tuple keys, not delimiter-joined strings, and snapshots expose nonce hashes plus first-seen/expiry timestamps rather than raw nonces.
+- *Acceptance (suite):* `uv run pytest` passes 171 tests. Repo-wide `uv run ruff check .` still reports pre-existing lint failures in older data/smoke scripts; `uv run ruff check` over P8a-touched files passes.
 - *Risks specific to this part:* (a) The LLM may try to broaden primitive arguments. Mitigation: hard argument caps in A3 plus P7. (b) The extra A3 role adds runtime plumbing. Mitigation: keep A3 stateless and only reachable through F1.
+- *Review notes intentionally deferred:* (M1) raw LLM candidate bodies are not persisted on repair because the current runtime audit stream is metadata-first and avoids storing potentially sensitive model text; add a redacted debug artifact sink later if debugging needs it. (M2) replay cache size is unbounded beyond expiry pruning because the demo volume is small; production should add a max-size or TTL-backed store without evicting live nonces prematurely. (M4) `Sec314bResponse.in_reply_to` for `LocalSiloContributionRequest` uses `source_query_id` by design so F1 can merge requester-bank and peer-bank contributions under one upstream query; the schema docstring documents this convention.
 - *Depends on:* P4 (with A3 role added), P5, P7.
-- *Scope check:* one focused session after P7.
+- *Scope check:* two focused sessions after P7: first security-envelope/allowlist helpers and schema follow-up, then A3 route handling and primitive invocation.
 
 **P9 — F1 cross-bank coordinator**
 
 - *Goal:* Full LLM agent that receives `Sec314bQuery` from one bank's A2, validates the purpose declaration, broadcasts redacted queries to relevant peer banks' A3 silo responders, collects responses, and forwards an aggregated `Sec314bResponse` back to the requester. F1 is the gatekeeper: every cross-bank message passes through it.
-- *Files:* `backend/agents/f1_coordinator.py`, `backend/agents/prompts/f1_system.md`, `backend/agents/f1_states.py`, `backend/security/{canonical_json.py,signing.py,principals.py,replay.py}` if not already added by the P4 follow-up, `tests/test_f1.py`, `tests/test_security_envelope.py`.
+- *Files:* `backend/agents/f1_coordinator.py`, `backend/agents/prompts/f1_system.md`, `backend/agents/f1_states.py`, `tests/test_f1.py`. Reuses the P8a security-envelope helpers and `tests/test_security_envelope.py`.
 - *Inputs:* `Sec314bQuery` from any bank's A2, accepted only when the signed envelope verifies against an allowlisted A2 principal whose `agent_id`, `role`, and `bank_id` match the declared message sender fields.
 - *Outputs:* one redacted `Sec314bQuery` per target peer A3 (sent via orchestrator); optionally one `LocalSiloContributionRequest` to the requester bank's own A3 when pooled statistical intermediaries need the requesting bank's local contribution; one aggregated `Sec314bResponse` back to the original requester after responses come in; a `GraphPatternRequest` to F2 when the query shape indicates pattern detection; a `SanctionsCheckRequest` to F3 in parallel when the query references hashes that look like potential SDN matches.
 - *Approach (Gemini calls):*
-  1. **Inbound authentication** - deterministic code verifies canonical body hash, Ed25519 signature, `signing_key_id`, expiry, nonce freshness, and principal allowlist before any LLM call.
+  1. **Inbound authentication** - deterministic code verifies canonical body hash, Ed25519 signature, `signing_key_id`, expiry, nonce freshness, created-at clock skew, and principal allowlist before any LLM call.
   2. **Identity binding** - deterministic code checks `verified_principal.role == A2`, `verified_principal.bank_id == query.sender_bank_id == query.requesting_bank_id`, and `verified_principal.agent_id == query.sender_agent_id == query.requesting_investigator_id`.
   3. **Purpose-declaration validation** - Gemini reads the `PurposeDeclaration` and returns `{valid: bool, reason}`. `F1-B1` short-circuits this before the LLM call.
   4. **Target-bank selection** - LLM reasons about which peer banks the query is relevant to (e.g., a S2-shaped query about Alpha+Beta need not broadcast to Gamma). Returns peer `target_bank_ids` (must be a subset of the requester's stated peer targets).
@@ -1082,7 +1091,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - `SigningStateSnapshot`: public `signing_key_id`, key status, rotation metadata, and last verification status. Never includes private key material.
   - `EnvelopeVerificationSnapshot`: message id, canonical body hash, signature status, created/expires timestamps, freshness status, and request/response binding status.
   - `ReplayCacheSnapshot`: sender, nonce hash or redacted nonce token, cache hit/miss, first-seen timestamp, and expiration timestamp.
-  - `RouteApprovalSnapshot`: approval id, query id, approved body hash, requester/responding bank ids, expiry, signature status, and A3 match/mismatch result.
+  - `RouteApprovalSnapshot`: approval id, query id, route kind, approved body hash, requester/responding bank ids, expiry, signature status, and A3 match/mismatch result.
   - `DpLedgerSnapshot`: requester key, responding bank, rho spent, rho remaining, rho max, last primitive, sigma, sensitivity, privacy unit, and eps/delta display.
   - `ProviderHealthSnapshot`: LT reachability, LiteLLM reachability, configured provider route, last model, last status code, and last error class with secrets redacted.
   - `AuditChainSnapshot`: latest event hash, previous event hash, event count, validation status, and first broken link if tampering is detected.

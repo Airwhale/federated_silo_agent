@@ -28,6 +28,7 @@ from shared.enums import (
     PrivacyUnit,
     QueryShape,
     ResponseValueKind,
+    RouteKind,
     SARPriority,
     SignalType,
     TypologyCode,
@@ -162,11 +163,24 @@ class Message(StrictModel):
     sender_bank_id: BankId
     recipient_agent_id: NonEmptyStr
     created_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime | None = None
+    nonce: NonEmptyStr | None = None
+    body_hash: Sha256Hex | None = None
+    signature: NonEmptyStr | None = None
+    signing_key_id: NonEmptyStr | None = None
 
-    @field_validator("created_at")
+    @field_validator("created_at", "expires_at")
     @classmethod
-    def created_at_must_be_utc(cls, value: datetime) -> datetime:
+    def timestamps_must_be_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return value
         return _normalize_utc(value)
+
+    @model_validator(mode="after")
+    def expires_after_created(self) -> Message:
+        if self.expires_at is not None and self.expires_at <= self.created_at:
+            raise ValueError("expires_at must be after created_at")
+        return self
 
 
 class EvidenceItem(StrictModel):
@@ -276,6 +290,49 @@ QueryPayload: TypeAlias = Annotated[
 ]
 
 
+class RouteApproval(StrictModel):
+    """F1 approval binding one approved query body to one A3 route."""
+
+    approval_id: UUID = Field(default_factory=uuid4)
+    query_id: UUID
+    route_kind: RouteKind
+    approved_query_body_hash: Sha256Hex
+    requesting_bank_id: BankId
+    responding_bank_id: BankId
+    approved_by_agent_id: NonEmptyStr
+    approved_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    signature: NonEmptyStr | None = None
+    signing_key_id: NonEmptyStr | None = None
+
+    @field_validator("approved_at", "expires_at")
+    @classmethod
+    def timestamps_must_be_utc(cls, value: datetime) -> datetime:
+        return _normalize_utc(value)
+
+    @model_validator(mode="after")
+    def validate_route_shape(self) -> RouteApproval:
+        if self.requesting_bank_id == BankId.FEDERATION:
+            raise ValueError("requesting_bank_id must be a bank")
+        if self.responding_bank_id == BankId.FEDERATION:
+            raise ValueError("responding_bank_id must be a bank")
+        if self.expires_at <= self.approved_at:
+            raise ValueError("expires_at must be after approved_at")
+        if (
+            self.route_kind == RouteKind.PEER_314B
+            and self.requesting_bank_id == self.responding_bank_id
+        ):
+            raise ValueError("peer_314b route cannot target the requesting bank")
+        if (
+            self.route_kind == RouteKind.LOCAL_CONTRIBUTION
+            and self.requesting_bank_id != self.responding_bank_id
+        ):
+            raise ValueError(
+                "local_contribution route must target the requesting bank"
+            )
+        return self
+
+
 class Sec314bQuery(Message):
     """A Section 314(b) query routed from A2 to peer-bank A3s via F1."""
 
@@ -288,6 +345,7 @@ class Sec314bQuery(Message):
     query_payload: QueryPayload
     purpose_declaration: PurposeDeclaration
     requested_rho_per_primitive: NonNegativeFloat = 0.0
+    route_approval: RouteApproval | None = None
 
     @model_validator(mode="after")
     def payload_shape_must_match_header(self) -> Sec314bQuery:
@@ -306,6 +364,61 @@ class Sec314bQuery(Message):
             raise ValueError("target_bank_ids must contain only peer banks")
         if self.requesting_bank_id in self.target_bank_ids:
             raise ValueError("target_bank_ids must not include the requesting bank")
+        if self.route_approval is not None:
+            if self.route_approval.query_id != self.query_id:
+                raise ValueError("route_approval.query_id must match query_id")
+            if self.route_approval.route_kind != RouteKind.PEER_314B:
+                raise ValueError("Sec314bQuery route_approval must be peer_314b")
+            if self.route_approval.requesting_bank_id != self.requesting_bank_id:
+                raise ValueError(
+                    "route_approval.requesting_bank_id must match requesting_bank_id"
+                )
+            if self.route_approval.responding_bank_id not in self.target_bank_ids:
+                raise ValueError(
+                    "route_approval.responding_bank_id must be in target_bank_ids"
+                )
+        return self
+
+
+class LocalSiloContributionRequest(Message):
+    """Same-bank A3 request for the requester's own statistical intermediary."""
+
+    message_type: Literal["local_silo_contribution_request"] = (
+        MessageType.LOCAL_SILO_CONTRIBUTION_REQUEST.value
+    )
+    source_query_id: UUID
+    requesting_investigator_id: NonEmptyStr
+    requesting_bank_id: BankId
+    responding_bank_id: BankId
+    query_shape: QueryShape
+    query_payload: QueryPayload
+    purpose_declaration: PurposeDeclaration
+    requested_rho_per_primitive: NonNegativeFloat = 0.0
+    route_approval: RouteApproval
+
+    @model_validator(mode="after")
+    def validate_local_route(self) -> LocalSiloContributionRequest:
+        payload_shape = QueryShape(self.query_payload.query_shape)
+        if payload_shape != self.query_shape:
+            raise ValueError("query_shape must match query_payload.query_shape")
+        if self.requesting_bank_id == BankId.FEDERATION:
+            raise ValueError("requesting_bank_id must be a bank")
+        if self.responding_bank_id != self.requesting_bank_id:
+            raise ValueError("local contribution must target the requesting bank")
+        if self.route_approval.query_id != self.source_query_id:
+            raise ValueError("route_approval.query_id must match source_query_id")
+        if self.route_approval.route_kind != RouteKind.LOCAL_CONTRIBUTION:
+            raise ValueError(
+                "LocalSiloContributionRequest route_approval must be local_contribution"
+            )
+        if self.route_approval.requesting_bank_id != self.requesting_bank_id:
+            raise ValueError(
+                "route_approval.requesting_bank_id must match requesting_bank_id"
+            )
+        if self.route_approval.responding_bank_id != self.responding_bank_id:
+            raise ValueError(
+                "route_approval.responding_bank_id must match responding_bank_id"
+            )
         return self
 
 
@@ -384,7 +497,12 @@ class PrimitiveCallRecord(StrictModel):
 
 
 class Sec314bResponse(Message):
-    """Peer-bank response to a Section 314(b) query."""
+    """A3 response to an approved peer query or local contribution route.
+
+    For `LocalSiloContributionRequest`, `in_reply_to` carries the upstream
+    `source_query_id` so F1 can merge requester-bank and peer-bank
+    contributions under one investigation query.
+    """
 
     message_type: Literal["sec314b_response"] = MessageType.SEC314B_RESPONSE.value
     in_reply_to: UUID
@@ -707,6 +825,7 @@ class DismissalRationale(Message):
 PUBLIC_MESSAGE_MODELS: tuple[type[BaseModel], ...] = (
     Alert,
     Sec314bQuery,
+    LocalSiloContributionRequest,
     Sec314bResponse,
     SanctionsCheckRequest,
     SanctionsCheckResponse,
@@ -722,6 +841,7 @@ PUBLIC_MESSAGE_MODELS: tuple[type[BaseModel], ...] = (
 AgentMessage: TypeAlias = Annotated[
     Alert
     | Sec314bQuery
+    | LocalSiloContributionRequest
     | Sec314bResponse
     | SanctionsCheckRequest
     | SanctionsCheckResponse
