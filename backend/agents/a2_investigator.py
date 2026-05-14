@@ -347,7 +347,10 @@ class A2InvestigatorAgent(Agent[A2TurnInput, A2TurnResult]):
             if age < timedelta(0) or age > timedelta(days=CORRELATION_WINDOW_DAYS):
                 continue
             for hash_value in current_hashes & set(summary.entity_hashes):
-                counts[hash_value] = counts.get(hash_value, 1) + 1
+                # `hash_value` is guaranteed in `counts` because the inner-loop
+                # iterates over the intersection with `current_hashes`, and
+                # `counts` is initialized from `current_hashes` at line 343.
+                counts[hash_value] += 1
         return any(count >= CORRELATED_ALERT_THRESHOLD for count in counts.values())
 
     def _validate_peer_response_lineage(self, payload: A2PeerResponseInput) -> None:
