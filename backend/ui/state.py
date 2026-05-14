@@ -89,7 +89,17 @@ class DemoPrincipal(UiStateModel):
 
 
 class DemoSessionRuntime:
-    """Mutable in-memory session state for local demo control."""
+    """Mutable in-memory session state for local demo control.
+
+    Thread-safe: FastAPI runs synchronous endpoints in a threadpool, so
+    concurrent requests targeting the same session_id can interleave
+    writes (a probe handler mutating ``latest_envelope`` + ``latest_route``
+    + ``timeline`` + ``updated_at``) with reads (``component_snapshot``
+    pulling those fields, or ``to_snapshot`` reading ``timeline[-10:]``
+    and ``updated_at`` together). The public ``lock`` is an ``RLock``
+    so internal locked methods can be called from inside an outer
+    ``with session.lock:`` block without deadlocking.
+    """
 
     def __init__(self, request: SessionCreateRequest) -> None:
         now = utc_now()
@@ -121,23 +131,26 @@ class DemoSessionRuntime:
             entries=[],
             detail="No DP budget has been spent in this session yet.",
         )
+        self.lock = threading.RLock()
 
     def append_event(self, event: TimelineEventSnapshot) -> TimelineEventSnapshot:
-        self.timeline.append(event)
-        self.updated_at = utc_now()
+        with self.lock:
+            self.timeline.append(event)
+            self.updated_at = utc_now()
         return event
 
     def to_snapshot(self, components: list[ComponentReadinessSnapshot]) -> SessionSnapshot:
-        return SessionSnapshot(
-            session_id=self.session_id,
-            scenario_id=self.scenario_id,
-            mode=self.mode,
-            phase=self.phase,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            components=components,
-            latest_events=self.timeline[-10:],
-        )
+        with self.lock:
+            return SessionSnapshot(
+                session_id=self.session_id,
+                scenario_id=self.scenario_id,
+                mode=self.mode,
+                phase=self.phase,
+                created_at=self.created_at,
+                updated_at=self.updated_at,
+                components=components,
+                latest_events=self.timeline[-10:],
+            )
 
 
 MAX_ACTIVE_SESSIONS = 50
@@ -183,32 +196,34 @@ class DemoControlService:
 
     def step_session(self, session_id: UUID) -> SessionSnapshot:
         session = self._session(session_id)
-        session.phase = "p9a_placeholder_step"
-        session.append_event(
-            TimelineEventSnapshot(
-                component_id=ComponentId.F1,
-                title="Control-plane step recorded",
-                detail=(
-                    "P9a does not run the full message bus; P15 will replace this "
-                    "placeholder with orchestrator-driven transitions."
-                ),
-                status=SnapshotStatus.PENDING,
+        with session.lock:
+            session.phase = "p9a_placeholder_step"
+            session.append_event(
+                TimelineEventSnapshot(
+                    component_id=ComponentId.F1,
+                    title="Control-plane step recorded",
+                    detail=(
+                        "P9a does not run the full message bus; P15 will replace this "
+                        "placeholder with orchestrator-driven transitions."
+                    ),
+                    status=SnapshotStatus.PENDING,
+                )
             )
-        )
         return session.to_snapshot(self.component_readiness())
 
     def run_until_idle(self, session_id: UUID) -> SessionSnapshot:
         session = self._session(session_id)
-        session.phase = "p9a_idle"
-        session.append_event(
-            TimelineEventSnapshot(
-                component_id=ComponentId.AUDIT_CHAIN,
-                title="No live orchestrator yet",
-                detail="P15 owns run-until-idle semantics; P9a reports typed placeholders.",
-                status=SnapshotStatus.NOT_BUILT,
-                blocked_by=SecurityLayer.NOT_BUILT,
+        with session.lock:
+            session.phase = "p9a_idle"
+            session.append_event(
+                TimelineEventSnapshot(
+                    component_id=ComponentId.AUDIT_CHAIN,
+                    title="No live orchestrator yet",
+                    detail="P15 owns run-until-idle semantics; P9a reports typed placeholders.",
+                    status=SnapshotStatus.NOT_BUILT,
+                    blocked_by=SecurityLayer.NOT_BUILT,
+                )
             )
-        )
         return session.to_snapshot(self.component_readiness())
 
     def timeline(self, session_id: UUID) -> list[TimelineEventSnapshot]:
@@ -230,13 +245,18 @@ class DemoControlService:
                 fields=fields,
                 signing=self.signing_snapshot(),
             )
+        # Reads below hold session.lock so the .status field stays consistent
+        # with the snapshot object the caller receives (a concurrent probe
+        # writer could otherwise swap the snapshot between the two reads).
         if component_id == ComponentId.ENVELOPE:
+            with session.lock:
+                envelope = session.latest_envelope
             return ComponentSnapshot(
                 component_id=component_id,
-                status=session.latest_envelope.status,
+                status=envelope.status,
                 title=item.label,
                 fields=fields,
-                envelope=session.latest_envelope,
+                envelope=envelope,
             )
         if component_id == ComponentId.REPLAY:
             return ComponentSnapshot(
@@ -247,20 +267,24 @@ class DemoControlService:
                 replay=session.replay_cache.to_snapshot(),
             )
         if component_id == ComponentId.ROUTE_APPROVAL:
+            with session.lock:
+                route = session.latest_route
             return ComponentSnapshot(
                 component_id=component_id,
-                status=session.latest_route.status,
+                status=route.status,
                 title=item.label,
                 fields=fields,
-                route_approval=session.latest_route,
+                route_approval=route,
             )
         if component_id == ComponentId.DP_LEDGER:
+            with session.lock:
+                ledger = session.dp_ledger
             return ComponentSnapshot(
                 component_id=component_id,
-                status=session.dp_ledger.status,
+                status=ledger.status,
                 title=item.label,
                 fields=fields,
-                dp_ledger=session.dp_ledger,
+                dp_ledger=ledger,
             )
         if component_id in {ComponentId.LOBSTER_TRAP, ComponentId.LITELLM}:
             return ComponentSnapshot(
@@ -294,22 +318,26 @@ class DemoControlService:
 
     def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
         session = self._session(session_id)
-        if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
-            result = self._unsigned_message_probe(session, request)
-        elif request.probe_kind == ProbeKind.BODY_TAMPER:
-            result = self._body_tamper_probe(session, request)
-        elif request.probe_kind == ProbeKind.WRONG_ROLE:
-            result = self._wrong_role_probe(session, request)
-        elif request.probe_kind == ProbeKind.REPLAY_NONCE:
-            result = self._replay_probe(session, request)
-        elif request.probe_kind == ProbeKind.ROUTE_MISMATCH:
-            result = self._route_mismatch_probe(session, request)
-        elif request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
-            result = self._budget_exhaustion_probe(session, request)
-        else:
-            result = self._placeholder_probe(session, request)
+        # Each probe handler may mutate several session fields; serialize
+        # the whole run+append so a concurrent reader of `component_snapshot`
+        # or `to_snapshot` cannot see a half-applied probe outcome.
+        with session.lock:
+            if request.probe_kind == ProbeKind.UNSIGNED_MESSAGE:
+                result = self._unsigned_message_probe(session, request)
+            elif request.probe_kind == ProbeKind.BODY_TAMPER:
+                result = self._body_tamper_probe(session, request)
+            elif request.probe_kind == ProbeKind.WRONG_ROLE:
+                result = self._wrong_role_probe(session, request)
+            elif request.probe_kind == ProbeKind.REPLAY_NONCE:
+                result = self._replay_probe(session, request)
+            elif request.probe_kind == ProbeKind.ROUTE_MISMATCH:
+                result = self._route_mismatch_probe(session, request)
+            elif request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
+                result = self._budget_exhaustion_probe(session, request)
+            else:
+                result = self._placeholder_probe(session, request)
 
-        session.append_event(result.timeline_event)
+            session.append_event(result.timeline_event)
         return result
 
     def system_snapshot(self) -> SystemSnapshot:

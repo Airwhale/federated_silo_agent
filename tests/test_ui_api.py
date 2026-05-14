@@ -289,3 +289,42 @@ def test_concurrent_create_session_survives_threadpool() -> None:
     assert len(ids) == total
     assert len(set(ids)) == total  # every session got a unique uuid
     assert len(service._sessions) == MAX_ACTIVE_SESSIONS
+
+
+def test_concurrent_probes_against_one_session_stay_consistent() -> None:
+    # Multiple probes hitting the same session via the threadpool must
+    # land an event for every call without partial state being visible
+    # to a parallel reader. Total timeline length must equal initial
+    # event (1) + number of probe calls.
+    from concurrent.futures import ThreadPoolExecutor
+
+    test_client = client()
+    session_id = create_session(test_client)
+    probe_kinds = ["body_tamper", "wrong_role", "replay_nonce", "route_mismatch"]
+    runs_per_kind = 5
+
+    def fire(kind: str) -> int:
+        response = test_client.post(
+            f"/sessions/{session_id}/probes",
+            json={
+                "probe_kind": kind,
+                "target_component": "F1" if kind != "replay_nonce" else "replay",
+                "attacker_profile": "valid_but_malicious"
+                if kind != "wrong_role"
+                else "wrong_role",
+            },
+        )
+        return response.status_code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        statuses = list(
+            pool.map(
+                fire,
+                [kind for kind in probe_kinds for _ in range(runs_per_kind)],
+            )
+        )
+
+    assert all(s == 200 for s in statuses)
+    timeline = test_client.get(f"/sessions/{session_id}/timeline").json()
+    # 1 init event + one event per probe call
+    assert len(timeline) == 1 + len(probe_kinds) * runs_per_kind
