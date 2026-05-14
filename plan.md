@@ -547,7 +547,7 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, A2 investigator agent, A3 silo responder, security-envelope foundation, and F1 federation coordinator are complete. Audit hash-chain persistence remains a later P13/P14/P15 concern. After P9, the build starts the UI/API frame early: system-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state, with unfinished components shown as typed `not_built`, `pending`, or `simulated` placeholders until their live adapters land.
+The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, A2 investigator agent, A3 silo responder, security-envelope foundation, F1 federation coordinator, and P9a control API are complete. Audit hash-chain persistence remains a later P13/P14/P15 concern. The demo surface is split in two layers: P9a owns the typed control API and state contracts, and P9b owns the browser UI frame that consumes those contracts. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state, with unfinished components shown as typed `not_built`, `pending`, or `simulated` placeholders until their live adapters land.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
@@ -560,13 +560,14 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 - **P8** A2 investigator agent ✓
 - **P8a** A3 silo responder agent ✓
 - **P9** F1 cross-bank coordinator ✓
-- **P9a** UI/API frame + typed placeholder states ·
+- **P9a** Control API + typed state contracts ✓
+- **P9b** Browser UI frame + placeholder panels ·
 - **P10** F3 sanctions / PEP screening agent ·
 - **P11** F2 graph-analysis agent ·
 - **P12** F4 SAR drafter agent ·
 - **P13** F5 compliance auditor agent ·
 - **P14** AML policy adapter + Lobster Trap overlay ·
-- **P15** Agent orchestrator / message bus + UI control API ·
+- **P15** Agent orchestrator / message bus + API live adapters ·
 - **P16** Canonical demo flow script ·
 - **P17** End-to-end smoke test ·
 - **P18** Interactive judge console ·
@@ -939,31 +940,64 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P5, P8, P8a.
 - *Scope check:* one focused session.
 
-**P9a — UI/API frame + typed placeholder states**
+**P9a - Control API + typed state contracts**
 
-- *Goal:* Start the judge-console frame immediately after F1 exists, so every later part plugs into visible API and UI surfaces as it lands. This is not a mocked alternate workflow. It is a real control and observability shell over the same domain objects, with live adapters for completed pieces and typed placeholder states for unfinished ones.
-- *Files:* `backend/ui/__init__.py`, `backend/ui/server.py`, `backend/ui/api.py`, `backend/ui/state.py`, `backend/ui/snapshots.py`, `backend/demo/state.py`, `frontend/` or `backend/ui/static/`, `tests/test_ui_api.py`.
-- *API frame:*
+- *Goal:* Start the judge-console backend immediately after F1 exists, so the UI has a stable typed surface while later agents are still landing. This is a real control and observability API over the same domain objects, not a mocked alternate workflow. Live adapters call completed services; unfinished components return typed placeholder states.
+- *Files:* `backend/ui/__init__.py`, `backend/ui/server.py`, `backend/ui/api.py`, `backend/ui/state.py`, `backend/ui/snapshots.py`, `tests/test_ui_api.py`.
+- *API stack:* FastAPI for local and hosted demo mode, using Pydantic v2 models for every request and response. The API remains judge-safe: it can start runs, step runs, inspect typed state, inject safe probes, and export artifacts. It cannot approve routes directly, debit budgets directly, mutate replay state directly, or bypass A3/P7/policy checks.
+- *Two-plane control model:*
+  - **Observability plane:** read-only typed snapshots for node readiness, envelope verification, body hashes, public signing key ids, replay cache, route approval binding, A3 refusal state, P7 primitive provenance, DP ledger rows, provider health, and audit-chain status. Snapshots are redacted and never expose private signing keys, API keys, raw customer names, or raw peer-bank account identifiers.
+  - **Probe plane:** controlled adversarial inputs that enter through normal system boundaries. Supported probe classes include unsigned messages, body tampering after signing, wrong-role senders, replayed nonces, route-approval mismatches, prompt injection, unsupported query shapes, and budget exhaustion. Completed security layers execute real checks; unfinished layers return typed placeholders with `available_after`.
+- *Endpoint frame:*
   - `POST /sessions` creates or resets a demo run.
   - `POST /sessions/{id}/step` advances one routed action when a live adapter exists, or records a typed placeholder event when the target component is not built yet.
   - `POST /sessions/{id}/run-until-idle` runs all currently available live adapters.
   - `GET /sessions/{id}` returns the run summary, phase, active scenario, and component readiness.
   - `GET /sessions/{id}/timeline` returns message, policy, DP, and audit events in display order.
-  - `GET /sessions/{id}/components/{component_id}` returns a typed inspector snapshot for A1, A2, A3, F1-F5, P7, LT, LiteLLM, replay, route approval, signing, and audit chain.
+  - `GET /sessions/{id}/events` streams the timeline using SSE once the audit channel exists; before P15 it may return a fixture-backed or polling-compatible event list.
+  - `GET /sessions/{id}/components/{component_id}` returns a typed inspector snapshot for A1, A2, A3, F1-F5, P7, LT, LiteLLM, replay, route approval, signing, DP ledger, and audit chain.
   - `POST /sessions/{id}/probes/{probe_id}` injects a negative probe through the normal signed-envelope/policy path when the target path is built; otherwise it records a `not_built` probe result.
-- *Snapshot contract:* every UI panel is backed by a Pydantic v2 model with `status ∈ {"live","not_built","pending","simulated","error"}`. Placeholder states must name the missing milestone and the expected live adapter, for example `{"status":"not_built","component":"F2","available_after":"P11"}`. No UI component reads logs directly or reaches around policy gates.
-- *Initial live wiring:* after P9, the frame should support the completed spine A1/A2/F1/A3/P7 where available, including signed-envelope verification state, route approvals, replay-cache snapshots, primitive provenance, and DP budget snapshots. F2/F3/F4/F5, LT overlay, audit-chain persistence, and full canonical orchestration appear as placeholders until P10-P15.
-- *Frontend frame:* build the persistent layout early: run controls, federation timeline, right-side system-state panels, component inspector drawer, and attack-lab tab. Panels may show `not_built` placeholders, but their shape should be final enough that later milestones fill in data rather than redesigning navigation.
-- *Out of scope for this part:* no polished styling, no full canonical flow, no production auth, no complete attack library, no F2/F3/F4/F5 implementation. Placeholder states are allowed; fake successful business outcomes are not.
+  - `GET /health` returns a minimal `{"status":"ok"}` payload for process health checks.
+  - `GET /system` returns provider health, database availability, configured model route, and component readiness with secrets redacted.
+- *Snapshot contract:* every panel is backed by a Pydantic v2 model with `status in {"live","not_built","pending","simulated","error"}`. Placeholder states must name the missing milestone and the expected live adapter, for example `{"status":"not_built","component":"F2","available_after":"P11"}`. The API never asks the frontend to infer trust decisions from logs.
+- *Initial live wiring:* after P9, the API should support the completed spine A1/A2/F1/A3/P7 where available, including signed-envelope verification state, route approvals, replay-cache snapshots, primitive provenance, DP budget snapshots, and partial-refusal notes. F2/F3/F4/F5, LT overlay, audit-chain persistence, and full canonical orchestration appear as placeholders until P10-P15.
+- *Local dev mode:* `uv run uvicorn backend.ui.server:app --reload --port 8000` starts the API. The API serves JSON only in P9a; serving the built frontend can be added later for single-container Cloud Run.
+- *Current implementation:* FastAPI app and router live in `backend/ui/server.py` and `backend/ui/api.py`; Pydantic snapshot contracts live in `backend/ui/snapshots.py`; the in-memory session/probe harness lives in `backend/ui/state.py`. Implemented probes exercise real signing/body-hash failure, missing signature failure, wrong-role allowlist failure, replay-cache rejection, A3 route-approval body-hash mismatch, and DP-budget exhaustion. Prompt-injection and unsupported-query-shape probes return explicit typed placeholders until the P14 policy/Lobster Trap adapter and later A3 probe adapters are wired.
+- *Out of scope for this part:* no React implementation, no polished styling, no full canonical flow, no production auth, no complete attack library, no F2/F3/F4/F5 implementation. Placeholder states are allowed; fake successful business outcomes are not.
 - *Acceptance:* `tests/test_ui_api.py`:
   - Creating a session returns typed readiness for A1, A2, A3, F1, P7, F2-F5, LT, LiteLLM, replay, route approval, signing, DP ledger, and audit chain.
   - Inspecting a built component returns `status="live"` or `pending` with a typed snapshot, not an unstructured dict.
   - Inspecting an unbuilt component returns `status="not_built"` with `available_after` set to the owning future milestone.
-  - UI actions that trigger live paths call the same importable services used by tests; no endpoint can directly approve routes, debit budgets, mutate replay state, or bypass A3/P7.
-  - The browser frame renders the primary panes against fixture data without requiring live Gemini.
-- *Risks specific to this part:* (a) the frame could accidentally become a second workflow implementation. Mitigation: API endpoints call importable runtime services and expose snapshots only. (b) placeholders could mislead judges if they look like live results. Mitigation: every placeholder carries explicit `status` and milestone labels. (c) frontend scope could expand. Mitigation: ship structure and interaction first; visual polish waits for P18.
+  - API actions that trigger live paths call the same importable services used by tests; no endpoint can directly approve routes, debit budgets, mutate replay state, or bypass A3/P7.
+  - `GET /system` and session snapshots redact API keys, private signing keys, raw customer names, and raw peer-bank account identifiers.
+- *Acceptance (current):* `uv run pytest tests/test_ui_api.py` passes 12 tests covering session readiness, secret redaction, body-tamper rejection, unsigned-message rejection as a signature failure, replay rejection with redacted nonce hashes, true wrong-role allowlist rejection, A3-backed route-approval mismatch rejection, DP-budget exhaustion snapshot updates with requester-token redaction, placeholder prompt-injection probe behavior, minimal health response, audit-chain placeholder semantics, probe payload length bounds, and OpenAPI schema generation.
+- *Risks specific to this part:* (a) the API could accidentally become a second workflow implementation. Mitigation: endpoints call importable runtime services and expose snapshots only. (b) placeholders could mislead judges if they look like live results. Mitigation: every placeholder carries explicit `status` and milestone labels. (c) local API state could diverge from cloud mode. Mitigation: use the same snapshot contracts for both.
 - *Depends on:* P9.
-- *Scope check:* one focused session for API models and endpoints; one short session for the first browser frame.
+- *Scope check:* one focused session for API models, endpoints, and tests.
+
+**P9b - Browser UI frame + placeholder panels**
+
+- *Goal:* Build the browser frame separately from the API so the visual surface can evolve without changing backend contracts. The frame consumes P9a endpoints and renders a control-room style judge console with placeholders for unfinished components.
+- *Files:* `frontend/` (Vite + React + TypeScript), `frontend/src/api/` (generated or hand-written API client types from P9a schemas), `frontend/src/views/`, `frontend/src/components/`, `frontend/src/styles/`, `tests/test_ui_frame.py` or Playwright smoke tests once the frontend test harness exists.
+- *Frontend stack:* Vite + React + TypeScript. TanStack Query handles snapshot fetching. SSE or polling feeds the timeline depending on whether P15's audit stream is available. Keep the visual design quiet and operational, not marketing-style.
+- *Frame layout:* persistent run controls, federation timeline, right-side system-state panels, component inspector drawer, and attack-lab tab. Panels may show `not_built` placeholders, but their shape should be final enough that later milestones fill in data rather than redesigning navigation.
+- *Initial panels:*
+  - Run status and scenario selector.
+  - Federation topology with A2, F1, and three A3 silos visible.
+  - Timeline list backed by `GET /sessions/{id}/timeline`.
+  - Component inspector backed by `GET /sessions/{id}/components/{component_id}`.
+  - System-state cards for signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain status.
+  - Attack lab shell for prompt injection, MITM tamper, replay, route mismatch, unsupported query shape, and budget exhaustion probes.
+- *Out of scope for this part:* no final polish, no production auth, no arbitrary SQL explorer, no direct trust-decision controls, no hard dependency on live Gemini. The UI must display backend placeholder status honestly rather than inventing successful outputs.
+- *Acceptance:*
+  - The React app renders the primary panes against fixture or local P9a API data without requiring live Gemini.
+  - Every visible panel has a typed API source or an explicit `not_built` placeholder.
+  - Clicking a component opens an inspector drawer with the latest snapshot.
+  - Run controls call P9a endpoints and show backend errors without swallowing refusal reasons.
+  - Security-state panels show signing, route approval, replay, DP accounting, and provider health as first-class UI, not raw JSON dumps.
+- *Risks specific to this part:* (a) frontend scope could expand. Mitigation: ship structure and interaction first; visual polish waits for P18. (b) the UI could imply privileges it does not have. Mitigation: all controls call P9a and normal policy paths. (c) layout work can consume time. Mitigation: use dense, operational panels and avoid a landing page.
+- *Depends on:* P9a.
+- *Scope check:* one short session for the first browser frame.
 
 **P10 — F3 sanctions / PEP screening agent**
 
@@ -1102,10 +1136,10 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P4 (message schemas).
 - *Scope check:* one focused session.
 
-**P15 - Agent orchestrator / message bus + UI live adapters**
+**P15 - Agent orchestrator / message bus + API live adapters**
 
-- *Goal:* Runtime that can run in two modes: local deterministic mode for tests and cloud-demo mode with explicit nodes for each silo, investigator, and federation stack. Local mode instantiates all 14 agent instances in one process. Cloud-demo mode deploys separate service processes for the three A3 silo nodes, the A2 investigator nodes, and the F1-F5 federation node; messages cross service boundaries through signed envelopes and each node's local Lobster Trap/LiteLLM stack. P15 upgrades the P9a UI/API frame from partial adapters to the full live orchestrator: the same session, timeline, inspector, and probe endpoints now drive the complete stack instead of returning placeholders for later agents.
-- *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the web UI), `backend/inbox.py` (per-agent inbox), `backend/runtime/node_config.py` (node identity, service URLs, trust-domain config), `backend/runtime/transport.py` (HTTP/gRPC transport abstraction), `backend/demo/state.py` (scenario/run snapshots for UI inspection), `backend/demo/control_api.py` (FastAPI or Typer-backed control facade), `tests/test_orchestrator.py`, `tests/test_demo_control_api.py`.
+- *Goal:* Runtime that can run in two modes: local deterministic mode for tests and cloud-demo mode with explicit nodes for each silo, investigator, and federation stack. Local mode instantiates all 14 agent instances in one process. Cloud-demo mode deploys separate service processes for the three A3 silo nodes, the A2 investigator nodes, and the F1-F5 federation node; messages cross service boundaries through signed envelopes and each node's local Lobster Trap/LiteLLM stack. P15 upgrades the P9a control API from partial adapters to the full live orchestrator: the same session, timeline, inspector, and probe endpoints now drive the complete stack instead of returning placeholders for later agents.
+- *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the web UI), `backend/inbox.py` (per-agent inbox), `backend/runtime/node_config.py` (node identity, service URLs, trust-domain config), `backend/runtime/transport.py` (HTTP/gRPC transport abstraction), `backend/demo/state.py` (scenario/run snapshots for UI inspection), `backend/ui/api.py` and `backend/ui/server.py` (P9a FastAPI endpoints upgraded with live adapters), `tests/test_orchestrator.py`, `tests/test_demo_control_api.py`.
 - *Architecture:*
   - **Local mode:** in-process message bus for fast tests and deterministic demo dry-runs. Each agent instance holds an inbox (`asyncio.Queue`); the bus has a routing table keyed by `recipient_agent_id`.
   - **Cloud-demo mode:** each trust domain runs as a service with a local policy/LLM/security stack. Bank silo nodes run `A3 + P7 + local DB + local LT/LiteLLM + policy adapter + envelope verifier + replay cache + audit forwarder`. Investigator nodes run `A2 + local LT/LiteLLM + policy adapter + envelope signer/verifier + replay cache`. The federation node runs `F1-F5 + federation LT/LiteLLM + policy adapter + route approval signer + aggregate audit stream + replay cache`.
@@ -1149,7 +1183,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Verify UI inspection snapshots expose enough state for every major mechanism without exposing raw peer-bank transactions outside that bank's silo snapshot.
   - Verify every `inject_probe(...)` negative scenario is blocked or refused at the expected layer and emits an audit event.
 - *Risks specific to this part:* (a) `asyncio` orchestration is easy to deadlock if priorities are wrong — mitigation: priority queue with explicit ordering; test exhaustively. (b) The audit channel's ringbuffer may overflow during long runs — mitigation: 10K entries is well over the demo's ~50 events; UI handles ringbuffer reads gracefully. (c) Wiring 14 agents + 3 primitives layers is mostly plumbing — keep `__init__` clean by extracting a `bank_setup(bank_id) -> BankRuntime` helper. (d) Cloud-demo mode can consume time fast — mitigation: keep service transport thin and fall back to local mode if deployment work runs hot.
-- *Depends on:* P5, P7, P8, P8a, P9, P9a, P10, P11, P12, P14. P13 is optional for the first orchestrator pass; when present, it plugs into the `AuditSource` interface built here.
+- *Depends on:* P5, P7, P8, P8a, P9, P9a, P10, P11, P12, P14. P9b can run against the upgraded API but is not required for orchestrator tests. P13 is optional for the first orchestrator pass; when present, it plugs into the `AuditSource` interface built here.
 - *Scope check:* one to two focused sessions. Mostly plumbing once the agent contracts are stable.
 
 **P16 — Canonical demo flow script**
@@ -1164,7 +1198,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   5. Expect terminal events: an `F4 SARDraft` emitted with `typology_code="structuring"`, `sar_priority="high"`, `contributors` length ≥ 2.
   6. Print the audit stream to stdout (formatted, color-coded) and the final SARDraft to a separate output file.
 - *Determinism:* the script uses `LLM_STUB_MODE=1` env var or a `--stub` flag to swap in canned-LLM stub agents for fully-reproducible runs; `--live` uses real Gemini (DP noise still produces small variation in some fields, but high-level outcomes — pattern_class, sar_priority, contributors — are stable).
-- *Out of scope for this part:* no new UI frame work (P9a owns the frame and P18 owns polish); no recording mechanics (P21); no test assertions beyond what the script prints (P17 binds the assertions).
+- *Out of scope for this part:* no new UI frame work (P9b owns the frame and P18 owns polish); no recording mechanics (P21); no test assertions beyond what the script prints (P17 binds the assertions).
 - *Acceptance:* `uv run python -m backend.demo.canonical_flow --stub` produces:
   - A SARDraft printed to `out/sar_draft.json` with the expected typology code and contributors.
   - An audit stream of ~30–50 events to stdout (or `out/audit.jsonl` if `--out-file`).
@@ -1201,8 +1235,8 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P18 - Interactive judge console**
 
-- *Goal:* Polish and complete the P9a browser frame into the final interactive judge console. Judges can drive, inspect, and safely attack every part of the mechanism. The console shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid, but it also exposes component inspectors and probe controls for A1, A2, A3, F1-F5, P7, policy adapters, LT, LiteLLM, inboxes, route approvals, replay cache, signing/envelope state, DP ledger state, audit chain, and final SAR artifacts.
-- *Files:* `backend/ui/__init__.py`, `backend/ui/server.py`, `backend/ui/api.py`, `backend/ui/static/` or `frontend/` (web app), `backend/ui/components.py` (shared view models: agent badge, message card, privacy-budget meter with epsilon display, policy verdict panel), `backend/demo/canonical_flow.py` (extended to support `--ui` flag).
+- *Goal:* Polish and complete the P9b browser frame into the final interactive judge console. Judges can drive, inspect, and safely attack every part of the mechanism. The console shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid, but it also exposes component inspectors and probe controls for A1, A2, A3, F1-F5, P7, policy adapters, LT, LiteLLM, inboxes, route approvals, replay cache, signing/envelope state, DP ledger state, audit chain, and final SAR artifacts.
+- *Files:* `frontend/` (web app), `frontend/src/api/` (P9a/P15 client), `frontend/src/components/` (agent badge, message card, privacy-budget meter with epsilon display, policy verdict panel), `frontend/src/views/`, `frontend/src/styles/`, `backend/demo/canonical_flow.py` (extended to support `--ui` flag). Backend endpoint changes belong in P9a/P15 unless polish exposes a missing typed view model.
 - *Primary view layout (browser, 1080p target):*
   ```
   ┌────────────────────────────────────────────────────────────────────┐
@@ -1227,7 +1261,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   └──────────────────────────────────┴─────────────────────────────────┘
   ```
 - The block above is a wireframe only. The implementation target is a browser dashboard with resizable panels, inspector drawers, and an attack-lab tab, not a Rich terminal renderer.
-- *Implementation notes:* This milestone should fill in and polish the existing P9a layout, not rebuild it. The web server subscribes to the audit channel via `audit.subscribe()` and calls the P15 control API for run, step, inspect, inject, and export actions. Privacy-budget meters display rho plus approximate epsilon values derived from the ledger. Message cards are color-coded by agent role (A1=cyan, A2=green, A3=teal, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages collapse by default, with full typed JSON visible in an inspector drawer.
+- *Implementation notes:* This milestone should fill in and polish the existing P9b layout, not rebuild it. The web server subscribes to the audit channel via `audit.subscribe()` and calls the P9a/P15 control API for run, step, inspect, inject, and export actions. Privacy-budget meters display rho plus approximate epsilon values derived from the ledger. Message cards are color-coded by agent role (A1=cyan, A2=green, A3=teal, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages collapse by default, with full typed JSON visible in an inspector drawer.
 - *Interaction model:*
   - **Run controls:** start scenario, reset, step once, run until next artifact, run until idle, switch stub/live/live-with-stub-fallback.
   - **Component inspectors:** A1 local monitoring, A2 investigation state, F1 routing, each A3 silo response, P7 primitive calls, F2 graph inference, F3 sanctions result, F4 SAR draft, F5 audit findings.
@@ -1243,8 +1277,8 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Signing, route-approval, replay, DP-ledger, LT, LiteLLM, and audit-chain state are visible as first-class panels, not buried in raw logs.
   - Each security probe reaches the expected block/refusal layer and creates an audit event visible in the audit panel.
   - Layout readable at 1920×1080 resolution (the screen-recording target).
-- *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one attack lab tab first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.
-- *Depends on:* P9a, P15, P16.
+- *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one attack lab tab first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P9a/P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.
+- *Depends on:* P9a, P9b, P15, P16.
 - *Scope check:* one focused session for the layout; another for the polish (colors, spacing, edge cases).
 
 ---
