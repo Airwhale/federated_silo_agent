@@ -436,12 +436,13 @@ def contribution_summary(
         )
     )
     rationale = truncate_text(combined_rationale, 220)
-    return truncate_text(
+    summary = (
         f"{bank_id.value} contributed {evidence_count} evidence item(s), "
-        f"{entity_count} entity hash(es), and {amount_text}. "
-        f"Rationale: {rationale}",
-        500,
+        f"{entity_count} entity hash(es), and {amount_text}."
     )
+    if rationale:
+        summary += f" Rationale: {rationale}"
+    return truncate_text(summary, 500)
 
 
 def combined_investigator_ids(contributions: list[SARContribution]) -> str:
@@ -518,14 +519,15 @@ def narrative_violation(
     narrative: str,
 ) -> str | None:
     """Validate narrative-only LLM output against deterministic facts."""
-    if not contains_exact_token(narrative, "314(b)") and not contains_exact_token(
-        narrative,
-        "USA_PATRIOT_314b",
+    narrative_lower = narrative.lower()
+    if not contains_exact_token(narrative_lower, "314(b)") and not contains_exact_token(
+        narrative_lower,
+        "usa_patriot_314b",
     ):
         return "SAR narrative must reference Section 314(b) authority"
 
     for contributor in fields.contributors:
-        if not contains_exact_token(narrative, contributor.bank_id.value):
+        if not contains_exact_token(narrative_lower, contributor.bank_id.value.lower()):
             return (
                 "SAR narrative must reference contributing bank_id "
                 f"{contributor.bank_id.value}"
@@ -536,7 +538,7 @@ def narrative_violation(
         missing_hashes = [
             hash_value
             for hash_value in required_hashes
-            if not contains_exact_token(narrative, hash_value)
+            if not contains_exact_token(narrative_lower, hash_value.lower())
         ]
         if missing_hashes:
             return (
