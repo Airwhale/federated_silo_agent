@@ -389,7 +389,7 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 **Agent F3: Sanctions / PEP screening agent**
 
 - **Role:** Receives entity hashes from A2 or F1. Returns binary match flags against the (mock) SDN watchlist, plus PEP relation indicators when applicable.
-- **Reasoning:** Gemini call. F3 reasons about fuzzy matches (similar name hashes, partial matches, transliteration variants in a real deployment). The mock list contains exact hashes for the demo's planted PEP entity plus ~10 well-known fictional names.
+- **Reasoning:** deterministic exact hash-token screening in P10. F3 does not receive raw names, so fuzzy matching belongs inside a bank-local name-screening service or future privacy-preserving tokenization layer before F3 sees the request.
 - **Rule constraints (LLM cannot override):**
   - Cannot return list contents (output is binary + relation type only)
   - Cannot retain queried entity hashes between requests
@@ -547,7 +547,7 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, A2 investigator agent, A3 silo responder, security-envelope foundation, F1 federation coordinator, and P9a control API are complete. Audit hash-chain persistence remains a later P13/P14/P15 concern. The demo surface is split in two layers: P9a owns the typed control API and state contracts, and P9b owns the browser UI frame that consumes those contracts. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state, with unfinished components shown as typed `not_built`, `pending`, or `simulated` placeholders until their live adapters land.
+The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, A2 investigator agent, A3 silo responder, security-envelope foundation, F1 federation coordinator, F3 sanctions/PEP screener, and P9a control API are complete. Audit hash-chain persistence remains a later P13/P14/P15 concern. The demo surface is split in two layers: P9a owns the typed control API and state contracts, and P9b owns the browser UI frame that consumes those contracts. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state, with unfinished components shown as typed `not_built`, `pending`, or `simulated` placeholders until their live adapters land.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
@@ -562,7 +562,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 - **P9** F1 cross-bank coordinator ✓
 - **P9a** Control API + typed state contracts ✓
 - **P9b** Browser UI frame + placeholder panels ✓
-- **P10** F3 sanctions / PEP screening agent ·
+- **P10** F3 sanctions / PEP screening agent ✓
 - **P11** F2 graph-analysis agent ·
 - **P12** F4 SAR drafter agent ·
 - **P13** F5 compliance auditor agent ·
@@ -1003,27 +1003,31 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P9a.
 - *Scope check:* one short session for the first browser frame.
 
-**P10 — F3 sanctions / PEP screening agent**
+**P10 - F3 sanctions / PEP screening agent**
 
-- *Goal:* Full LLM agent that receives entity hashes and returns binary match flags against a mock SDN watchlist + PEP relation indicators. Simple by design — this agent ships before F2 because it's the cleanest exercise of the agent base class on a federation-layer agent.
-- *Files:* `backend/agents/f3_sanctions.py`, `backend/agents/prompts/f3_system.md`, `data/mock_sdn_list.json` (10 well-known fictional names + the S1-D PEP entity's hash), `tests/test_f3.py`.
-- *Mock SDN list shape:* `{entities: [{name_hash, source: "SDN"|"PEP", notes}]}` — `notes` is a non-disclosed field (informational only; never returned). F3 only emits boolean flags.
-- *Inputs:* `SanctionsCheckRequest { entity_hashes }` from A2 or F1.
-- *Outputs:* `SanctionsCheckResponse { results: dict[hash → {sdn_match, pep_relation}] }`. No list contents leaked.
-- *Approach (Gemini call):* the LLM's job is fuzzy-match reasoning — in production this would consider name variants, transliteration, alias chains. For the demo, the mock list is keyed by exact `name_hash` so the LLM is mostly confirming exact matches. The prompt instructs the LLM to also return uncertainty when a hash matches a known SDN root but with a relation indicator (parent company, beneficial owner, etc.). The structured output is the response schema.
-- *Rule bypasses:* implement `F3-B1` and `F3-B2` from the Section 8.3 bypass rule catalog.
+- *Goal:* Federation-layer screener that receives cross-bank hash tokens and returns binary match flags against the mock SDN watchlist plus PEP relation indicators. F3 does not receive raw names, so P10 is deterministic exact-token screening rather than fuzzy name matching.
+- *Files:* `backend/agents/f3_sanctions.py`, `backend/agents/prompts/f3_system.md`, `data/mock_sdn_list.json` (10 fictional SDN fixtures plus the S1-D PEP entity hash), `tests/test_f3.py`.
+- *Mock SDN list shape:* `{entities: [{name_hash, source: "SDN"|"PEP", notes}]}`. `notes` is a non-disclosed field for local demo explainability only and never appears in the response.
+- *Inputs:* `SanctionsCheckRequest { entity_hashes }` from A2 or F1, addressed to `federation.F3`.
+- *Outputs:* `SanctionsCheckResponse { results: dict[hash -> {sdn_match, pep_relation}] }`. No list contents, raw names, source labels, or notes are leaked.
+- *Approach:* exact hash lookup against the validated mock watchlist. Production fuzzy matching belongs inside the bank or a privacy-preserving tokenization service before F3 sees the request.
+- *Rule bypasses:* `F3-B1` sets `sdn_match=True` for exact SDN hash matches. `F3-B2` sets `pep_relation=True` for exact PEP hash matches.
 - *Rule constraints:*
-  - Output schema strictly excludes list contents — `notes` and `source` from the mock list never appear in `SanctionsCheckResponse`.
-  - Cannot retain queried entity hashes between requests (stateless).
-- *Out of scope for this part:* no real OFAC integration; no fuzzy-match upgrade beyond exact hash + LLM judgment; no list update / refresh mechanism.
+  - Output schema strictly excludes list contents: `notes` and `source` from the mock list never appear in `SanctionsCheckResponse`.
+  - Cannot retain queried entity hashes between requests; the agent keeps only the loaded watchlist.
+  - Reject requests not addressed to `federation.F3` or not sent by A2/F1.
+- *Out of scope for this part:* no real OFAC integration; no fuzzy-match upgrade; no list update or refresh mechanism.
 - *Acceptance:* `tests/test_f3.py`:
-  - Querying the S1-D PEP entity's `name_hash` returns `pep_relation=True` via the bypass.
+  - Querying the S1-D PEP entity's `name_hash` returns `pep_relation=True`.
+  - Querying a mock SDN hash returns `sdn_match=True`.
   - Querying a random non-list hash returns `sdn_match=False, pep_relation=False`.
-  - Output schema verified to exclude `notes` and `source` fields from the mock list.
+  - Output schema verified to exclude `notes`, `source`, and internal fixture details.
   - Querying a batch of 10 hashes returns results for all 10.
-- *Risks specific to this part:* (a) the LLM may hallucinate a match if the prompt isn't tight — mitigation: explicit "only flag matches that exist in the provided list" instruction + structured output schema that's clear. (b) `mock_sdn_list.json` content should be obviously fictional to avoid any real-name collisions — mitigation: derive the names from a published "well-known fictional names" template.
+  - Wrong-recipient and wrong-sender-role requests are rejected.
+- *Current implementation:* complete. `F3SanctionsAgent` loads a strict Pydantic watchlist document, screens exact cross-bank hash tokens, emits `F3-B1`/`F3-B2` runtime audit bypass events for positive matches, never calls the LLM for hash-only screening, and returns only boolean flags.
+- *Risks specific to this part:* a hash-only design is less visually impressive than fuzzy name matching, but it is more honest and preserves the privacy story. Later bank-local fuzzy matching can produce the tokens that F3 screens.
 - *Depends on:* P5.
-- *Scope check:* one short focused session — F3 is the simplest federation-layer agent.
+- *Scope check:* complete.
 
 **P11 — F2 graph-analysis agent**
 
