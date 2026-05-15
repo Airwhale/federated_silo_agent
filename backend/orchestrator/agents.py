@@ -185,7 +185,7 @@ class AgentRegistry:
                     else BankStatsPrimitives(bank_id=bank_id)
                 ),
                 principal_allowlist=principals.allowlist,
-                replay_cache=ReplayCache(),
+                replay_cache=replay_cache,
                 response_private_key=a3_principal.private_key,
                 response_signing_key_id=a3_principal.signing_key_id,
                 audit=audit,

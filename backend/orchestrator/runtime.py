@@ -9,7 +9,12 @@ from uuid import UUID, uuid4
 from backend.agents.a1_monitoring import synthetic_velocity_candidate
 from backend.agents.a2_states import CorrelatedAlertSummary
 from backend.agents.a3_states import A3TurnInput
-from backend.agents.f1_states import F1AggregationInput, F1InboundQueryInput, F1TurnInput
+from backend.agents.f1_states import (
+    F1AggregationInput,
+    F1InboundQueryInput,
+    F1RoutePlan,
+    F1TurnInput,
+)
 from backend.orchestrator.agents import AgentRegistry, OrchestratorPrincipals
 from backend.orchestrator.audit import OrchestratorAuditRecorder
 from backend.orchestrator.state_machine import AgentTurn, next_turn
@@ -38,7 +43,7 @@ class SessionOrchestratorState:
     registry: AgentRegistry
     latest_alert: Alert | None = None
     original_query: Sec314bQuery | None = None
-    route_plan: object | None = None
+    route_plan: F1RoutePlan | None = None
     routed_requests: list[Sec314bQuery | LocalSiloContributionRequest] = field(
         default_factory=list
     )

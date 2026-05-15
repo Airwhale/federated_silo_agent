@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from shared.enums import BankId
 from shared.messages import LocalSiloContributionRequest, Sec314bQuery
+
+if TYPE_CHECKING:
+    from backend.orchestrator.runtime import SessionOrchestratorState
 
 
 TurnKind = Literal[
@@ -30,23 +33,23 @@ class AgentTurn:
     request: Sec314bQuery | LocalSiloContributionRequest | None = None
 
 
-def next_turn(state: object) -> AgentTurn | None:
+def next_turn(state: SessionOrchestratorState) -> AgentTurn | None:
     """Return the next canonical turn for the session state."""
-    if getattr(state, "terminal_reason", None) is not None:
+    if state.terminal_reason is not None:
         return None
-    if getattr(state, "latest_alert", None) is None:
+    if state.latest_alert is None:
         return AgentTurn(
             kind="a1_monitor",
             agent_id="bank_alpha.A1",
             bank_id=BankId.BANK_ALPHA,
         )
-    if getattr(state, "original_query", None) is None:
+    if state.original_query is None:
         return AgentTurn(
             kind="a2_alert_triage",
             agent_id="bank_alpha.A2",
             bank_id=BankId.BANK_ALPHA,
         )
-    if getattr(state, "route_plan", None) is None:
+    if state.route_plan is None:
         return AgentTurn(kind="f1_route", agent_id="federation.F1")
 
     route_plan = state.route_plan
