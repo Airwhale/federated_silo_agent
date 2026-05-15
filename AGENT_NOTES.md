@@ -599,6 +599,31 @@ Do not touch without coordination:
 
 Notes:
 
+### 2026-05-15 - Codex - codex/p15-orchestrator
+Status: in_progress
+Touched files:
+- `backend/orchestrator/`
+- `backend/ui/state.py`
+- `tests/test_ui_api.py`
+- `docs/architecture/0002-orchestrator-design.md`
+
+What changed:
+- Added a local P15 orchestrator package with per-session agent registry, audit hash chain, deterministic turn scheduling, and a runtime that wires A1, A2, F1, A3, P7 stub primitives, and F3 when routed.
+- Replaced P9a step and run-until-idle placeholders with live turn execution through the built components.
+- Exposed live audit-chain, envelope, route-approval, DP ledger, and component state snapshots in the existing API contracts.
+- Added UI API integration tests for one-step execution and run-until-idle stopping at the currently missing F4 boundary.
+- Marked ADR 0002 accepted for the implemented local orchestrator design.
+
+Assumptions:
+- F2, F4, F5, and F6 are not present in this branch yet, so P15 stops explicitly at the F4 pending state after A2 emits a SAR contribution.
+- The canonical stub-mode path uses deterministic A1 input and stub A3 primitives so local API tests do not require generated silo databases.
+
+Blockers:
+- None for the built-component P15 path. Full canonical flow through F2, F4, F5, and F6 still depends on those workstreams landing.
+
+Next agent:
+- After F2/F4/F5/F6 merge, extend `backend/orchestrator/state_machine.py` and `backend/orchestrator/runtime.py` to schedule those real agents instead of terminating at F4 pending.
+
 ### P18 - Judge Console Polish
 
 Owner:

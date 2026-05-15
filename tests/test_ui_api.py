@@ -335,6 +335,57 @@ def test_health_is_minimal_and_audit_chain_is_not_timeline_count() -> None:
     assert audit_chain.json()["audit_chain"]["event_count"] == 0
 
 
+def test_step_session_advances_one_live_orchestrator_turn() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(f"/sessions/{session_id}/step")
+    audit_chain = test_client.get(f"/sessions/{session_id}/components/audit_chain")
+    a1_snapshot = test_client.get(f"/sessions/{session_id}/components/A1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["phase"] == "a1_monitor"
+    assert body["latest_events"][-1]["title"] == "Live turn: bank_alpha.A1"
+    assert "placeholder" not in response.text.lower()
+    assert audit_chain.status_code == 200
+    assert audit_chain.json()["audit_chain"]["event_count"] > 0
+    fields = {field["name"]: field["value"] for field in a1_snapshot.json()["fields"]}
+    assert fields["live_turn_state"] == "running"
+    assert fields["latest_alert_id"] != "none"
+
+
+def test_run_until_idle_drives_built_components_and_stops_at_f4_gap() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(f"/sessions/{session_id}/run-until-idle")
+    timeline = test_client.get(f"/sessions/{session_id}/timeline").json()
+    envelope = test_client.get(f"/sessions/{session_id}/components/envelope")
+    route = test_client.get(f"/sessions/{session_id}/components/route_approval")
+    ledger = test_client.get(f"/sessions/{session_id}/components/dp_ledger")
+    f1_snapshot = test_client.get(f"/sessions/{session_id}/components/F1")
+    a2_snapshot = test_client.get(f"/sessions/{session_id}/components/A2")
+
+    assert response.status_code == 200
+    assert response.json()["phase"] == "F4 pending after A2 SAR contribution."
+    titles = [event["title"] for event in timeline]
+    assert "Live turn: bank_alpha.A1" in titles
+    assert "Live turn: bank_alpha.A2" in titles
+    assert "Live turn: federation.F1" in titles
+    assert "Live turn: bank_beta.A3" in titles
+    assert "Live turn: bank_gamma.A3" in titles
+    assert titles[-1] == "Orchestrator idle"
+    assert envelope.json()["envelope"]["signature_status"] == "valid"
+    assert route.json()["route_approval"]["binding_status"] == "matched"
+    assert len(ledger.json()["dp_ledger"]["entries"]) == 2
+    assert "investigator-alpha" not in ledger.text
+    f1_fields = {field["name"]: field["value"] for field in f1_snapshot.json()["fields"]}
+    a2_fields = {field["name"]: field["value"] for field in a2_snapshot.json()["fields"]}
+    assert f1_fields["routed_requests"] == "2"
+    assert a2_fields["final_artifact"].startswith("sar_contribution:")
+
+
 def test_probe_payload_text_is_bounded() -> None:
     test_client = client()
     session_id = create_session(test_client)
@@ -386,7 +437,7 @@ def test_live_component_interaction_returns_snapshot_and_event() -> None:
     assert any(event["title"] == "Interaction: inspect" for event in timeline.json())
 
 
-def test_audit_chain_interaction_returns_available_after_until_persistence_lands() -> None:
+def test_audit_chain_prompt_is_recorded_pending_after_p15_live_chain() -> None:
     test_client = client()
     session_id = create_session(test_client)
 
@@ -401,11 +452,12 @@ def test_audit_chain_interaction_returns_available_after_until_persistence_lands
 
     assert response.status_code == 200
     body = response.json()
-    assert body["accepted"] is False
-    assert body["status"] == "not_built"
-    assert body["blocked_by"] == "not_built"
-    assert body["available_after"] == "P13/P15"
-    assert "P13/P15" in body["reason"]
+    assert body["accepted"] is True
+    assert body["executed"] is False
+    assert body["status"] == "pending"
+    assert body["blocked_by"] is None
+    assert body["available_after"] is None
+    assert "No protected state was mutated" in body["reason"]
 
 
 def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
