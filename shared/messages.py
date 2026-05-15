@@ -1044,10 +1044,31 @@ class DismissalRationale(Message):
         return _reject_demo_customer_names(value, "reason")
 
 
+# Module-level constant for the one ``ComplianceFinding.kind`` value
+# validators reference today. Using a constant rather than the magic
+# string ``"rate_limit"`` inline means changing the value is a single
+# edit (and, more importantly, prepares this site for the P13 enum
+# migration: replacing ``_RATE_LIMIT_KIND`` with
+# ``ComplianceFindingKind.RATE_LIMIT`` will be a one-token swap).
+# Caught by Gemini PR-8 iter 7.
+_RATE_LIMIT_KIND = "rate_limit"
+
+
 class ComplianceFinding(StrictModel):
     """One F5 compliance finding over signed audit artifacts."""
 
     finding_id: UUID = Field(default_factory=uuid4)
+    # TODO(P13): tighten ``kind`` from ``NonEmptyStr`` to a
+    # ``ComplianceFindingKind`` StrEnum once F5 is implemented and the
+    # full set of finding kinds is known. Current candidates seen in
+    # the design notes: ``rate_limit`` (the only one currently used
+    # by validators below, exported as ``_RATE_LIMIT_KIND``),
+    # ``unauthorized_actor``, ``purpose_overreach``, ``route_mismatch``,
+    # ``signature_failure``, ``replay_detected``, ``redaction_required``.
+    # Defining the enum partially now would force a runtime error the
+    # first time F5 emits a kind not yet listed; defining it fully
+    # requires P13's implementer to decide which kinds the auditor
+    # actually produces. Caught by Gemini PR-8 iter 6.
     kind: NonEmptyStr
     severity: PolicySeverity
     detail: MediumText
@@ -1096,7 +1117,7 @@ class AuditReviewResult(Message):
         if (self.human_review_required or self.rate_limit_triggered) and not self.findings:
             raise ValueError("flagged audit reviews require at least one finding")
         if self.rate_limit_triggered and not any(
-            finding.kind == "rate_limit" for finding in self.findings
+            finding.kind == _RATE_LIMIT_KIND for finding in self.findings
         ):
             raise ValueError(
                 "rate_limit_triggered requires at least one rate_limit finding"

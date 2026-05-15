@@ -74,7 +74,15 @@ from shared.messages import (
     response_value_kind,
 )
 
-# Keep public exports alphabetized so drift is visible when adding a contract.
+# Keep public exports alphabetized via Python's default ``sorted()``
+# (case-sensitive ASCII: uppercase letters sort before lowercase ones,
+# so type classes precede helper functions). Drift is visible when
+# adding a contract: ``sorted(__all__)`` should produce no diff against
+# this list. Case-insensitive alphabetization was considered and
+# declined -- the case-sensitive form is what ``sorted()`` produces by
+# default, which means a developer who alphabetizes naively after
+# adding an entry gets the right answer without remembering to pass
+# ``key=str.casefold``.
 __all__ = [
     "AgentMessage",
     "AgentRole",
