@@ -358,6 +358,28 @@ Acceptance:
 
 Notes:
 
+### 2026-05-15 - Codex - codex/p12-f4
+Status: unblocked by `short-contract` commit `de6591e`
+Touched files:
+- `AGENT_NOTES.md`
+
+What changed:
+- Read F4 workstream docs and inspected the existing SAR shared contracts.
+- After the shared-contract update, `SARContribution` now has optional
+  `suspicious_amount_range: tuple[int, int]` in cents.
+
+Assumptions:
+- F4 should keep structured SAR fields deterministic and should not parse prose
+  evidence summaries for mandatory amounts.
+
+Resolved blocker:
+- F4 can deterministically compute `SARDraft.suspicious_amount_range` from
+  provided contribution ranges: lowest low, highest high.
+
+Next agent:
+- Emit `SARContributionRequest` when no contribution provides
+  `suspicious_amount_range`; do not infer amounts from evidence summaries.
+
 ### P13 - F5 Compliance Auditor
 
 Owner:
