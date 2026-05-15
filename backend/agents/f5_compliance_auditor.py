@@ -429,6 +429,8 @@ def _dismissal_is_vague(
 ) -> bool:
     reason = dismissal.reason.strip().lower()
     word_count = len(reason.split())
+    if not reason:
+        return True
     return (
         reason in _VAGUE_DISMISSAL_REASONS
         or (word_count < config.min_dismissal_words and not dismissal.evidence_considered)
