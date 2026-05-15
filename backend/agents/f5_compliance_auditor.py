@@ -148,6 +148,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         # P13 treats every generated F5 finding as review-worthy. If later
         # informational findings are added, this should inspect kind/severity.
         human_review_required = bool(findings)
+        has_non_rate_limit_findings = any(
+            finding.kind != RATE_LIMIT_FINDING for finding in findings
+        )
 
         result = AuditReviewResult(
             sender_agent_id=self.agent_id,
@@ -169,7 +172,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                 detail="One actor exceeded the configured query rate limit.",
                 model_name="deterministic_f5",
             )
-        if human_review_required:
+        if human_review_required and (
+            not rate_limit_triggered or has_non_rate_limit_findings
+        ):
             self._emit(
                 kind=AuditEventKind.HUMAN_REVIEW,
                 phase="review",

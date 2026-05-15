@@ -173,7 +173,10 @@ def test_f5_rate_limit_triggers_on_sixth_query_by_default() -> None:
     assert result.human_review_required is True
     assert len(rate_findings) == 1
     assert rate_findings[0].related_event_ids == [event.event_id for event in query_events]
-    assert any(event.kind == AuditEventKind.RATE_LIMIT for event in audit.events)
+    assert [event.kind for event in audit.events] == [
+        AuditEventKind.RATE_LIMIT,
+        AuditEventKind.MESSAGE_SENT,
+    ]
 
 
 def test_f5_sustained_rate_limit_burst_emits_one_actionable_finding() -> None:
