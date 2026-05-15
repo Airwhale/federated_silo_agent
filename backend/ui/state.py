@@ -453,7 +453,7 @@ class DemoControlService:
                     SnapshotField(name="screening_mode", value="deterministic"),
                 ],
             )
-        if component_id == ComponentId.F4:
+        elif component_id == ComponentId.F4:
             return ComponentSnapshot(
                 component_id=component_id,
                 status=item.status,

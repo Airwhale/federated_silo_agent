@@ -298,7 +298,14 @@ def compute_sar_fields(request: SARAssemblyRequest) -> ComputedSARFields:
     amount_range = aggregate_amount_range(request.contributions)
     typology_code = typology_from_pattern(graph_pattern.pattern_class)
     contributions_by_bank = group_contributions_by_bank(request.contributions)
-    contributors = contributor_attributions(contributions_by_bank)
+    entity_hashes_by_bank = {
+        bank_id: entity_hashes_for_contributions(bank_contributions)
+        for bank_id, bank_contributions in contributions_by_bank.items()
+    }
+    contributors = contributor_attributions(
+        contributions_by_bank,
+        entity_hashes_by_bank,
+    )
     related_query_ids = aggregate_related_query_ids(request)
     priority = (
         SARPriority.HIGH
@@ -313,7 +320,10 @@ def compute_sar_fields(request: SARAssemblyRequest) -> ComputedSARFields:
         graph_pattern_class=graph_pattern.pattern_class,
         graph_confidence=graph_pattern.confidence,
         suspect_entity_hashes=unique_values(graph_pattern.suspect_entity_hashes),
-        contributors=narrative_contributors(contributions_by_bank, contributors),
+        contributors=narrative_contributors(
+            entity_hashes_by_bank,
+            contributors,
+        ),
         sanctions_hits=sanctions_hits(request),
         related_query_ids=related_query_ids,
     )
@@ -363,6 +373,7 @@ def group_contributions_by_bank(
 
 def contributor_attributions(
     by_bank: OrderedDict[BankId, list[SARContribution]],
+    entity_hashes_by_bank: dict[BankId, list[CrossBankHashToken]],
 ) -> list[ContributorAttribution]:
     """Create one deterministic attribution block per contributing bank."""
     attributions: list[ContributorAttribution] = []
@@ -382,6 +393,7 @@ def contributor_attributions(
                 contribution_summary=contribution_summary(
                     bank_id,
                     bank_contributions,
+                    entity_hashes_by_bank[bank_id],
                 ),
             )
         )
@@ -389,7 +401,7 @@ def contributor_attributions(
 
 
 def narrative_contributors(
-    by_bank: OrderedDict[BankId, list[SARContribution]],
+    entity_hashes_by_bank: dict[BankId, list[CrossBankHashToken]],
     attributions: list[ContributorAttribution],
 ) -> list[F4NarrativeContributor]:
     """Build hash-only contributor facts for the LLM."""
@@ -398,9 +410,7 @@ def narrative_contributors(
             bank_id=attribution.bank_id,
             investigator_id=attribution.investigator_id,
             evidence_item_ids=attribution.evidence_item_ids,
-            entity_hashes=entity_hashes_for_contributions(
-                by_bank[attribution.bank_id],
-            ),
+            entity_hashes=entity_hashes_by_bank[attribution.bank_id],
             contribution_summary=attribution.contribution_summary,
         )
         for attribution in attributions
@@ -410,10 +420,11 @@ def narrative_contributors(
 def contribution_summary(
     bank_id: BankId,
     contributions: list[SARContribution],
+    entity_hashes: list[CrossBankHashToken],
 ) -> str:
     """Summarize hash-only evidence for one bank."""
     evidence_count = sum(len(item.contributed_evidence) for item in contributions)
-    entity_count = len(entity_hashes_for_contributions(contributions))
+    entity_count = len(entity_hashes)
     amount_ranges = [
         contribution.suspicious_amount_range
         for contribution in contributions
