@@ -1,4 +1,4 @@
-import { Network, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { describeError } from "@/api/errors";
 import { useInteraction, useSystem } from "@/api/hooks";
@@ -10,6 +10,7 @@ import type {
   ProviderHealthSnapshot,
   SnapshotStatus,
 } from "@/api/types";
+import { KeyValueGrid, type KeyValueRow } from "@/components/inspector/KeyValueGrid";
 import { ModelRoutePanel } from "@/components/inspector/ModelRoutePanel";
 import { useSessionContext } from "@/components/SessionContext";
 import { StatusPill } from "@/components/StatusPill";
@@ -198,161 +199,146 @@ export function LlmRouteView() {
   };
 
   return (
-    // Outer scroll container so the page never gets cut off on short
-    // viewports.
-    <div className="h-full overflow-y-auto">
-      <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="min-w-0 rounded-lg border border-slate-800 bg-slate-950">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-3">
-            <div>
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Network size={16} aria-hidden />
-                LLM Route Graph
+    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <section className="min-w-0 rounded-lg border border-slate-800 bg-slate-950">
+        <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-slate-800/70 px-3 py-2">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-200">
+              LLM route graph
+            </h2>
+            <span className="text-[11px] text-slate-500">
+              Hub-and-spoke &middot; click a node to focus the input form
+            </span>
+          </div>
+          <StatusPill status={providerHealth?.status ?? "pending"} />
+        </header>
+
+        <RouteGraph
+          nodes={nodeStates}
+          providerHealth={providerHealth}
+          selectedDomain={selectedDomain}
+          onSelect={(domain) => {
+            setSelectedDomain(domain);
+            setSelection({ componentId: destination, instanceId: domain });
+          }}
+        />
+
+        <Legend providerHealth={providerHealth} />
+      </section>
+
+      <aside className="flex min-w-0 flex-col gap-3">
+        <section className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-950">
+          <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-slate-800/70 px-3 py-2">
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-200">
+                Unified route input
               </h2>
-              <p className="mt-1 max-w-3xl text-xs text-slate-500">
-                Hub-and-spoke view of the five trust-domain model routes. Each
-                node has four status pips (see legend). Click a node to focus
-                the unified-route-input form on that instance.
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Output: node pips show route config, key presence, and last I/O.
-              </p>
+              <span className="text-[11px] text-slate-500">
+                One bounded interaction per send
+              </span>
             </div>
-            <StatusPill status={providerHealth?.status ?? "pending"} />
+            {interaction.data ? <StatusPill status={interaction.data.status} /> : null}
           </header>
 
-          <RouteGraph
-            nodes={nodeStates}
-            providerHealth={providerHealth}
-            selectedDomain={selectedDomain}
-            onSelect={(domain) => {
-              setSelectedDomain(domain);
-              setSelection({ componentId: destination, instanceId: domain });
-            }}
-          />
-
-          <Legend providerHealth={providerHealth} />
-        </section>
-
-        <aside className="flex min-w-0 flex-col gap-4">
-          <section className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-white">Unified Route Input</h2>
-                <p className="mt-1 text-xs text-slate-500">
-                  Pick a target instance + destination, then send one bounded
-                  interaction.
-                </p>
-                <p className="mt-1 text-xs text-slate-500">
-                  Output: selected route state shows readiness and last result.
-                </p>
-              </div>
-              {interaction.data ? <StatusPill status={interaction.data.status} /> : null}
-            </div>
-
-            <div className="mt-4 grid gap-2">
-              <label className="grid gap-1 text-xs text-slate-400">
-                Trust domain
-                <select
-                  value={selectedDomain}
-                  onChange={(event) => setSelectedDomain(event.target.value as TrustDomain)}
-                  className="rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100"
-                >
-                  {TRUST_INSTANCES.map((instance) => (
-                    <option key={instance.id} value={instance.id}>
-                      {instance.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="grid gap-1 text-xs text-slate-400">
-                Destination
-                <select
-                  value={destination}
-                  onChange={(event) => setDestination(event.target.value as RouteDestination)}
-                  className="rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100"
-                >
-                  {ROUTE_DESTINATIONS.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="grid gap-2 sm:grid-cols-2">
-                <label className="grid gap-1 text-xs text-slate-400">
-                  Interaction
-                  <select
-                    value={interactionKind}
-                    onChange={(event) =>
-                      setInteractionKind(event.target.value as ComponentInteractionKind)
-                    }
-                    className="rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100"
-                  >
-                    {INTERACTION_KINDS.map((kind) => (
-                      <option key={kind} value={kind}>
-                        {kind.replaceAll("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="grid gap-1 text-xs text-slate-400">
-                  Sender profile
-                  <select
-                    value={attackerProfile}
-                    onChange={(event) =>
-                      setAttackerProfile(event.target.value as AttackerProfile)
-                    }
-                    className="rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-slate-100"
-                  >
-                    {ATTACKER_PROFILES.map((profile) => (
-                      <option key={profile} value={profile}>
-                        {profile.replaceAll("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <textarea
-                value={payloadText}
-                onChange={(event) => setPayloadText(event.target.value)}
-                maxLength={4096}
-                className="min-h-24 resize-y rounded-md border border-slate-700 bg-slate-900 p-3 text-sm text-slate-100"
-                placeholder="Demo-safe route input"
-              />
-
-              <button
-                type="button"
-                disabled={!sessionId || interaction.isPending}
-                onClick={submit}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-40"
+          <div className="flex flex-col gap-2 px-3 pb-3">
+            <FieldLabel label="Trust domain">
+              <select
+                value={selectedDomain}
+                onChange={(event) => setSelectedDomain(event.target.value as TrustDomain)}
+                className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
               >
-                <Send size={16} aria-hidden />
-                Send To Route
-              </button>
+                {TRUST_INSTANCES.map((instance) => (
+                  <option key={instance.id} value={instance.id}>
+                    {instance.label}
+                  </option>
+                ))}
+              </select>
+            </FieldLabel>
+
+            <FieldLabel label="Destination">
+              <select
+                value={destination}
+                onChange={(event) => setDestination(event.target.value as RouteDestination)}
+                className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
+              >
+                {ROUTE_DESTINATIONS.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </FieldLabel>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <FieldLabel label="Interaction">
+                <select
+                  value={interactionKind}
+                  onChange={(event) =>
+                    setInteractionKind(event.target.value as ComponentInteractionKind)
+                  }
+                  className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
+                >
+                  {INTERACTION_KINDS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {kind.replaceAll("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </FieldLabel>
+
+              <FieldLabel label="Sender profile">
+                <select
+                  value={attackerProfile}
+                  onChange={(event) =>
+                    setAttackerProfile(event.target.value as AttackerProfile)
+                  }
+                  className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
+                >
+                  {ATTACKER_PROFILES.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {profile.replaceAll("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </FieldLabel>
             </div>
+
+            <textarea
+              value={payloadText}
+              onChange={(event) => setPayloadText(event.target.value)}
+              maxLength={4096}
+              rows={3}
+              className="resize-y rounded border border-slate-700 bg-slate-900 px-2 py-1.5 font-mono text-[11px] text-slate-100"
+              placeholder="Demo-safe route input"
+            />
+
+            <button
+              type="button"
+              disabled={!sessionId || interaction.isPending}
+              onClick={submit}
+              className="inline-flex items-center justify-center gap-1.5 self-start rounded border border-sky-400/60 bg-sky-500/15 px-3 py-1 text-xs font-medium text-sky-100 hover:bg-sky-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Send size={12} aria-hidden />
+              {interaction.isPending ? "Sending" : "Send to route"}
+            </button>
 
             {interaction.error instanceof Error ? (
-              <div className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-100">
+              <div className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-100">
                 {describeError(interaction.error)}
               </div>
             ) : null}
-          </section>
+          </div>
+        </section>
 
-          <RouteStatePanel
-            domain={selectedDomain}
-            destination={selectedDestination}
-            readinessStatus={selectedReadiness?.status ?? "pending"}
-            readinessDetail={selectedReadiness?.detail ?? "System snapshot is loading."}
-            providerHealth={providerHealth}
-            lastResult={selectedResult}
-          />
-        </aside>
-      </div>
+        <RouteStatePanel
+          domain={selectedDomain}
+          destination={selectedDestination}
+          readinessStatus={selectedReadiness?.status ?? "pending"}
+          readinessDetail={selectedReadiness?.detail ?? "System snapshot is loading."}
+          providerHealth={providerHealth}
+          lastResult={selectedResult}
+        />
+      </aside>
     </div>
   );
 }
@@ -366,7 +352,7 @@ interface RouteGraphProps {
 
 function RouteGraph({ nodes, providerHealth, selectedDomain, onSelect }: RouteGraphProps) {
   return (
-    <div className="overflow-x-auto p-4">
+    <div className="overflow-x-auto px-3 py-2">
       <svg
         viewBox="40 40 740 320"
         role="img"
@@ -502,13 +488,13 @@ interface LegendProps {
 
 function Legend({ providerHealth }: LegendProps) {
   return (
-    <div className="border-t border-slate-800 px-4 py-3">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <div className="border-t border-slate-800/70 px-3 py-2 text-xs">
+      <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
             Pip key
           </h3>
-          <ul className="grid grid-cols-1 gap-1.5 text-xs sm:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">
             {PIPS.map((pip) => {
               // For LT / Proxy / Key, the legend shows current state at a
               // glance; for IO, the legend's pip is grey because IO is
@@ -520,7 +506,7 @@ function Legend({ providerHealth }: LegendProps) {
               return (
                 <li key={pip.key} className="flex items-center gap-2">
                   <span
-                    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-slate-950"
+                    className="inline-block h-2 w-2 shrink-0 rounded-full"
                     style={{ background: on ? "rgb(52 211 153)" : "rgb(51 65 85)" }}
                     aria-hidden
                   />
@@ -532,13 +518,13 @@ function Legend({ providerHealth }: LegendProps) {
           </ul>
         </div>
         <div>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
             Nodes
           </h3>
-          <ul className="grid grid-cols-1 gap-1 text-[11px] sm:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 text-[11px]">
             {TRUST_INSTANCES.map((instance) => (
               <li key={instance.id} className="flex items-center gap-2 text-slate-300">
-                <span className="inline-flex h-5 w-7 shrink-0 items-center justify-center rounded border border-slate-700 bg-slate-900 font-mono text-[11px] text-slate-200">
+                <span className="inline-flex h-4 w-7 shrink-0 items-center justify-center rounded border border-slate-700 bg-slate-900 font-mono text-[10px] text-slate-200">
                   {NODE_ABBREV[instance.id]}
                 </span>
                 {instance.label}
@@ -547,10 +533,9 @@ function Legend({ providerHealth }: LegendProps) {
           </ul>
         </div>
       </div>
-      <p className="mt-3 text-[10px] text-slate-500">
+      <p className="mt-2 text-[10px] text-slate-500">
         Pips reflect global provider configuration today; per-domain route
-        metadata lands with P14, after which each node's pips become
-        instance-specific without changing the graph shape.
+        metadata lands with P14.
       </p>
     </div>
   );
@@ -571,60 +556,56 @@ function RouteStatePanel({
   providerHealth: ProviderHealthSnapshot | null;
   lastResult?: ComponentInteractionResult;
 }) {
+  const rows: KeyValueRow[] = [
+    { label: "Destination", value: destination.detail },
+    { label: "Readiness", value: readinessDetail, tone: readinessStatus === "live" ? "good" : "muted" },
+    {
+      label: "Last result",
+      value: lastResult ? (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <span>{lastResult.reason}</span>
+          <StatusPill status={lastResult.status} />
+          {lastResult.blocked_by ? <StatusPill layer={lastResult.blocked_by} /> : null}
+        </span>
+      ) : (
+        "No interaction recorded for this instance"
+      ),
+      tone: lastResult ? "default" : "muted",
+    },
+  ];
+
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-white">Selected Route State</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            {trustDomainLabel(domain)} to {destination.label}
-          </p>
+    <section className="rounded-lg border border-slate-800 bg-slate-950">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-slate-800/70 px-3 py-2">
+        <div className="flex items-baseline gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-200">
+            Selected route
+          </h2>
+          <span className="text-[11px] text-slate-500">
+            {trustDomainLabel(domain)} &rarr; {destination.label}
+          </span>
         </div>
         <StatusPill status={lastResult?.status ?? readinessStatus} />
-      </div>
-
-      <dl className="mt-4 grid gap-2 text-sm">
-        <StateRow name="Destination" value={destination.detail} />
-        <StateRow name="Readiness" value={readinessDetail} status={readinessStatus} />
-        <StateRow
-          name="Last result"
-          value={lastResult?.reason ?? "No interaction recorded for this instance"}
-          status={lastResult?.status}
-          blockedBy={lastResult?.blocked_by ?? undefined}
-        />
-      </dl>
-      {providerHealth ? (
-        <div className="mt-4">
+      </header>
+      <div className="flex flex-col gap-2 p-3 text-xs">
+        <KeyValueGrid rows={rows} />
+        {providerHealth ? (
           <ModelRoutePanel
             providerHealth={providerHealth}
             trustDomainLabel={trustDomainLabel(domain)}
             lastResult={lastResult?.reason}
           />
-        </div>
-      ) : null}
+        ) : null}
+      </div>
     </section>
   );
 }
 
-function StateRow({
-  name,
-  value,
-  status,
-  blockedBy,
-}: {
-  name: string;
-  value: string;
-  status?: SnapshotStatus;
-  blockedBy?: ComponentInteractionResult["blocked_by"];
-}) {
+function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-900 p-2">
-      <dt className="text-[11px] uppercase text-slate-500">{name}</dt>
-      <dd className="mt-1 flex flex-wrap items-center gap-2 text-slate-200">
-        <span>{value}</span>
-        {status ? <StatusPill status={status} /> : null}
-        {blockedBy ? <StatusPill layer={blockedBy} /> : null}
-      </dd>
-    </div>
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
+      {children}
+    </label>
   );
 }
