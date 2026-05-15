@@ -336,6 +336,44 @@ def test_interaction_rejects_unknown_target_instance_id() -> None:
         assert any("not a known trust domain" in entry["msg"] for entry in detail)
 
 
+def test_concurrent_create_session_and_interaction_does_not_deadlock() -> None:
+    # Gemini PR-6 round-1 flagged a theoretical lock-inversion between
+    # session.lock and _sessions_lock. Today _sessions_lock is always
+    # released before to_snapshot acquires session.lock, so the deadlock
+    # does not trigger -- but pinning the contract with a timeout-bounded
+    # stress test catches any future regression where someone holds
+    # _sessions_lock across a to_snapshot call.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    test_client = client()
+    seed_session_id = create_session(test_client)
+    completed_codes: list[int] = []
+
+    def fire_create() -> int:
+        r = test_client.post("/sessions", json={})
+        return r.status_code
+
+    def fire_interaction() -> int:
+        r = test_client.post(
+            f"/sessions/{seed_session_id}/components/signing/interactions",
+            json={"interaction_kind": "inspect", "target_instance_id": "federation"},
+        )
+        return r.status_code
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = []
+        for idx in range(15):
+            futures.append(pool.submit(fire_create))
+            futures.append(pool.submit(fire_interaction))
+        for fut in as_completed(futures, timeout=15):
+            completed_codes.append(fut.result())
+
+    # If the deadlock existed, futures would hang and as_completed would
+    # raise TimeoutError. Reaching this line means no deadlock occurred.
+    assert len(completed_codes) == 30
+    assert all(code in (200, 201) for code in completed_codes)
+
+
 def test_concurrent_interactions_do_not_split_timeline() -> None:
     # The run_component_interaction handler must take ``session.lock``
     # before its read-modify-write so a concurrent probe firing on the
