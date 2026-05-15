@@ -345,6 +345,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             if not isinstance(event.payload, ConstraintViolationPayload):
                 continue
             violation = event.payload.violation.lower()
+            # Classify each constraint event once. Route, signature, replay,
+            # and identity anomalies take precedence over purpose wording
+            # because the message could not validly proceed regardless.
             if any(term in violation for term in _ROUTE_ANOMALY_TERMS):
                 route_events.append(event)
             elif any(term in violation for term in _PURPOSE_ANOMALY_TERMS):
