@@ -126,12 +126,23 @@ export function useInteraction(sessionId: string | null, componentId: ComponentI
     mutationKey: ["interaction", sessionId, componentId],
     mutationFn: (request: ComponentInteractionRequest) =>
       api.interaction(sessionId ?? "", componentId, request),
-    onSuccess: async (_result, variables) => {
+    onSuccess: async () => {
       if (!sessionId) return;
       await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
       await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+      // Invalidate every per-instance cache entry for this componentId
+      // via partial-key prefix. ``useComponent(sessionId, componentId,
+      // instanceId)`` keys are ``['session', id, 'component',
+      // componentId, instanceId]`` -- TanStack Query treats the prefix
+      // ``['session', id, 'component', componentId]`` as a match for
+      // every instanceId variant. Today the backend snapshot is a
+      // singleton per componentId (the same envelope/route/ledger row
+      // is rendered for every trust-domain column), so when one
+      // interaction lands every column must refresh. P15 supplies
+      // real per-instance snapshots and this can narrow back to the
+      // exact ``target_instance_id``.
       await queryClient.invalidateQueries({
-        queryKey: qk.component(sessionId, componentId, variables.target_instance_id ?? undefined),
+        queryKey: ["session", sessionId, "component", componentId],
       });
     },
   });
