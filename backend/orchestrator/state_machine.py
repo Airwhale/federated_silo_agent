@@ -79,7 +79,9 @@ def next_turn(state: SessionOrchestratorState) -> AgentTurn | None:
 
 def _routed_bank(request: Sec314bQuery | LocalSiloContributionRequest) -> BankId:
     if isinstance(request, Sec314bQuery):
-        if not request.target_bank_ids:
-            raise ValueError("routed Sec314bQuery is missing target_bank_ids")
+        if len(request.target_bank_ids) != 1:
+            raise ValueError(
+                "orchestrator expects routed peer queries to have exactly one target bank"
+            )
         return request.target_bank_ids[0]
     return request.responding_bank_id

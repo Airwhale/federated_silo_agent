@@ -166,6 +166,7 @@ class DemoSessionRuntime:
 
 
 MAX_ACTIVE_SESSIONS = 50
+_MAX_ORCHESTRATOR_TURNS = 50
 
 # Module-level logger for server-side diagnostics that should not be exposed
 # to the UI. Uses ``logging.getLogger(__name__)`` so deployments can route or
@@ -291,7 +292,7 @@ class DemoControlService:
         session = self._session(session_id)
         with session.lock:
             self._ensure_orchestrator_state(session)
-            for _ in range(50):
+            for _ in range(_MAX_ORCHESTRATOR_TURNS):
                 if not self._run_one_orchestrator_turn(session):
                     break
             else:
@@ -300,7 +301,10 @@ class DemoControlService:
                     TimelineEventSnapshot(
                         component_id=ComponentId.AUDIT_CHAIN,
                         title="Orchestrator turn cap reached",
-                        detail="Run stopped after 50 turns to avoid an infinite loop.",
+                        detail=(
+                            f"Run stopped after {_MAX_ORCHESTRATOR_TURNS} turns "
+                            "to avoid an infinite loop."
+                        ),
                         status=SnapshotStatus.ERROR,
                         blocked_by=SecurityLayer.INTERNAL_ERROR,
                     )

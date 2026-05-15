@@ -115,6 +115,7 @@ class Orchestrator:
         if not emitted:
             state.terminal_reason = "A1 emitted no alert"
             return state.terminal_reason
+        # This state machine carries one active alert per session cascade.
         state.latest_alert = emitted[0]
         return f"A1 emitted alert {state.latest_alert.alert_id}."
 
