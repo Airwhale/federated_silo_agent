@@ -272,7 +272,9 @@ def test_multiple_investigators_at_one_bank_are_attributed() -> None:
     assert "Second alpha rationale" in alpha_contributor.contribution_summary
 
 
-def test_customer_name_in_narrative_is_rejected_and_repaired() -> None:
+def test_schema_customer_name_in_narrative_is_rejected_and_repaired() -> None:
+    # F4 enforces the shared customer-name redaction schema by validating a
+    # candidate SARDraft during narrative_violation before it emits output.
     unsafe_narrative = (
         "Under Section 314(b), bank_alpha, bank_beta, and bank_gamma shared "
         "hash-only evidence for 9ca42fcf00e1dea0, aaaaaaaaaaaaaaaa, and "
@@ -293,6 +295,8 @@ def test_customer_name_in_narrative_is_rejected_and_repaired() -> None:
         event.kind == AuditEventKind.CONSTRAINT_VIOLATION
         and event.phase == "narrative"
         and event.status == "retry"
+        and event.detail is not None
+        and "customer names" in event.detail
         for event in audit.events
     )
 

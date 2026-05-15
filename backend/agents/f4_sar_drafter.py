@@ -561,10 +561,9 @@ def narrative_violation(
 
 
 def narrative_required_hashes(facts: F4NarrativeFacts) -> list[CrossBankHashToken]:
-    """Return a bounded set of hash tokens that must appear in narrative text."""
+    """Return hash tokens that must appear in narrative text."""
     sanctions_hashes = [hit.entity_hash for hit in facts.sanctions_hits]
-    required = unique_values([*sanctions_hashes, *facts.suspect_entity_hashes])
-    return required[:5]
+    return unique_values([*sanctions_hashes, *facts.suspect_entity_hashes])
 
 
 def contains_exact_token(text: str, token: str) -> bool:
