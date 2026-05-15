@@ -49,6 +49,9 @@ from shared.messages import (
 from backend.ui.snapshots import (
     AuditChainSnapshot,
     ComponentId,
+    ComponentInteractionKind,
+    ComponentInteractionRequest,
+    ComponentInteractionResult,
     ComponentReadinessSnapshot,
     ComponentSnapshot,
     DpLedgerEntrySnapshot,
@@ -382,6 +385,64 @@ class DemoControlService:
             title=item.label,
             fields=fields,
         )
+
+    def run_component_interaction(
+        self,
+        session_id: UUID,
+        component_id: ComponentId,
+        request: ComponentInteractionRequest,
+    ) -> ComponentInteractionResult:
+        session = self._session(session_id)
+        snapshot = self.component_snapshot(session_id, component_id)
+        readiness = {item.component_id: item for item in self.component_readiness()}
+        readiness_item = readiness[component_id]
+
+        accepted = (
+            readiness_item.status != SnapshotStatus.NOT_BUILT
+            and request.interaction_kind
+            in {ComponentInteractionKind.INSPECT, ComponentInteractionKind.EXPLAIN_STATE}
+        )
+        status = snapshot.status
+        blocked_by = None if accepted else SecurityLayer.NOT_BUILT
+        if readiness_item.status == SnapshotStatus.NOT_BUILT:
+            reason = (
+                f"{readiness_item.label} is available after "
+                f"{readiness_item.available_after or 'a later milestone'}."
+            )
+        elif accepted:
+            if request.interaction_kind == ComponentInteractionKind.INSPECT:
+                reason = f"{readiness_item.label} snapshot returned."
+            else:
+                reason = f"{readiness_item.label} is {snapshot.status.value}: {readiness_item.detail}"
+        else:
+            status = SnapshotStatus.PENDING
+            reason = (
+                f"{request.interaction_kind.value} was recorded for {readiness_item.label}; "
+                "the live component input adapter lands with P14/P15."
+            )
+
+        event = TimelineEventSnapshot(
+            component_id=component_id,
+            title=f"Interaction: {request.interaction_kind.value}",
+            detail=reason,
+            status=status if accepted else SnapshotStatus.BLOCKED,
+            blocked_by=blocked_by,
+        )
+        result = ComponentInteractionResult(
+            interaction_kind=request.interaction_kind,
+            target_component=component_id,
+            target_instance_id=request.target_instance_id,
+            attacker_profile=request.attacker_profile,
+            accepted=accepted,
+            status=status,
+            blocked_by=blocked_by,
+            reason=reason,
+            timeline_event=event,
+            component_snapshot=snapshot,
+            available_after=readiness_item.available_after,
+        )
+        session.append_event(event)
+        return result
 
     def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
         session = self._session(session_id)

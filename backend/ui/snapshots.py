@@ -24,6 +24,10 @@ ProbePayloadText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
 ]
+InstanceIdText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$"),
+]
 
 
 def utc_now() -> datetime:
@@ -99,6 +103,15 @@ class ProbeKind(StrEnum):
     ROUTE_MISMATCH = "route_mismatch"
     UNSUPPORTED_QUERY_SHAPE = "unsupported_query_shape"
     BUDGET_EXHAUSTION = "budget_exhaustion"
+
+
+class ComponentInteractionKind(StrEnum):
+    """Safe component-directed actions from the judge console."""
+
+    PROMPT = "prompt"
+    INSPECT = "inspect"
+    EXPLAIN_STATE = "explain_state"
+    SAFE_INPUT = "safe_input"
 
 
 class AttackerProfile(StrEnum):
@@ -276,6 +289,16 @@ class ProbeRequest(UiModel):
     target_component: ComponentId
     attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
     payload_text: ProbePayloadText | None = None
+    target_instance_id: InstanceIdText | None = None
+
+
+class ComponentInteractionRequest(UiModel):
+    """Safe component interaction request for the judge console."""
+
+    interaction_kind: ComponentInteractionKind
+    payload_text: ProbePayloadText | None = None
+    attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
+    target_instance_id: InstanceIdText | None = None
 
 
 class HealthSnapshot(UiModel):
@@ -306,3 +329,20 @@ class ProbeResult(UiModel):
     route_approval: RouteApprovalSnapshot | None = None
     dp_ledger: DpLedgerSnapshot | None = None
     timeline_event: TimelineEventSnapshot
+
+
+class ComponentInteractionResult(UiModel):
+    """Outcome of one safe component-directed interaction."""
+
+    interaction_id: UUID = Field(default_factory=uuid4)
+    interaction_kind: ComponentInteractionKind
+    target_component: ComponentId
+    target_instance_id: str | None = None
+    attacker_profile: AttackerProfile
+    accepted: bool
+    status: SnapshotStatus
+    blocked_by: SecurityLayer | None = None
+    reason: ShortText
+    timeline_event: TimelineEventSnapshot
+    component_snapshot: ComponentSnapshot | None = None
+    available_after: str | None = None

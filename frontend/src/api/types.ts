@@ -1,0 +1,20 @@
+import type { components } from "./schema";
+
+export type HealthSnapshot = components["schemas"]["HealthSnapshot"];
+export type SystemSnapshot = components["schemas"]["SystemSnapshot"];
+export type SessionSnapshot = components["schemas"]["SessionSnapshot"];
+export type SessionCreateRequest = components["schemas"]["SessionCreateRequest"];
+export type TimelineEventSnapshot = components["schemas"]["TimelineEventSnapshot"];
+export type ComponentSnapshot = components["schemas"]["ComponentSnapshot"];
+export type ComponentId = components["schemas"]["ComponentId"];
+export type ComponentReadinessSnapshot = components["schemas"]["ComponentReadinessSnapshot"];
+export type SnapshotStatus = components["schemas"]["SnapshotStatus"];
+export type SecurityLayer = components["schemas"]["SecurityLayer"];
+export type ProbeKind = components["schemas"]["ProbeKind"];
+export type ProbeRequest = components["schemas"]["ProbeRequest"];
+export type ProbeResult = components["schemas"]["ProbeResult"];
+export type AttackerProfile = components["schemas"]["AttackerProfile"];
+export type ComponentInteractionKind = components["schemas"]["ComponentInteractionKind"];
+export type ComponentInteractionRequest = components["schemas"]["ComponentInteractionRequest"];
+export type ComponentInteractionResult = components["schemas"]["ComponentInteractionResult"];
+export type ProviderHealthSnapshot = components["schemas"]["ProviderHealthSnapshot"];

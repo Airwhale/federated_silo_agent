@@ -239,7 +239,91 @@ def test_openapi_schema_is_available() -> None:
     paths = response.json()["paths"]
     assert "/sessions" in paths
     assert "/sessions/{session_id}/probes" in paths
+    assert "/sessions/{session_id}/components/{component_id}/interactions" in paths
     assert "/sessions/{session_id}/probes/{probe_id}" not in paths
+
+
+def test_live_component_interaction_returns_snapshot_and_event() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/components/signing/interactions",
+        json={
+            "interaction_kind": "inspect",
+            "target_instance_id": "federation",
+        },
+    )
+    timeline = test_client.get(f"/sessions/{session_id}/timeline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["target_instance_id"] == "federation"
+    assert body["component_snapshot"]["signing"]["private_key_material_exposed"] is False
+    assert any(event["title"] == "Interaction: inspect" for event in timeline.json())
+
+
+def test_not_built_component_interaction_returns_available_after() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/components/F2/interactions",
+        json={
+            "interaction_kind": "prompt",
+            "payload_text": "Find graph evidence for this case.",
+            "target_instance_id": "federation",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["status"] == "not_built"
+    assert body["blocked_by"] == "not_built"
+    assert body["available_after"] == "P11"
+    assert "P11" in body["reason"]
+
+
+def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    before = test_client.get(f"/sessions/{session_id}/components/replay").json()
+    response = test_client.post(
+        f"/sessions/{session_id}/components/replay/interactions",
+        json={
+            "interaction_kind": "safe_input",
+            "payload_text": "Try to clear the replay cache.",
+            "attacker_profile": "valid_but_malicious",
+            "target_instance_id": "bank_beta",
+        },
+    )
+    after = test_client.get(f"/sessions/{session_id}/components/replay").json()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["status"] == "pending"
+    assert body["blocked_by"] == "not_built"
+    assert before["replay"] == after["replay"]
+
+
+def test_interaction_payload_text_is_bounded() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/components/A2/interactions",
+        json={
+            "interaction_kind": "prompt",
+            "payload_text": "x" * 4097,
+            "target_instance_id": "investigator",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_unknown_session_returns_unquoted_detail() -> None:

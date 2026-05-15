@@ -66,6 +66,7 @@ User or analyst
 | P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
 | P9 | Done | Deterministic F1 federation coordinator with signed A2 ingress validation, F1 route approvals, peer A3 routing, local-contribution routing, sanctions side requests, signed A3 response aggregation, and up to two bounded retries for negotiable silo refusals. |
 | P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
+| P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, LLM route cards, system view, timeline filters, and attack lab over the P9a API. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
@@ -236,6 +237,22 @@ $env:GEMINI_API_KEY = "<your key>"
 .\scripts\start_lobstertrap.ps1
 uv run python scripts/smoke_proxy.py
 ```
+
+## Run The Judge Console
+
+Start the P9a API in one terminal:
+
+```powershell
+uv run uvicorn backend.ui.server:app --reload --port 8000
+```
+
+Start the P9b frontend in a second terminal:
+
+```powershell
+.\scripts\start_frontend.ps1
+```
+
+Open `http://127.0.0.1:5173/#/console`. The console reads the P9a typed API, shows all five trust-domain stacks, and keeps not-built components visible with milestone placeholders.
 
 OpenRouter fallback smoke, OpenRouter key required:
 

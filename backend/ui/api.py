@@ -8,6 +8,8 @@ from fastapi import APIRouter, HTTPException, status
 
 from backend.ui.snapshots import (
     ComponentId,
+    ComponentInteractionRequest,
+    ComponentInteractionResult,
     ComponentSnapshot,
     HealthSnapshot,
     ProbeRequest,
@@ -115,6 +117,20 @@ def create_router(service: DemoControlService) -> APIRouter:
     def probe(session_id: UUID, request: ProbeRequest) -> ProbeResult:
         try:
             return control.run_probe(session_id, request)
+        except KeyError as exc:
+            raise _not_found(exc) from exc
+
+    @router.post(
+        "/sessions/{session_id}/components/{component_id}/interactions",
+        response_model=ComponentInteractionResult,
+    )
+    def component_interaction(
+        session_id: UUID,
+        component_id: ComponentId,
+        request: ComponentInteractionRequest,
+    ) -> ComponentInteractionResult:
+        try:
+            return control.run_component_interaction(session_id, component_id, request)
         except KeyError as exc:
             raise _not_found(exc) from exc
 

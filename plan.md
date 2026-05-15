@@ -561,7 +561,7 @@ The proxy chain (Lobster Trap → LiteLLM → Gemini/OpenRouter) is scaffolded. 
 - **P8a** A3 silo responder agent ✓
 - **P9** F1 cross-bank coordinator ✓
 - **P9a** Control API + typed state contracts ✓
-- **P9b** Browser UI frame + placeholder panels ·
+- **P9b** Browser UI frame + placeholder panels ✓
 - **P10** F3 sanctions / PEP screening agent ·
 - **P11** F2 graph-analysis agent ·
 - **P12** F4 SAR drafter agent ·
@@ -996,6 +996,9 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Clicking a component opens an inspector drawer with the latest snapshot.
   - Run controls call P9a endpoints and show backend errors without swallowing refusal reasons.
   - Security-state panels show signing, route approval, replay, DP accounting, and provider health as first-class UI, not raw JSON dumps.
+  - The interaction console calls the typed component-interaction endpoint and records timeline events without privileged state mutation.
+  - The LLM route view shows per-domain model-route cards rather than a single global LiteLLM box.
+- *Current implementation:* P9b lives in `frontend/` as a Vite React TypeScript app. It uses a committed `openapi-typescript` client schema generated from P9a, TanStack Query polling, hash tabs, a five-column swimlane topology, Radix inspector drawer, interaction console, LLM route view, system readiness view, and attack lab. `scripts/start_frontend.ps1` starts the local Vite server on `127.0.0.1:5173`.
 - *Risks specific to this part:* (a) frontend scope could expand. Mitigation: ship structure and interaction first; visual polish waits for P18. (b) the UI could imply privileges it does not have. Mitigation: all controls call P9a and normal policy paths. (c) layout work can consume time. Mitigation: use dense, operational panels and avoid a landing page.
 - *Depends on:* P9a.
 - *Scope check:* one short session for the first browser frame.

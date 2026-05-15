@@ -19,6 +19,12 @@ venv/
 logs/
 *.log
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+
 # OS
 .DS_Store
 Thumbs.db
