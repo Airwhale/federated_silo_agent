@@ -10,8 +10,8 @@ export function ConsoleView() {
   const select = (componentId: ComponentId, instanceId?: TrustDomain) =>
     setSelection({ componentId, instanceId });
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-      <div className="flex min-w-0 flex-col gap-4">
+    <div className="grid min-h-0 gap-3 xl:grid-cols-[minmax(0,1fr)_26rem]">
+      <div className="flex min-w-0 flex-col gap-3">
         <SwimlaneTopology sessionId={sessionId} onSelect={select} />
         <InteractionConsole />
       </div>

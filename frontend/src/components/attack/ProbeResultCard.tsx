@@ -13,7 +13,7 @@ export function ProbeResultCard({ result }: Props) {
   if (!result) {
     return (
       <div className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
-        No probe result yet.
+        Output appears here: status, blocked layer, and any evidence snapshots.
       </div>
     );
   }

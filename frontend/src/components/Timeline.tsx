@@ -48,6 +48,9 @@ export function Timeline({ sessionId, onSelect }: Props) {
     <section className="flex min-h-[520px] flex-col gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3">
       <div>
         <h2 className="text-sm font-semibold text-white">Timeline</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Input: filters narrow events. Output: rows show state changes and blocks.
+        </p>
         <p className="mt-1 text-xs text-slate-500">{events.length} visible events</p>
       </div>
       <FilterBar filters={filters} onChange={setFilters} />

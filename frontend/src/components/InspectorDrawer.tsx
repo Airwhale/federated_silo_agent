@@ -37,6 +37,9 @@ export function InspectorDrawer() {
               <Dialog.Description className="mt-1 text-sm text-slate-500">
                 {selection?.instanceId ? trustDomainLabel(selection.instanceId) : "Global component"}
               </Dialog.Description>
+              <p className="mt-1 text-xs text-slate-500">
+                Output: current snapshot plus any security, DP, route, or provider state.
+              </p>
             </div>
             <div className="flex items-center gap-2">
               {snapshot ? <StatusPill status={snapshot.status} /> : null}

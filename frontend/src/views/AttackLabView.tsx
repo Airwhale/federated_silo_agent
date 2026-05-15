@@ -11,6 +11,9 @@ export function AttackLabView() {
           typed timeline result. Built probes exercise real security paths;
           future probes return explicit not-built placeholders.
         </p>
+        <p className="mt-1 max-w-4xl text-xs text-slate-500">
+          Input: each card picks target, component, profile, and optional payload. Output: result shows blocked layer and evidence.
+        </p>
       </section>
       <div className="grid gap-4 xl:grid-cols-2">
         {PROBES.map((probe) => (

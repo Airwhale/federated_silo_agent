@@ -12,8 +12,9 @@ export function StatusPill({ status, layer, label }: Props) {
   const classes = layer ? layerClass(layer) : statusClass(status);
   return (
     <span
-      className={`inline-flex max-w-full items-center rounded-md border px-2 py-0.5 text-[11px] font-medium uppercase tracking-normal ${classes}`}
+      className={`inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium tracking-normal ${classes}`}
     >
+      <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-80" />
       <span className="truncate">{value.replaceAll("_", " ")}</span>
     </span>
   );

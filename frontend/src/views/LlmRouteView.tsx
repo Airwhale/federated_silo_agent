@@ -64,9 +64,9 @@ const NODE_POSITIONS: Record<TrustDomain, { x: number; y: number }> = {
 const NODE_ABBREV: Record<TrustDomain, string> = {
   investigator: "INV",
   federation: "FED",
-  bank_alpha: "α",
-  bank_beta: "β",
-  bank_gamma: "γ",
+  bank_alpha: "ALP",
+  bank_beta: "BET",
+  bank_gamma: "GAM",
 };
 
 const EDGES: { from: TrustDomain; to: TrustDomain }[] = [
@@ -182,8 +182,7 @@ export function LlmRouteView() {
 
   return (
     // Outer scroll container so the page never gets cut off on short
-    // viewports — the original layout used a fixed 520px graph that
-    // pushed content past the viewport bottom without scrollbars.
+    // viewports.
     <div className="h-full overflow-y-auto">
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section className="min-w-0 rounded-lg border border-slate-800 bg-slate-950">
@@ -197,6 +196,9 @@ export function LlmRouteView() {
                 Hub-and-spoke view of the five trust-domain model routes. Each
                 node has four status pips (see legend). Click a node to focus
                 the unified-route-input form on that instance.
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Output: node pips show route config, key presence, and last I/O.
               </p>
             </div>
             <StatusPill status={providerHealth?.status ?? "pending"} />
@@ -223,6 +225,9 @@ export function LlmRouteView() {
                 <p className="mt-1 text-xs text-slate-500">
                   Pick a target instance + destination, then send one bounded
                   interaction.
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Output: selected route state shows readiness and last result.
                 </p>
               </div>
               {interaction.data ? <StatusPill status={interaction.data.status} /> : null}

@@ -68,7 +68,7 @@ export function App() {
           try {
             window.localStorage.setItem(SESSION_STORAGE_KEY, created.session_id);
           } catch {
-            // Private mode / file:// origin — session lives only for this tab.
+            // Private mode or file origin: session lives only for this tab.
           }
         },
       },

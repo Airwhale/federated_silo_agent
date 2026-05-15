@@ -29,7 +29,12 @@ export function InteractionConsole() {
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-950 p-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-white">Interaction Console</h2>
+        <div>
+          <h2 className="text-sm font-semibold text-white">Interaction Console</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Input: target + action + optional text. Output: result below and timeline event.
+          </p>
+        </div>
         {interaction.data ? <StatusPill status={interaction.data.status} /> : null}
       </div>
       <div className="mt-3 grid gap-2 lg:grid-cols-4">
@@ -103,7 +108,7 @@ export function InteractionConsole() {
             {interaction.data.accepted && !interaction.data.executed ? (
               <span
                 className="inline-flex items-center rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-200"
-                title="Recorded but not executed — live handler lands with P14/P15"
+                title="Recorded but not executed. Live handler lands with P14/P15"
               >
                 Placeholder ({interaction.data.available_after ?? "P14/P15"})
               </span>
