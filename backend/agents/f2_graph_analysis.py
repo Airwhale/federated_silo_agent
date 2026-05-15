@@ -200,7 +200,7 @@ class F2GraphAnalysisAgent(Agent[GraphPatternRequest, GraphPatternResponse]):
             system_prompt=self.system_prompt,
             input_model=llm_input,
             output_schema=F2ClassificationDraft,
-            phase="llm_parse",
+            phase="llm_repair",
             repair_instruction=(
                 "Your previous output violated a deterministic F2 constraint. "
                 f"Repair it and return only valid JSON. Constraint: {violation}"
