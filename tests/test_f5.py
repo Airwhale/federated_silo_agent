@@ -176,6 +176,28 @@ def test_f5_rate_limit_triggers_on_sixth_query_by_default() -> None:
     assert any(event.kind == AuditEventKind.RATE_LIMIT for event in audit.events)
 
 
+def test_f5_sustained_rate_limit_burst_keeps_sliding_window_active() -> None:
+    f5, _ = agent()
+    query_events = [
+        message_event(created_at=BASE_TIME + timedelta(seconds=offset * 5))
+        for offset in range(7)
+    ]
+    events = [item for event in query_events for item in (event, lt_allow_event(event))]
+
+    result = f5.run(request(events, review_scope=AuditReviewScope.RATE_LIMIT))
+
+    rate_findings = [
+        finding for finding in result.findings if finding.kind == RATE_LIMIT_FINDING
+    ]
+    assert len(rate_findings) == 2
+    assert rate_findings[0].related_event_ids == [
+        event.event_id for event in query_events[:6]
+    ]
+    assert rate_findings[1].related_event_ids == [
+        event.event_id for event in query_events
+    ]
+
+
 def test_f5_rate_limit_threshold_is_configurable() -> None:
     f5, _ = agent(config=F5AuditConfig(max_queries=2, window_seconds=30))
     query_events = [
@@ -265,6 +287,16 @@ def test_f5_route_and_purpose_anomalies_require_review() -> None:
     assert result.human_review_required is True
     assert ROUTE_ANOMALY_FINDING in finding_kinds
     assert PURPOSE_REVIEW_FINDING in finding_kinds
+
+
+def test_f5_constraint_event_is_classified_once_by_primary_anomaly() -> None:
+    f5, _ = agent()
+
+    result = f5.run(
+        request([constraint_event("unauthorized purpose route mismatch")])
+    )
+
+    assert [finding.kind for finding in result.findings] == [ROUTE_ANOMALY_FINDING]
 
 
 def test_f5_clean_canonical_audit_window_has_no_findings() -> None:

@@ -219,7 +219,6 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                         related_event_ids=[item.event_id for item in window],
                     )
                 )
-                window.clear()
         return findings
 
     def _budget_pressure_findings(
@@ -328,7 +327,7 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             violation = event.payload.violation.lower()
             if any(term in violation for term in _ROUTE_ANOMALY_TERMS):
                 route_events.append(event)
-            if any(term in violation for term in _PURPOSE_ANOMALY_TERMS):
+            elif any(term in violation for term in _PURPOSE_ANOMALY_TERMS):
                 purpose_events.append(event)
 
         findings: list[ComplianceFinding] = []
