@@ -267,6 +267,7 @@ def valid_models() -> list[BaseModel]:
             contributing_bank_id=BankId.BANK_ALPHA,
             contributing_investigator_id="investigator-alpha-1",
             contributed_evidence=[evidence],
+            suspicious_amount_range=(100_000, 795_000),
             local_rationale="Peer-bank corroboration supports escalation.",
         ),
         SARDraft(
@@ -725,6 +726,23 @@ def test_sar_draft_amount_range_error_names_expected_order() -> None:
                 recipient_agent_id="orchestrator",
             ),
             suspicious_amount_range=(20_000, 10_000),
+        )
+
+
+def test_sar_contribution_amount_range_error_names_expected_order() -> None:
+    with pytest.raises(ValidationError, match="less than or equal to upper bound"):
+        SARContribution(
+            **message_header(recipient_agent_id="federation.F4"),
+            contributing_bank_id=BankId.BANK_ALPHA,
+            contributing_investigator_id="investigator-alpha-1",
+            contributed_evidence=[
+                EvidenceItem(
+                    summary="Hash-only evidence supports SAR drafting.",
+                    entity_hashes=[HASH_A],
+                )
+            ],
+            suspicious_amount_range=(20_000, 10_000),
+            local_rationale="Local alert and peer-bank corroboration support escalation.",
         )
 
 

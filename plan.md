@@ -682,7 +682,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **`SanctionsCheckResponse`** (F3 → caller): `results: dict[hash → {sdn_match: bool, pep_relation: bool}]`. **No list contents disclosed.**
   - **`GraphPatternRequest`** (F1 → F2): `pattern_aggregates: list[BankAggregate]` (per-bank DP-noised tuples: `bank_id`, `edge_count_distribution`, `bucketed_flow_histogram`), `window_start`, `window_end`.
   - **`GraphPatternResponse`** (F2 → caller): `pattern_class ∈ {"structuring_ring","layering_chain","none"}`, `confidence ∈ [0,1]`, `suspect_entity_hashes: list[str]`, `narrative: str (≤500 chars)`.
-  - **`SARContribution`** (A2 → F4): `contributing_bank_id`, `contributing_investigator_id`, `contributed_evidence: list[EvidenceItem]` (hashed identifiers only), `local_rationale`, `related_query_ids: list[UUID]`.
+  - **`SARContribution`** (A2 → F4): `contributing_bank_id`, `contributing_investigator_id`, `contributed_evidence: list[EvidenceItem]` (hashed identifiers only), optional `suspicious_amount_range: tuple[int,int]` in cents, `local_rationale`, `related_query_ids: list[UUID]`.
   - **`SARDraft`** (F4 → orchestrator): `sar_id`, `filing_institution`, `suspicious_amount_range: tuple[int,int]` (cents), `typology_code: TypologyCode`, `narrative` (LLM-authored, regulator-quality), `contributors: list[ContributorAttribution]`, `sar_priority ∈ {"standard","high"}`, `mandatory_fields_complete: bool`, `related_query_ids: list[UUID]`.
   - **`AuditEvent`** (any → audit channel): signed wire-level audit record with `event_id`, `kind ∈ {"message_sent","lt_verdict","constraint_violation","bypass_triggered","rho_debited","budget_exhausted","human_review","rate_limit"}`, `actor_agent_id`, and `payload: AuditPayload` typed by `kind`. This is separate from local `RuntimeAuditEvent` records emitted by the P5 agent base; P15 maps runtime events into wire-level audit envelopes. P13/P15 audit persistence adds the hash-chain fields around these records.
   - **`DismissalRationale`** (A2 → F5): `alert_id`, `reason`, `evidence_considered`.
@@ -1088,11 +1088,11 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 - *Goal:* Full LLM agent that synthesizes `SARContribution` messages from A2s + F2's pattern report + F3's sanctions findings into a structured Suspicious Activity Report draft. Per-bank contribution attribution and §314(b) authority references are mandatory.
 - *Files:* `backend/agents/f4_sar_drafter.py`, `backend/agents/prompts/f4_system.md`, `shared/sar_template.py` (the mandatory-fields skeleton + FinCEN typology code enum), `tests/test_f4.py`.
-- *Inputs:* one or more `SARContribution` records (from one or more A2s), an optional `GraphPatternResponse` from F2, an optional `SanctionsCheckResponse` from F3.
+- *Inputs:* one or more `SARContribution` records (from one or more A2s, with optional `suspicious_amount_range` values in cents), an optional `GraphPatternResponse` from F2, an optional `SanctionsCheckResponse` from F3.
 - *Outputs:* `SARDraft` with the schema from P4. The narrative is LLM-authored; the structured fields are deterministically computed from the contributions.
 - *Mandatory structured fields (deterministic, not LLM-generated):*
   - `filing_institution` — the bank whose A2 first emitted the SARContribution
-  - `suspicious_amount_range` — (min, max) in cents, computed from the contributing-evidence amounts
+  - `suspicious_amount_range` — (min, max) in cents, computed deterministically from contribution ranges; use the lowest provided low and highest provided high, and emit `SARContributionRequest` if no contribution provides a range
   - `typology_code` — derived from F2's `pattern_class` (`structuring_ring` → FinCEN typology "structuring"; `layering_chain` → "layering")
   - `contributors` — one entry per contributing bank with the bank_id, investigator_id (kept internal to the SAR, not exposed cross-bank), and a short summary of evidence contributed
   - `related_query_ids` — the §314(b) queries that produced the cross-bank evidence
@@ -1105,7 +1105,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Out of scope for this part:* no actual FinCEN submission API (we draft, not file); no per-state SAR variations; no SAR amendment workflow.
 - *Acceptance:* `tests/test_f4.py`:
   - Given S1-flow contributions (3 contributing banks, $795K total flow) + F2 ring report + F3 PEP flag, F4 emits a `SARDraft` with all mandatory fields populated; `typology_code="structuring"`; `sar_priority="high"` (because of PEP); `contributors` has 3 entries; narrative references §314(b) and references each bank by bank_id.
-  - Given a contribution missing the amount field, F4 emits a `SARContributionRequest` to the contributor rather than producing an incomplete SAR.
+  - Given contributions with no `suspicious_amount_range`, F4 emits a `SARContributionRequest` to the contributor rather than producing an incomplete SAR.
   - Narrative passes a customer-name-redaction check.
 - *Risks specific to this part:* (a) the LLM may invent details for the narrative - mitigation: prompt constrains the LLM to only reference facts present in the inputs; constraint check rejects narratives that introduce values not in the structured fields. (b) The narrative is long enough that Gemini latency may be visible in the demo - mitigation: stream the response into the judge console; pre-generate during dry-runs as a fallback.
 - *Depends on:* P5, P8, P10, P11.

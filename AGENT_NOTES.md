@@ -282,7 +282,8 @@ Goal:
 
 Inputs:
 - `SARAssemblyRequest`
-- `SARContribution` records from A2, bundled by F1/orchestrator
+- `SARContribution` records from A2, bundled by F1/orchestrator. Each record
+  may include `suspicious_amount_range: tuple[int, int]` in cents.
 - optional `GraphPatternResponse`
 - optional `SanctionsCheckResponse`
 - optional `PolicyEvaluationResult` records
@@ -305,8 +306,11 @@ Do not touch without coordination:
 
 Acceptance:
 - SAR draft includes mandatory structured fields.
+- Final `SARDraft.suspicious_amount_range` is deterministic: lowest provided
+  contribution low, highest provided contribution high.
 - High priority is forced when sanctions or PEP evidence exists.
-- Missing mandatory inputs produce `SARContributionRequest`.
+- Missing mandatory inputs, including absent contribution amount ranges, produce
+  `SARContributionRequest`.
 - Narrative references Section 314(b) authority and uses bank IDs and hashes,
   not customer names.
 

@@ -810,6 +810,9 @@ class SARContribution(Message):
     contributing_bank_id: BankId
     contributing_investigator_id: NonEmptyStr
     contributed_evidence: list[EvidenceItem] = Field(min_length=1)
+    # Optional so F4 can request missing data instead of failing old/partial
+    # contributions. Values are cents, matching SARDraft.suspicious_amount_range.
+    suspicious_amount_range: tuple[NonNegativeInt, NonNegativeInt] | None = None
     local_rationale: MediumText
     related_query_ids: list[UUID] = Field(default_factory=list)
 
@@ -817,6 +820,19 @@ class SARContribution(Message):
     @classmethod
     def local_rationale_must_not_contain_customer_names(cls, value: str) -> str:
         return _reject_demo_customer_names(value, "local_rationale")
+
+    @field_validator("suspicious_amount_range")
+    @classmethod
+    def suspicious_amount_range_must_be_ordered(
+        cls, value: tuple[NonNegativeInt, NonNegativeInt] | None
+    ) -> tuple[NonNegativeInt, NonNegativeInt] | None:
+        if value is not None:
+            low, high = value
+            if low > high:
+                raise ValueError(
+                    "suspicious_amount_range lower bound must be less than or equal to upper bound"
+                )
+        return value
 
 
 class SARAssemblyRequest(Message):

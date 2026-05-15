@@ -113,6 +113,7 @@ def sar_contribution() -> SARContribution:
                 entity_hashes=[HASH_A],
             )
         ],
+        suspicious_amount_range=(100_000, 795_000),
         local_rationale="Local alert and peer-bank corroboration support SAR drafting.",
         related_query_ids=[uuid4()],
     )

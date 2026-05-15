@@ -72,12 +72,13 @@ User or analyst
 
 See [`plan.md`](plan.md) for the full build plan.
 
-The short-contract pass freezes the next shared interfaces before parallel work:
-`SARAssemblyRequest`/`SARContributionRequest` for F4, `AuditReviewRequest`/
-`AuditReviewResult` for F5, and `PolicyEvaluationRequest`/
-`PolicyEvaluationResult` for each per-domain F6 policy instance. These are
-strict Pydantic boundary models only; live F4, F5, F6, LT adapter, and
-orchestrator behavior still land in later milestones.
+The short-contract pass freezes the next shared interfaces before parallel work.
+For F4, this includes `SARAssemblyRequest`, optional
+`SARContribution.suspicious_amount_range`, and `SARContributionRequest`; for F5,
+`AuditReviewRequest`/`AuditReviewResult`; and for each per-domain F6 policy
+instance, `PolicyEvaluationRequest`/`PolicyEvaluationResult`. These are strict
+Pydantic boundary models only; live F4, F5, F6, LT adapter, and orchestrator
+behavior still land in later milestones.
 
 ## Data
 
