@@ -463,7 +463,7 @@ def contribution_summary(
         if available_length > 0:
             rationale = truncate_text(combined_rationale, available_length)
             summary += f" Rationale: {rationale}"
-    return truncate_text(summary, CONTRIBUTION_SUMMARY_MAX_LENGTH)
+    return summary
 
 
 def combined_investigator_ids(contributions: list[SARContribution]) -> str:
@@ -583,7 +583,8 @@ def narrative_violation(
             related_query_ids=fields.related_query_ids,
         )
     except ValidationError as exc:
-        return str(exc)
+        first_error = exc.errors(include_url=False)[0]
+        return f"Narrative validation failed: {first_error['msg']}"
     return None
 
 
