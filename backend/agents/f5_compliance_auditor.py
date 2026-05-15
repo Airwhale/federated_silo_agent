@@ -144,19 +144,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             *self._dismissal_findings(request.dismissals),
         ]
         rate_limit_triggered = any(finding.kind == RATE_LIMIT_FINDING for finding in findings)
-        human_review_required = any(
-            finding.severity in {PolicySeverity.HIGH, PolicySeverity.CRITICAL}
-            or finding.kind
-            in {
-                BUDGET_PRESSURE_FINDING,
-                MISSING_LT_VERDICT_FINDING,
-                LT_VERDICT_REVIEW_FINDING,
-                ROUTE_ANOMALY_FINDING,
-                PURPOSE_REVIEW_FINDING,
-                DISMISSAL_REVIEW_FINDING,
-            }
-            for finding in findings
-        )
+        # P13 treats every generated F5 finding as review-worthy. If later
+        # informational findings are added, this should inspect kind/severity.
+        human_review_required = bool(findings)
 
         result = AuditReviewResult(
             sender_agent_id=self.agent_id,
@@ -236,12 +226,18 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         self,
         events: Iterable[AuditEvent],
     ) -> list[ComplianceFinding]:
-        exhausted = [
-            event
-            for event in events
-            if isinstance(event.payload, BudgetExhaustedPayload)
-        ]
-        if exhausted:
+        exhausted_events: list[AuditEvent] = []
+        low_remaining_events: list[AuditEvent] = []
+        for event in events:
+            if isinstance(event.payload, BudgetExhaustedPayload):
+                exhausted_events.append(event)
+            elif (
+                isinstance(event.payload, RhoDebitedPayload)
+                and event.payload.rho_remaining <= self.config.budget_pressure_rho_remaining
+            ):
+                low_remaining_events.append(event)
+
+        if exhausted_events:
             return [
                 ComplianceFinding(
                     kind=BUDGET_PRESSURE_FINDING,
@@ -250,30 +246,24 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                         "One or more privacy-budget requests were refused because "
                         "the configured budget was exhausted."
                     ),
-                    related_event_ids=_event_ids(exhausted),
+                    related_event_ids=_event_ids(exhausted_events),
                 )
             ]
 
-        low_remaining = [
-            event
-            for event in events
-            if isinstance(event.payload, RhoDebitedPayload)
-            and event.payload.rho_remaining <= self.config.budget_pressure_rho_remaining
-        ]
-        if not low_remaining:
-            return []
+        if low_remaining_events:
+            return [
+                ComplianceFinding(
+                    kind=BUDGET_PRESSURE_FINDING,
+                    severity=PolicySeverity.MEDIUM,
+                    detail=(
+                        "Privacy budget remaining is at or below the configured "
+                        "pressure threshold."
+                    ),
+                    related_event_ids=_event_ids(low_remaining_events),
+                )
+            ]
 
-        return [
-            ComplianceFinding(
-                kind=BUDGET_PRESSURE_FINDING,
-                severity=PolicySeverity.MEDIUM,
-                detail=(
-                    "Privacy budget remaining is at or below the configured "
-                    "pressure threshold."
-                ),
-                related_event_ids=_event_ids(low_remaining),
-            )
-        ]
+        return []
 
     def _lt_verdict_findings(self, events: Iterable[AuditEvent]) -> list[ComplianceFinding]:
         event_list = list(events)
@@ -371,24 +361,23 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
     def _dismissal_findings(
         dismissals: Iterable[DismissalRationale],
     ) -> list[ComplianceFinding]:
-        vague_dismissals = [
-            dismissal
+        return [
+            _dismissal_finding(dismissal)
             for dismissal in dismissals
             if _dismissal_is_vague(dismissal)
         ]
-        if not vague_dismissals:
-            return []
-        return [
-            ComplianceFinding(
-                kind=DISMISSAL_REVIEW_FINDING,
-                severity=PolicySeverity.MEDIUM,
-                detail=(
-                    "One or more dismissal rationales are too thin for compliance "
-                    "review."
-                ),
-                related_event_ids=[],
-            )
-        ]
+
+
+def _dismissal_finding(dismissal: DismissalRationale) -> ComplianceFinding:
+    return ComplianceFinding(
+        kind=DISMISSAL_REVIEW_FINDING,
+        severity=PolicySeverity.MEDIUM,
+        detail=(
+            "Dismissal rationale for alert "
+            f"{dismissal.alert_id} is too thin for compliance review."
+        ),
+        related_event_ids=[dismissal.message_id],
+    )
 
 
 def _event_ids(events: Iterable[AuditEvent]) -> list[UUID]:

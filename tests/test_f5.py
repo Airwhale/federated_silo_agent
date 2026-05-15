@@ -6,6 +6,7 @@ from uuid import uuid4
 from backend.agents import F5ComplianceAuditorAgent, InMemoryAuditEmitter
 from backend.agents.f5_compliance_auditor import (
     BUDGET_PRESSURE_FINDING,
+    DISMISSAL_REVIEW_FINDING,
     F5AuditConfig,
     MISSING_LT_VERDICT_FINDING,
     PURPOSE_REVIEW_FINDING,
@@ -19,6 +20,7 @@ from shared.messages import (
     AuditReviewRequest,
     BudgetExhaustedPayload,
     ConstraintViolationPayload,
+    DismissalRationale,
     LtVerdictPayload,
     MessageSentPayload,
     RhoDebitedPayload,
@@ -48,6 +50,7 @@ def request(
     events: list[AuditEvent],
     *,
     review_scope: AuditReviewScope = AuditReviewScope.INVESTIGATION,
+    dismissals: list[DismissalRationale] | None = None,
 ) -> AuditReviewRequest:
     return AuditReviewRequest(
         sender_agent_id="federation.F1",
@@ -56,6 +59,7 @@ def request(
         recipient_agent_id="federation.F5",
         review_scope=review_scope,
         audit_events=events,
+        dismissals=dismissals or [],
         related_query_ids=[uuid4()],
     )
 
@@ -248,3 +252,24 @@ def test_f5_clean_canonical_audit_window_has_no_findings() -> None:
     assert result.human_review_required is False
     assert result.rate_limit_triggered is False
     assert [event.kind for event in audit.events] == [AuditEventKind.MESSAGE_SENT]
+
+
+def test_f5_vague_dismissal_finding_links_to_dismissal_message() -> None:
+    f5, _ = agent()
+    dismissal = DismissalRationale(
+        sender_agent_id="bank_alpha.A2",
+        sender_role=AgentRole.A2,
+        sender_bank_id=BankId.BANK_ALPHA,
+        recipient_agent_id="federation.F5",
+        alert_id=uuid4(),
+        reason="ok",
+    )
+
+    result = f5.run(
+        request([rho_debited_event(rho_remaining=5.0)], dismissals=[dismissal])
+    )
+
+    assert result.human_review_required is True
+    assert result.findings[0].kind == DISMISSAL_REVIEW_FINDING
+    assert result.findings[0].related_event_ids == [dismissal.message_id]
+    assert str(dismissal.alert_id) in result.findings[0].detail
