@@ -294,26 +294,22 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         return findings
 
     def _lt_verdict_findings(self, events: Iterable[AuditEvent]) -> list[ComplianceFinding]:
-        event_list = list(events)
         covered_requests: set[str] = set()
         non_allow_verdicts: list[AuditEvent] = []
+        governed_messages: list[AuditEvent] = []
         allowed_verdicts = {verdict.lower() for verdict in self.config.lt_allow_verdicts}
 
-        for event in event_list:
-            if not isinstance(event.payload, LtVerdictPayload):
-                continue
-            verdict = event.payload.verdict.strip().lower()
-            if event.payload.request_id is not None:
-                covered_requests.add(event.payload.request_id)
-            if verdict not in allowed_verdicts:
-                non_allow_verdicts.append(event)
+        for event in events:
+            if isinstance(event.payload, LtVerdictPayload):
+                verdict = event.payload.verdict.strip().lower()
+                if event.payload.request_id is not None:
+                    covered_requests.add(event.payload.request_id)
+                if verdict not in allowed_verdicts:
+                    non_allow_verdicts.append(event)
+            if _is_cross_boundary_governed_message(event, self.config):
+                governed_messages.append(event)
 
         findings: list[ComplianceFinding] = []
-        governed_messages = [
-            event
-            for event in event_list
-            if _is_cross_boundary_governed_message(event, self.config)
-        ]
         missing = [
             event for event in governed_messages if str(event.event_id) not in covered_requests
         ]
