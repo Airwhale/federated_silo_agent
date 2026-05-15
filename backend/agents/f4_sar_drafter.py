@@ -355,10 +355,13 @@ def aggregate_amount_range(
 
 def typology_from_pattern(pattern_class: PatternClass) -> TypologyCode:
     """Map F2 pattern classes to SAR typology codes."""
-    if pattern_class == PatternClass.STRUCTURING_RING:
-        return TypologyCode.STRUCTURING
-    if pattern_class == PatternClass.LAYERING_CHAIN:
-        return TypologyCode.LAYERING
+    mapping = {
+        PatternClass.STRUCTURING_RING: TypologyCode.STRUCTURING,
+        PatternClass.LAYERING_CHAIN: TypologyCode.LAYERING,
+    }
+    typology = mapping.get(pattern_class)
+    if typology is not None:
+        return typology
     raise ValueError(f"unsupported SAR pattern_class: {pattern_class}")
 
 
