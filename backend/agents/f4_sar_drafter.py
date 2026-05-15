@@ -477,7 +477,7 @@ def sanctions_hits(request: SARAssemblyRequest) -> list[F4SanctionsHit]:
             sdn_match=result.sdn_match,
             pep_relation=result.pep_relation,
         )
-        for entity_hash, result in request.sanctions.results.items()
+        for entity_hash, result in sorted(request.sanctions.results.items())
         if result.sdn_match or result.pep_relation
     ]
 
@@ -570,15 +570,8 @@ def contains_exact_token(text: str, token: str) -> bool:
 
 
 def unique_values(values: list[ValueT]) -> list[ValueT]:
-    """Deduplicate hashable values in input order."""
-    seen: set[ValueT] = set()
-    output: list[ValueT] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        output.append(value)
-    return output
+    """Deduplicate hashable values while preserving input order."""
+    return list(dict.fromkeys(values))
 
 
 def truncate_text(value: str, max_length: int) -> str:
