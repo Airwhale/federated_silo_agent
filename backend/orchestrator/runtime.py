@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from backend.agents.a1_monitoring import synthetic_velocity_candidate
@@ -32,6 +33,21 @@ from shared.messages import (
 )
 
 
+class TerminalCode(StrEnum):
+    """Machine-readable terminal states for orchestrator control flow."""
+
+    A1_NO_ALERT = "a1_no_alert"
+    A2_DISMISSED = "a2_dismissed"
+    A2_DISMISSED_AFTER_PEER = "a2_dismissed_after_peer"
+    A2_REJECTED = "a2_rejected"
+    A2_SAR_BEFORE_FEDERATION = "a2_sar_before_federation"
+    A2_SYNTHESIS_NO_ARTIFACT = "a2_synthesis_no_artifact"
+    F1_AGGREGATION_EMPTY = "f1_aggregation_empty"
+    F1_NO_ROUTE_PLAN = "f1_no_route_plan"
+    F1_REFUSAL = "f1_refusal"
+    F4_PENDING = "f4_pending"
+
+
 @dataclass
 class SessionOrchestratorState:
     """Mutable live-run state attached to one UI session."""
@@ -53,6 +69,7 @@ class SessionOrchestratorState:
     sar_contribution: SARContribution | None = None
     dismissal: DismissalRationale | None = None
     terminal_reason: str | None = None
+    terminal_code: TerminalCode | None = None
     turn_count: int = 0
 
 
@@ -114,6 +131,7 @@ class Orchestrator:
         emitted = [decision.alert for decision in result.decisions if decision.alert]
         if not emitted:
             state.terminal_reason = "A1 emitted no alert"
+            state.terminal_code = TerminalCode.A1_NO_ALERT
             return state.terminal_reason
         # This state machine carries one active alert per session cascade.
         state.latest_alert = emitted[0]
@@ -147,12 +165,15 @@ class Orchestrator:
         if result.sar_contribution is not None:
             state.sar_contribution = result.sar_contribution
             state.terminal_reason = "A2 emitted SAR contribution before federation."
+            state.terminal_code = TerminalCode.A2_SAR_BEFORE_FEDERATION
             return state.terminal_reason
         if result.dismissal is not None:
             state.dismissal = result.dismissal
             state.terminal_reason = "A2 dismissed the alert."
+            state.terminal_code = TerminalCode.A2_DISMISSED
             return state.terminal_reason
         state.terminal_reason = result.rejection_reason or "A2 rejected the turn."
+        state.terminal_code = TerminalCode.A2_REJECTED
         return state.terminal_reason
 
     def _run_f1_route(self, state: SessionOrchestratorState) -> str:
@@ -164,9 +185,11 @@ class Orchestrator:
         if result.response is not None:
             state.aggregate_response = result.response
             state.terminal_reason = f"F1 refused query: {result.response.refusal_reason}"
+            state.terminal_code = TerminalCode.F1_REFUSAL
             return state.terminal_reason
         if result.route_plan is None:
             state.terminal_reason = "F1 produced no route plan."
+            state.terminal_code = TerminalCode.F1_NO_ROUTE_PLAN
             return state.terminal_reason
         state.route_plan = result.route_plan
         state.routed_requests = [
@@ -215,6 +238,7 @@ class Orchestrator:
             return "F1 negotiated a retry route plan."
         if result.response is None:
             state.terminal_reason = "F1 aggregation produced no response."
+            state.terminal_code = TerminalCode.F1_AGGREGATION_EMPTY
             return state.terminal_reason
         state.aggregate_response = result.response
         return f"F1 aggregated response with {len(result.response.fields)} field(s)."
@@ -238,12 +262,15 @@ class Orchestrator:
         if result.sar_contribution is not None:
             state.sar_contribution = result.sar_contribution
             state.terminal_reason = "F4 pending after A2 SAR contribution."
+            state.terminal_code = TerminalCode.F4_PENDING
             return state.terminal_reason
         if result.dismissal is not None:
             state.dismissal = result.dismissal
             state.terminal_reason = "A2 dismissed after peer synthesis."
+            state.terminal_code = TerminalCode.A2_DISMISSED_AFTER_PEER
             return state.terminal_reason
         state.terminal_reason = result.rejection_reason or "A2 synthesis ended without artifact."
+        state.terminal_code = TerminalCode.A2_SYNTHESIS_NO_ARTIFACT
         return state.terminal_reason
 
     def _sign_a2_query(self, query: Sec314bQuery, *, bank_id: BankId) -> Sec314bQuery:

@@ -22,7 +22,7 @@ from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.a3_states import A3TurnInput
 from backend.agents.f3_sanctions import load_watchlist
 from backend.orchestrator import Orchestrator, OrchestratorPrincipals
-from backend.orchestrator.runtime import SessionOrchestratorState
+from backend.orchestrator.runtime import SessionOrchestratorState, TerminalCode
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
 from backend.security import (
     PrincipalNotAllowed,
@@ -829,6 +829,7 @@ class DemoControlService:
         state = self._ensure_orchestrator_state(session)
         turn = self._orchestrator.next_turn(state)
         if turn is None:
+            is_f4_pending = state.terminal_code == TerminalCode.F4_PENDING
             session.phase = state.terminal_reason or "idle"
             session.append_event(
                 TimelineEventSnapshot(
@@ -836,16 +837,15 @@ class DemoControlService:
                     title="Orchestrator idle",
                     detail=state.terminal_reason or "No scheduled live turn remains.",
                     status=SnapshotStatus.PENDING
-                    if state.terminal_reason and "pending" in state.terminal_reason.lower()
+                    if is_f4_pending
                     else SnapshotStatus.LIVE,
-                    blocked_by=SecurityLayer.NOT_BUILT
-                    if state.terminal_reason and "F4 pending" in state.terminal_reason
-                    else None,
+                    blocked_by=SecurityLayer.NOT_BUILT if is_f4_pending else None,
                 )
             )
             return False
 
         detail = self._orchestrator.run_turn(state, turn)
+        is_f4_pending = state.terminal_code == TerminalCode.F4_PENDING
         session.phase = turn.kind
         _sync_security_snapshots(session, state)
         session.append_event(
@@ -854,11 +854,9 @@ class DemoControlService:
                 title=f"Live turn: {turn.agent_id}",
                 detail=detail,
                 status=SnapshotStatus.PENDING
-                if state.terminal_reason and "F4 pending" in state.terminal_reason
+                if is_f4_pending
                 else SnapshotStatus.LIVE,
-                blocked_by=SecurityLayer.NOT_BUILT
-                if state.terminal_reason and "F4 pending" in state.terminal_reason
-                else None,
+                blocked_by=SecurityLayer.NOT_BUILT if is_f4_pending else None,
             )
         )
         return True
@@ -1537,7 +1535,7 @@ def _interaction_placeholder_reason(
 
 
 def _envelope_snapshot(
-    message: object,
+    message: Sec314bQuery | Sec314bResponse,
     *,
     status: SnapshotStatus,
     signature_status: Literal["valid", "invalid", "missing", "not_checked"],
@@ -1547,10 +1545,10 @@ def _envelope_snapshot(
 ) -> EnvelopeVerificationSnapshot:
     return EnvelopeVerificationSnapshot(
         status=status,
-        message_type=getattr(message, "message_type", None),
-        sender_agent_id=getattr(message, "sender_agent_id", None),
-        recipient_agent_id=getattr(message, "recipient_agent_id", None),
-        body_hash=getattr(message, "body_hash", None),
+        message_type=message.message_type,
+        sender_agent_id=message.sender_agent_id,
+        recipient_agent_id=message.recipient_agent_id,
+        body_hash=message.body_hash,
         signature_status=signature_status,
         freshness_status=freshness_status,
         blocked_by=blocked_by,
