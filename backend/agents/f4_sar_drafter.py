@@ -422,7 +422,12 @@ def contribution_summary(
         low = min(low for low, _ in amount_ranges)
         high = max(high for _, high in amount_ranges)
         amount_text = f"amount range {low}-{high} cents"
-    rationale = truncate_text(contributions[0].local_rationale, 220)
+    combined_rationale = " ".join(
+        unique_values(
+            [contribution.local_rationale for contribution in contributions]
+        )
+    )
+    rationale = truncate_text(combined_rationale, 220)
     return truncate_text(
         f"{bank_id.value} contributed {evidence_count} evidence item(s), "
         f"{entity_count} entity hash(es), and {amount_text}. "

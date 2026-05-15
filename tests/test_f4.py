@@ -71,6 +71,7 @@ def contribution(
     entity_hashes: list[str],
     amount_range: tuple[int, int] | None,
     query_id,
+    rationale: str | None = None,
 ) -> SARContribution:
     return SARContribution(
         sender_agent_id=f"{bank_id.value}.A2",
@@ -86,7 +87,10 @@ def contribution(
             )
         ],
         suspicious_amount_range=amount_range,
-        local_rationale=f"{bank_id.value} observed hash-only corroborating activity.",
+        local_rationale=(
+            rationale
+            or f"{bank_id.value} observed hash-only corroborating activity."
+        ),
         related_query_ids=[query_id],
     )
 
@@ -242,6 +246,7 @@ def test_multiple_investigators_at_one_bank_are_attributed() -> None:
         entity_hashes=[PEP_HASH],
         amount_range=(5_000_000, 8_000_000),
         query_id=extra_query_id,
+        rationale="Second alpha rationale adds branch-level corroboration.",
     )
     request = SARAssemblyRequest.model_validate(
         {
@@ -263,6 +268,8 @@ def test_multiple_investigators_at_one_bank_are_attributed() -> None:
     assert alpha_contributor.investigator_id == (
         "investigator-alpha-1, investigator-alpha-2"
     )
+    assert "bank_alpha observed hash-only" in alpha_contributor.contribution_summary
+    assert "Second alpha rationale" in alpha_contributor.contribution_summary
 
 
 def test_customer_name_in_narrative_is_rejected_and_repaired() -> None:
