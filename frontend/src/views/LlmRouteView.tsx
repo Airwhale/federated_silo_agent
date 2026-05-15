@@ -1,5 +1,5 @@
 import { Network, Send } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { describeError } from "@/api/errors";
 import { useInteraction, useSystem } from "@/api/hooks";
 import type {
@@ -123,8 +123,25 @@ export function LlmRouteView() {
   const [attackerProfile, setAttackerProfile] =
     useState<AttackerProfile>("valid_but_malicious");
   const [payloadText, setPayloadText] = useState("");
-  const [lastResults, setLastResults] = useState<Partial<Record<TrustDomain, ComponentInteractionResult>>>({});
+  // Key results by ``${domain}:${destination}`` so switching the
+  // destination dropdown (litellm <-> lobster_trap) doesn't show
+  // stale results from the other destination's last interaction.
+  const [lastResults, setLastResults] = useState<Record<string, ComponentInteractionResult>>({});
   const interaction = useInteraction(sessionId, destination);
+
+  // Clear the mutation's data/error badges when the destination
+  // changes. Without this the "Executed" / "Placeholder" / "API said"
+  // chip from the previous destination would persist until a new
+  // interaction fires.
+  useEffect(() => {
+    interaction.reset();
+    // ``interaction`` is a useMutation result; its ``reset`` is stable
+    // per hook instance. Re-running on every ``interaction`` identity
+    // change would loop, so we only depend on ``destination``.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [destination]);
+
+  const resultKey = (domain: TrustDomain, dest: RouteDestination) => `${domain}:${dest}`;
 
   const providerHealth = system.data?.provider_health ?? null;
   const readinessByComponent = useMemo(
@@ -151,7 +168,7 @@ export function LlmRouteView() {
       TRUST_INSTANCES.map((instance) => ({
         domain: instance.id,
         status: readinessByComponent.get(destination)?.status ?? readinessFallback,
-        lastResult: lastResults[instance.id],
+        lastResult: lastResults[resultKey(instance.id, destination)],
       })),
     [destination, lastResults, readinessByComponent, readinessFallback],
   );
@@ -159,7 +176,7 @@ export function LlmRouteView() {
   const selectedDestination = ROUTE_DESTINATIONS.find((item) => item.id === destination)
     ?? ROUTE_DESTINATIONS[0];
   const selectedReadiness = readinessByComponent.get(destination);
-  const selectedResult = lastResults[selectedDomain];
+  const selectedResult = lastResults[resultKey(selectedDomain, destination)];
 
   const submit = () => {
     interaction.mutate(
@@ -173,7 +190,7 @@ export function LlmRouteView() {
         onSuccess: (result) => {
           setLastResults((current) => ({
             ...current,
-            [selectedDomain]: result,
+            [resultKey(selectedDomain, destination)]: result,
           }));
         },
       },

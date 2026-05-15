@@ -59,6 +59,7 @@ export function useComponent(
 export function useCreateSession() {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: ["create-session"],
     mutationFn: (request: SessionCreateRequest = DEFAULT_SESSION_CREATE) =>
       api.createSession(request),
     onSuccess: async (session) => {
@@ -77,6 +78,7 @@ export function useCreateSession() {
 export function useStepSession(sessionId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: ["step-session", sessionId],
     mutationFn: () => api.stepSession(sessionId ?? ""),
     onSuccess: async () => {
       if (!sessionId) return;
@@ -89,6 +91,7 @@ export function useStepSession(sessionId: string | null) {
 export function useRunUntilIdle(sessionId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: ["run-until-idle", sessionId],
     mutationFn: () => api.runUntilIdle(sessionId ?? ""),
     onSuccess: async () => {
       if (!sessionId) return;
@@ -101,6 +104,7 @@ export function useRunUntilIdle(sessionId: string | null) {
 export function useProbe(sessionId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: ["probe", sessionId],
     mutationFn: (request: ProbeRequest) => api.probe(sessionId ?? "", request),
     onSuccess: async () => {
       if (!sessionId) return;
@@ -113,6 +117,13 @@ export function useProbe(sessionId: string | null) {
 export function useInteraction(sessionId: string | null, componentId: ComponentId) {
   const queryClient = useQueryClient();
   return useMutation({
+    // Scope the mutation by sessionId + componentId so TanStack devtools
+    // and `useMutationState` consumers can distinguish per-component
+    // mutations. Note: TanStack's useMutation does NOT auto-reset state
+    // when this key changes; callers must call `.reset()` in an effect
+    // if they want stale `error`/`data` to clear when componentId
+    // changes (see LlmRouteView and InteractionConsole).
+    mutationKey: ["interaction", sessionId, componentId],
     mutationFn: (request: ComponentInteractionRequest) =>
       api.interaction(sessionId ?? "", componentId, request),
     onSuccess: async (_result, variables) => {

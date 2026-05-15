@@ -1,5 +1,5 @@
 import { Send } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { describeError } from "@/api/errors";
 import { useInteraction } from "@/api/hooks";
 import type { ComponentId, ComponentInteractionKind } from "@/api/types";
@@ -23,6 +23,18 @@ export function InteractionConsole() {
     useState<ComponentInteractionKind>("inspect");
   const [payloadText, setPayloadText] = useState("");
   const interaction = useInteraction(sessionId, componentId);
+
+  // Reset mutation state (data/error chip in the header) when the
+  // selected component changes. Without this, a stale "API said" /
+  // "Executed" / "Placeholder" badge from a prior component bleeds
+  // into the new component's view until the user fires another
+  // interaction.
+  useEffect(() => {
+    interaction.reset();
+    // ``interaction.reset`` is stable per hook instance; we only
+    // want to fire on componentId change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [componentId]);
 
   const components = useMemo(() => instance.mechanisms, [instance]);
 
