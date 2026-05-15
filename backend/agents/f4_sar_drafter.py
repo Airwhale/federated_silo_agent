@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
+import re
 from typing import Annotated, TypeVar
 from uuid import UUID
 
@@ -310,7 +311,7 @@ def compute_sar_fields(request: SARAssemblyRequest) -> ComputedSARFields:
         graph_pattern_class=graph_pattern.pattern_class,
         graph_confidence=graph_pattern.confidence,
         suspect_entity_hashes=unique_strings(graph_pattern.suspect_entity_hashes),
-        contributors=narrative_contributors(request.contributions),
+        contributors=narrative_contributors(request.contributions, contributors),
         sanctions_hits=sanctions_hits(request),
         related_query_ids=related_query_ids,
     )
@@ -379,6 +380,7 @@ def contributor_attributions(
 
 def narrative_contributors(
     contributions: list[SARContribution],
+    attributions: list[ContributorAttribution],
 ) -> list[F4NarrativeContributor]:
     """Build hash-only contributor facts for the LLM."""
     return [
@@ -389,7 +391,7 @@ def narrative_contributors(
             entity_hashes=entity_hashes_for_bank(contributions, attribution.bank_id),
             contribution_summary=attribution.contribution_summary,
         )
-        for attribution in contributor_attributions(contributions)
+        for attribution in attributions
     ]
 
 
@@ -493,7 +495,7 @@ def narrative_violation(
         return "SAR narrative must reference Section 314(b) authority"
 
     for contributor in fields.contributors:
-        if contributor.bank_id.value not in narrative:
+        if not contains_exact_token(narrative, contributor.bank_id.value):
             return (
                 "SAR narrative must reference contributing bank_id "
                 f"{contributor.bank_id.value}"
@@ -504,7 +506,7 @@ def narrative_violation(
         missing_hashes = [
             hash_value
             for hash_value in required_hashes
-            if hash_value not in narrative
+            if not contains_exact_token(narrative, hash_value)
         ]
         if missing_hashes:
             return "SAR narrative must reference supplied suspect entity hashes"
@@ -534,6 +536,12 @@ def narrative_required_hashes(facts: F4NarrativeFacts) -> list[CrossBankHashToke
     sanctions_hashes = [hit.entity_hash for hit in facts.sanctions_hits]
     required = unique_strings([*sanctions_hashes, *facts.suspect_entity_hashes])
     return required[:5]
+
+
+def contains_exact_token(text: str, token: str) -> bool:
+    """Return whether token appears without being embedded in a larger token."""
+    pattern = rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])"
+    return re.search(pattern, text) is not None
 
 
 def unique_strings(values: list[StringT]) -> list[StringT]:
