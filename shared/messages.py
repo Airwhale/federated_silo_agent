@@ -610,6 +610,10 @@ class BankAggregate(StrictModel):
     bank_id: BankId
     edge_count_distribution: list[NonNegativeInt]
     bucketed_flow_histogram: list[NonNegativeInt]
+    candidate_entity_hashes: list[CrossBankHashToken] = Field(
+        default_factory=list,
+        max_length=100,
+    )
     rho_debited: NonNegativeFloat = 0.0
 
     @model_validator(mode="after")

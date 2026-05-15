@@ -179,6 +179,9 @@ def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_two_records() -> No
     assert result.value.bank_id == BankId.BANK_ALPHA
     assert len(result.value.edge_count_distribution) == 4
     assert len(result.value.bucketed_flow_histogram) == 5
+    assert result.value.candidate_entity_hashes
+    assert len(result.value.candidate_entity_hashes) <= 100
+    assert all(len(entity_hash) == 16 for entity_hash in result.value.candidate_entity_hashes)
     assert result.value.rho_debited == 0.04
     assert {record.field_name for record in result.records} == {
         "edge_count_distribution",

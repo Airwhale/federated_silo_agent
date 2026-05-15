@@ -448,6 +448,10 @@ class BankStatsPrimitives:
         counterparty_counts = Counter(
             str(row["counterparty_account_id_hashed"]) for row in rows
         )
+        candidate_counts = Counter(str(row["name_hash"]) for row in rows)
+        candidate_entity_hashes = [
+            entity_hash for entity_hash, _count in candidate_counts.most_common(100)
+        ]
 
         # Sequential composition between the two components (edge distribution
         # and flow histogram) because they share the same underlying data
@@ -512,6 +516,7 @@ class BankStatsPrimitives:
             bank_id=self.bank_id,
             edge_count_distribution=edge_noised,
             bucketed_flow_histogram=flow_noised,
+            candidate_entity_hashes=candidate_entity_hashes,
             rho_debited=rho,
         )
         return PrimitiveResult(
@@ -598,11 +603,17 @@ class BankStatsPrimitives:
     ) -> list[sqlite3.Row]:
         start, end = window.sqlite_bounds()
         query = """
-            SELECT transaction_id, counterparty_account_id_hashed, amount
-            FROM transactions
+            SELECT
+                t.transaction_id,
+                t.counterparty_account_id_hashed,
+                t.amount,
+                c.name_hash
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.account_id
+            JOIN customers c ON a.customer_id = c.customer_id
             WHERE timestamp >= ?
               AND timestamp < ?
-            ORDER BY transaction_id
+            ORDER BY t.transaction_id
             LIMIT ?
         """
         with self._connect() as con:
