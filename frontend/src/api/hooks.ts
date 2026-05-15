@@ -1,0 +1,157 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, DEFAULT_SESSION_CREATE } from "./client";
+import { qk } from "./keys";
+import type {
+  ComponentId,
+  ComponentInteractionRequest,
+  ProbeRequest,
+  SessionCreateRequest,
+} from "./types";
+
+export function useHealth() {
+  return useQuery({
+    queryKey: qk.health(),
+    queryFn: api.health,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useSystem() {
+  return useQuery({
+    queryKey: qk.system(),
+    queryFn: api.system,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useSession(sessionId: string | null) {
+  return useQuery({
+    queryKey: qk.session(sessionId),
+    queryFn: () => api.session(sessionId ?? ""),
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useTimeline(sessionId: string | null) {
+  // Intentionally calls ``api.events`` (the ``/events`` endpoint) rather
+  // than ``api.timeline`` (``/timeline``). The two endpoints share
+  // implementation today but are deliberately distinct surfaces (see
+  // ``backend/ui/api.py`` near the route definitions): ``/timeline``
+  // is the stable paged-history view; ``/events`` is the streaming
+  // surface that P15 will switch from polling to SSE. Wiring the live
+  // poller to ``/events`` now means the SSE migration is a one-file
+  // hook swap with no route or component changes.
+  return useQuery({
+    queryKey: qk.timeline(sessionId),
+    queryFn: () => api.events(sessionId ?? ""),
+    enabled: Boolean(sessionId),
+    refetchInterval: 2000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useComponent(
+  sessionId: string | null,
+  componentId: ComponentId,
+  instanceId?: string,
+) {
+  return useQuery({
+    queryKey: qk.component(sessionId, componentId, instanceId),
+    queryFn: () => api.component(sessionId ?? "", componentId),
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useCreateSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["create-session"],
+    mutationFn: (request: SessionCreateRequest = DEFAULT_SESSION_CREATE) =>
+      api.createSession(request),
+    onSuccess: async (session) => {
+      await queryClient.invalidateQueries({ queryKey: qk.system() });
+      await queryClient.invalidateQueries({ queryKey: qk.session(session.session_id) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(session.session_id) });
+    },
+  });
+}
+
+// Mutations all invalidate `qk.session(sessionId)` and `qk.timeline(sessionId)`
+// so the topology + timeline refresh after step / run-until-idle / probe /
+// interaction. Routed through the key factory so a future shape change in
+// keys.ts cannot silently break invalidation.
+
+export function useStepSession(sessionId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["step-session", sessionId],
+    mutationFn: () => api.stepSession(sessionId ?? ""),
+    onSuccess: async () => {
+      if (!sessionId) return;
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+    },
+  });
+}
+
+export function useRunUntilIdle(sessionId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["run-until-idle", sessionId],
+    mutationFn: () => api.runUntilIdle(sessionId ?? ""),
+    onSuccess: async () => {
+      if (!sessionId) return;
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+    },
+  });
+}
+
+export function useProbe(sessionId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["probe", sessionId],
+    mutationFn: (request: ProbeRequest) => api.probe(sessionId ?? "", request),
+    onSuccess: async () => {
+      if (!sessionId) return;
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+    },
+  });
+}
+
+export function useInteraction(sessionId: string | null, componentId: ComponentId) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    // Scope the mutation by sessionId + componentId so TanStack devtools
+    // and `useMutationState` consumers can distinguish per-component
+    // mutations. Note: TanStack's useMutation does NOT auto-reset state
+    // when this key changes; callers must call `.reset()` in an effect
+    // if they want stale `error`/`data` to clear when componentId
+    // changes (see LlmRouteView and InteractionConsole).
+    mutationKey: ["interaction", sessionId, componentId],
+    mutationFn: (request: ComponentInteractionRequest) =>
+      api.interaction(sessionId ?? "", componentId, request),
+    onSuccess: async () => {
+      if (!sessionId) return;
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+      // Invalidate every per-instance cache entry for this componentId
+      // via partial-key prefix. ``useComponent(sessionId, componentId,
+      // instanceId)`` keys are ``['session', id, 'component',
+      // componentId, instanceId]`` -- TanStack Query treats the prefix
+      // ``['session', id, 'component', componentId]`` as a match for
+      // every instanceId variant. Today the backend snapshot is a
+      // singleton per componentId (the same envelope/route/ledger row
+      // is rendered for every trust-domain column), so when one
+      // interaction lands every column must refresh. P15 supplies
+      // real per-instance snapshots and this can narrow back to the
+      // exact ``target_instance_id``.
+      await queryClient.invalidateQueries({
+        queryKey: ["session", sessionId, "component", componentId],
+      });
+    },
+  });
+}

@@ -25,6 +25,34 @@ ProbePayloadText = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
 ]
 
+class TrustDomainId(StrEnum):
+    """Canonical trust-domain identifiers shared across the API boundary.
+
+    Using a ``StrEnum`` (over an ``AfterValidator`` on ``str``) makes the
+    allowed values part of the OpenAPI schema as an enum, which gives the
+    generated frontend client a discriminated string union instead of a
+    plain ``string``. That removes the duplicated allow-list previously
+    living in both ``backend/ui/snapshots.py`` (server-side validator) and
+    ``frontend/src/domain/instances.ts`` (registry), and turns a
+    cross-boundary drift class into a compile error.
+
+    Membership must continue to mirror the frontend's ``TRUST_INSTANCES``
+    registry. The set is small and rarely changes; adding a new domain is
+    a coordinated two-side change (this enum + the registry).
+    """
+
+    INVESTIGATOR = "investigator"
+    FEDERATION = "federation"
+    BANK_ALPHA = "bank_alpha"
+    BANK_BETA = "bank_beta"
+    BANK_GAMMA = "bank_gamma"
+
+
+# Backwards-compatible alias so legacy call sites and documentation that
+# referenced ``KNOWN_TRUST_DOMAIN_IDS`` keep working. New code should
+# prefer ``TrustDomainId`` directly.
+KNOWN_TRUST_DOMAIN_IDS: frozenset[str] = frozenset(d.value for d in TrustDomainId)
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -99,6 +127,15 @@ class ProbeKind(StrEnum):
     ROUTE_MISMATCH = "route_mismatch"
     UNSUPPORTED_QUERY_SHAPE = "unsupported_query_shape"
     BUDGET_EXHAUSTION = "budget_exhaustion"
+
+
+class ComponentInteractionKind(StrEnum):
+    """Safe component-directed actions from the judge console."""
+
+    PROMPT = "prompt"
+    INSPECT = "inspect"
+    EXPLAIN_STATE = "explain_state"
+    SAFE_INPUT = "safe_input"
 
 
 class AttackerProfile(StrEnum):
@@ -276,6 +313,16 @@ class ProbeRequest(UiModel):
     target_component: ComponentId
     attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
     payload_text: ProbePayloadText | None = None
+    target_instance_id: TrustDomainId | None = None
+
+
+class ComponentInteractionRequest(UiModel):
+    """Safe component interaction request for the judge console."""
+
+    interaction_kind: ComponentInteractionKind
+    payload_text: ProbePayloadText | None = None
+    attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
+    target_instance_id: TrustDomainId | None = None
 
 
 class HealthSnapshot(UiModel):
@@ -306,3 +353,35 @@ class ProbeResult(UiModel):
     route_approval: RouteApprovalSnapshot | None = None
     dp_ledger: DpLedgerSnapshot | None = None
     timeline_event: TimelineEventSnapshot
+
+
+class ComponentInteractionResult(UiModel):
+    """Outcome of one safe component-directed interaction.
+
+    Two boolean fields disambiguate "we got it" from "we ran it":
+
+    * ``accepted`` -- the request passed validation and was recorded.
+      False only when the component is not built yet (and therefore
+      cannot be interacted with at all).
+    * ``executed`` -- a live handler actually ran and produced
+      meaningful output. False for PROMPT / SAFE_INPUT today because
+      the live LT / LLM adapter lands with P14/P15; the request is
+      still ``accepted`` and shows up on the timeline.
+
+    The UI uses both to distinguish "successfully inspected" from
+    "queued for a future handler" from "refused / not built".
+    """
+
+    interaction_id: UUID = Field(default_factory=uuid4)
+    interaction_kind: ComponentInteractionKind
+    target_component: ComponentId
+    target_instance_id: TrustDomainId | None = None
+    attacker_profile: AttackerProfile
+    accepted: bool
+    executed: bool
+    status: SnapshotStatus
+    blocked_by: SecurityLayer | None = None
+    reason: ShortText
+    timeline_event: TimelineEventSnapshot
+    component_snapshot: ComponentSnapshot | None = None
+    available_after: str | None = None

@@ -23,6 +23,12 @@ def create_app(service: DemoControlService | None = None) -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
+        # 5173 is Vite's default and what ``scripts/start_frontend.ps1``
+        # binds. The CORS allowlist intentionally stays minimal here:
+        # extra-origin padding for sibling worktrees (e.g. the parallel
+        # design-reference variant) is opt-in and should be added back
+        # explicitly when those frontends are actively used, rather than
+        # carried as defaults.
         allow_origins=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",

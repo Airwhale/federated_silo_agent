@@ -239,7 +239,204 @@ def test_openapi_schema_is_available() -> None:
     paths = response.json()["paths"]
     assert "/sessions" in paths
     assert "/sessions/{session_id}/probes" in paths
+    assert "/sessions/{session_id}/components/{component_id}/interactions" in paths
     assert "/sessions/{session_id}/probes/{probe_id}" not in paths
+
+
+def test_live_component_interaction_returns_snapshot_and_event() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/components/signing/interactions",
+        json={
+            "interaction_kind": "inspect",
+            "target_instance_id": "federation",
+        },
+    )
+    timeline = test_client.get(f"/sessions/{session_id}/timeline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["executed"] is True
+    assert body["status"] == "live"
+    assert body["blocked_by"] is None
+    assert body["target_instance_id"] == "federation"
+    assert body["component_snapshot"]["signing"]["private_key_material_exposed"] is False
+    assert any(event["title"] == "Interaction: inspect" for event in timeline.json())
+
+
+def test_not_built_component_interaction_returns_available_after() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/components/F2/interactions",
+        json={
+            "interaction_kind": "prompt",
+            "payload_text": "Find graph evidence for this case.",
+            "target_instance_id": "federation",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["status"] == "not_built"
+    assert body["blocked_by"] == "not_built"
+    assert body["available_after"] == "P11"
+    assert "P11" in body["reason"]
+
+
+def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
+    # Contract: PROMPT / SAFE_INPUT on a *live* component is accepted
+    # (request was recorded) but not executed (no live handler yet);
+    # protected state must stay untouched.
+    test_client = client()
+    session_id = create_session(test_client)
+
+    before = test_client.get(f"/sessions/{session_id}/components/replay").json()
+    response = test_client.post(
+        f"/sessions/{session_id}/components/replay/interactions",
+        json={
+            "interaction_kind": "safe_input",
+            "payload_text": "Try to clear the replay cache.",
+            "attacker_profile": "valid_but_malicious",
+            "target_instance_id": "bank_beta",
+        },
+    )
+    after = test_client.get(f"/sessions/{session_id}/components/replay").json()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["executed"] is False
+    assert body["status"] == "pending"
+    assert body["blocked_by"] is None
+    assert "P14/P15" in body["reason"]
+    assert "No protected state was mutated" in body["reason"]
+    assert before["replay"] == after["replay"]
+
+
+def test_interaction_rejects_unknown_target_instance_id() -> None:
+    # ``target_instance_id`` is typed as ``TrustDomainId`` (StrEnum) on
+    # the request schema, so FastAPI/Pydantic auto-emits a 422 with an
+    # ``enum``-type error for any value outside the canonical five
+    # trust domains -- including character-class-valid but semantically
+    # invalid values like a ComponentId.
+    test_client = client()
+    session_id = create_session(test_client)
+
+    for bad in ("bank_delta", "F1", "bank_alpha.A3", "investigator-eve"):
+        response = test_client.post(
+            f"/sessions/{session_id}/components/signing/interactions",
+            json={"interaction_kind": "inspect", "target_instance_id": bad},
+        )
+        assert response.status_code == 422, f"unexpected pass for target_instance_id={bad!r}"
+        detail = response.json()["detail"]
+        assert any(
+            entry.get("type") == "enum"
+            and entry.get("loc", [])[-1] == "target_instance_id"
+            for entry in detail
+        ), f"expected enum-type validation error, got: {detail}"
+
+
+def test_concurrent_create_session_and_interaction_does_not_deadlock() -> None:
+    # Gemini PR-6 round-1 flagged a theoretical lock-inversion between
+    # session.lock and _sessions_lock. Today _sessions_lock is always
+    # released before to_snapshot acquires session.lock, so the deadlock
+    # does not trigger -- but pinning the contract with a timeout-bounded
+    # stress test catches any future regression where someone holds
+    # _sessions_lock across a to_snapshot call.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    test_client = client()
+    seed_session_id = create_session(test_client)
+    completed_codes: list[int] = []
+
+    def fire_create() -> int:
+        r = test_client.post("/sessions", json={})
+        return r.status_code
+
+    def fire_interaction() -> int:
+        r = test_client.post(
+            f"/sessions/{seed_session_id}/components/signing/interactions",
+            json={"interaction_kind": "inspect", "target_instance_id": "federation"},
+        )
+        return r.status_code
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = []
+        for idx in range(15):
+            futures.append(pool.submit(fire_create))
+            futures.append(pool.submit(fire_interaction))
+        for fut in as_completed(futures, timeout=15):
+            completed_codes.append(fut.result())
+
+    # If the deadlock existed, futures would hang and as_completed would
+    # raise TimeoutError. Reaching this line means no deadlock occurred.
+    assert len(completed_codes) == 30
+    assert all(code in (200, 201) for code in completed_codes)
+
+
+def test_concurrent_interactions_do_not_split_timeline() -> None:
+    # The run_component_interaction handler must take ``session.lock``
+    # before its read-modify-write so a concurrent probe firing on the
+    # same session cannot interleave a half-applied outcome. Fire many
+    # interactions + probes concurrently; assert the final timeline is
+    # internally consistent (no duplicate event_ids, every event_id is
+    # findable by id, total count matches what we sent).
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    test_client = client()
+    session_id = create_session(test_client)
+
+    def fire_interaction(idx: int) -> int:
+        r = test_client.post(
+            f"/sessions/{session_id}/components/signing/interactions",
+            json={"interaction_kind": "inspect", "target_instance_id": "federation"},
+        )
+        return r.status_code
+
+    def fire_probe(idx: int) -> int:
+        r = test_client.post(
+            f"/sessions/{session_id}/probes",
+            json={
+                "probe_kind": "body_tamper",
+                "target_component": "F1",
+                "attacker_profile": "valid_but_malicious",
+            },
+        )
+        return r.status_code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(fire_interaction, i) for i in range(20)]
+        futures.extend(pool.submit(fire_probe, i) for i in range(20))
+        codes = [f.result() for f in as_completed(futures)]
+
+    assert all(code == 200 for code in codes)
+    timeline = test_client.get(f"/sessions/{session_id}/timeline").json()
+    event_ids = [event["event_id"] for event in timeline]
+    # 1 init event + 20 interactions + 20 probes = 41.
+    assert len(event_ids) == 41
+    assert len(set(event_ids)) == 41  # no duplicates, no torn writes
+
+
+def test_interaction_payload_text_is_bounded() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/components/A2/interactions",
+        json={
+            "interaction_kind": "prompt",
+            "payload_text": "x" * 4097,
+            "target_instance_id": "investigator",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_unknown_session_returns_unquoted_detail() -> None:

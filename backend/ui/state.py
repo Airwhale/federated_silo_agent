@@ -49,6 +49,9 @@ from shared.messages import (
 from backend.ui.snapshots import (
     AuditChainSnapshot,
     ComponentId,
+    ComponentInteractionKind,
+    ComponentInteractionRequest,
+    ComponentInteractionResult,
     ComponentReadinessSnapshot,
     ComponentSnapshot,
     DpLedgerEntrySnapshot,
@@ -288,9 +291,30 @@ class DemoControlService:
         with session.lock:
             return list(session.timeline)
 
-    def component_snapshot(self, session_id: UUID, component_id: ComponentId) -> ComponentSnapshot:
-        session = self._session(session_id)
-        readiness = {item.component_id: item for item in self.component_readiness()}
+    def component_snapshot(
+        self,
+        session_id: UUID,
+        component_id: ComponentId,
+        *,
+        readiness_map: dict[ComponentId, ComponentReadinessSnapshot] | None = None,
+        session: DemoSessionRuntime | None = None,
+    ) -> ComponentSnapshot:
+        # `readiness_map` is an internal optimisation for callers (e.g.
+        # ``run_component_interaction``) that already built the readiness
+        # map and want to avoid a second filesystem-stat pass. Public
+        # callers can ignore the kwarg.
+        #
+        # `session` lets callers that already resolved the session and hold
+        # `session.lock` pass it in. Without this, a re-entrant lookup here
+        # would acquire `self._sessions_lock` while the caller holds
+        # `session.lock`, inverting the lock order against
+        # ``create_session`` / ``get_session`` (which hold
+        # `_sessions_lock` first and then take `session.lock` via
+        # ``to_snapshot``). AB-BA deadlock. Caught by Gemini PR-6 round 3.
+        session = session or self._session(session_id)
+        readiness = readiness_map or {
+            item.component_id: item for item in self.component_readiness()
+        }
         item = readiness[component_id]
         fields = [
             SnapshotField(name="available_after", value=item.available_after or "now"),
@@ -382,6 +406,129 @@ class DemoControlService:
             title=item.label,
             fields=fields,
         )
+
+    def run_component_interaction(
+        self,
+        session_id: UUID,
+        component_id: ComponentId,
+        request: ComponentInteractionRequest,
+    ) -> ComponentInteractionResult:
+        # ``target_instance_id`` is typed as ``TrustDomainId`` (a
+        # ``StrEnum``) on the request models, so FastAPI / Pydantic
+        # automatically returns 422 for any value outside the canonical
+        # five trust domains. This handler can assume any non-None value
+        # is a valid ``TrustDomainId`` member.
+        # Resolve session *outside* ``session.lock``. ``self._session(...)``
+        # acquires ``self._sessions_lock``; doing so while holding
+        # ``session.lock`` would invert the lock order against
+        # ``create_session`` / ``get_session`` (which hold the sessions
+        # lock first and then take a session lock via ``to_snapshot``).
+        # AB-BA. The ``_session`` call releases ``_sessions_lock`` before
+        # returning, so taking ``session.lock`` below is safe.
+        session = self._session(session_id)
+        readiness = {item.component_id: item for item in self.component_readiness()}
+        readiness_item = readiness[component_id]
+
+        # Atomic read-modify-write: hold ``session.lock`` across the
+        # snapshot read and the timeline append so a concurrent probe
+        # cannot tear the result (return a snapshot that no longer
+        # matches the state recorded in the timeline event).
+        #
+        # ``session.lock`` is an ``RLock``, so ``append_event``'s own
+        # ``with self.lock`` reacquires cheaply. We pass ``session=``
+        # into ``component_snapshot`` so it skips the
+        # ``self._session(...)`` lookup (which would otherwise take
+        # ``self._sessions_lock`` while we hold ``session.lock`` and
+        # reintroduce the AB-BA cycle).
+        with session.lock:
+            # Reuse the readiness map so we don't rebuild it
+            # (3 filesystem stats) per request.
+            snapshot = self.component_snapshot(
+                session_id,
+                component_id,
+                readiness_map=readiness,
+                session=session,
+            )
+
+            component_built = readiness_item.status != SnapshotStatus.NOT_BUILT
+            is_read_only = request.interaction_kind in {
+                ComponentInteractionKind.INSPECT,
+                ComponentInteractionKind.EXPLAIN_STATE,
+            }
+
+            if not component_built:
+                # Cannot process: the component itself does not exist yet.
+                accepted = False
+                executed = False
+                status = SnapshotStatus.NOT_BUILT
+                blocked_by: SecurityLayer | None = SecurityLayer.NOT_BUILT
+                event_status = SnapshotStatus.BLOCKED
+                reason = _truncate_detail(
+                    f"{readiness_item.label} is available after "
+                    f"{readiness_item.available_after or 'a later milestone'}."
+                )
+            elif is_read_only:
+                # Live read-only interaction; a real handler ran and the
+                # full snapshot is returned to the caller.
+                accepted = True
+                executed = True
+                status = snapshot.status
+                blocked_by = None
+                event_status = status
+                if request.interaction_kind == ComponentInteractionKind.INSPECT:
+                    reason = _truncate_detail(
+                        f"{readiness_item.label} snapshot returned."
+                    )
+                else:
+                    # ``readiness_item.detail`` is also ShortText (up to 2048
+                    # chars); concatenating with the label + status can exceed
+                    # the cap and raise a Pydantic ValidationError -> 500. The
+                    # truncate helper trims with an ellipsis suffix.
+                    reason = _truncate_detail(
+                        f"{readiness_item.label} is {snapshot.status.value}: "
+                        f"{readiness_item.detail}"
+                    )
+            else:
+                # PROMPT or SAFE_INPUT on a live component: the request is
+                # accepted and recorded, but no live handler exists yet
+                # (lands with P14/P15). Protected state stays untouched.
+                accepted = True
+                executed = False
+                status = SnapshotStatus.PENDING
+                blocked_by = None
+                event_status = SnapshotStatus.PENDING
+                reason = _truncate_detail(
+                    f"{request.interaction_kind.value} was recorded for "
+                    f"{readiness_item.label}; the live handler lands with "
+                    "P14/P15. No protected state was mutated."
+                )
+
+            event = TimelineEventSnapshot(
+                component_id=component_id,
+                title=f"Interaction: {request.interaction_kind.value}",
+                detail=reason,
+                status=event_status,
+                blocked_by=blocked_by,
+            )
+            result = ComponentInteractionResult(
+                interaction_kind=request.interaction_kind,
+                target_component=component_id,
+                target_instance_id=request.target_instance_id,
+                attacker_profile=request.attacker_profile,
+                accepted=accepted,
+                executed=executed,
+                status=status,
+                blocked_by=blocked_by,
+                reason=reason,
+                timeline_event=event,
+                component_snapshot=snapshot,
+                available_after=readiness_item.available_after,
+            )
+            # ``append_event`` reacquires ``session.lock`` (RLock), keeping
+            # the snapshot read and the timeline append in one atomic
+            # critical section.
+            session.append_event(event)
+        return result
 
     def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
         session = self._session(session_id)

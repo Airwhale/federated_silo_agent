@@ -1,0 +1,69 @@
+import type { ProviderHealthSnapshot } from "@/api/types";
+import { KeyValueGrid, type KeyValueRow } from "@/components/inspector/KeyValueGrid";
+
+type Props = {
+  providerHealth: ProviderHealthSnapshot;
+  trustDomainLabel?: string;
+  lastResult?: string;
+};
+
+export function ModelRoutePanel({ providerHealth, trustDomainLabel, lastResult }: Props) {
+  const configured = providerHealth.lobster_trap_configured && providerHealth.litellm_configured;
+  const keySummary = credentialSummary(providerHealth);
+  const rows: KeyValueRow[] = [];
+  if (trustDomainLabel) {
+    rows.push({ label: "Trust domain", value: trustDomainLabel });
+  }
+  rows.push(
+    {
+      label: "Route state",
+      value: configured ? "LT and model proxy configured" : "configuration incomplete",
+      tone: configured ? "good" : "muted",
+    },
+    {
+      label: "Lobster Trap",
+      value: providerHealth.lobster_trap_configured ? "configured" : "missing",
+      tone: providerHealth.lobster_trap_configured ? "good" : "muted",
+    },
+    {
+      label: "LiteLLM proxy",
+      value: providerHealth.litellm_configured ? "configured" : "missing",
+      tone: providerHealth.litellm_configured ? "good" : "muted",
+    },
+    {
+      label: "Model credentials",
+      value: keySummary,
+      tone: keySummary === "none reported" ? "muted" : "good",
+    },
+    {
+      label: "Secret values",
+      value: providerHealth.secret_values,
+      tone: "good",
+    },
+  );
+  if (lastResult) {
+    rows.push({ label: "Last interaction", value: lastResult });
+  }
+  rows.push(
+    {
+      label: "Live adapter",
+      value: "P14/P15 will replace this presence snapshot with per-domain request telemetry",
+      tone: "muted",
+    },
+  );
+
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm text-slate-400">{providerHealth.detail}</p>
+      <KeyValueGrid rows={rows} />
+    </div>
+  );
+}
+
+function credentialSummary(providerHealth: ProviderHealthSnapshot): string {
+  const providers = [
+    providerHealth.gemini_api_key_present ? "Gemini" : null,
+    providerHealth.openrouter_api_key_present ? "OpenRouter" : null,
+  ].filter(Boolean);
+  return providers.length > 0 ? `${providers.join(", ")} present` : "none reported";
+}
