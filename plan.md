@@ -1016,6 +1016,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Output schema strictly excludes list contents: `notes` and `source` from the mock list never appear in `SanctionsCheckResponse`.
   - Cannot retain queried entity hashes between requests; the agent keeps only the loaded watchlist.
   - Reject requests not addressed to `federation.F3` or not sent by A2/F1.
+- *Trust-boundary note:* `F3SanctionsAgent.run()` assumes its `SanctionsCheckRequest` has already passed signed-envelope, freshness, replay, and allowlist checks. P14/P15 owns that verification before dispatch to F3; F3 itself only enforces the typed request, recipient, and sender-role contract.
 - *Out of scope for this part:* no real OFAC integration; no fuzzy-match upgrade; no list update or refresh mechanism.
 - *Acceptance:* `tests/test_f3.py`:
   - Querying the S1-D PEP entity's `name_hash` returns `pep_relation=True`.
