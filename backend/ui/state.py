@@ -1455,6 +1455,7 @@ def _dp_ledger_entries(state: SessionOrchestratorState) -> list[DpLedgerEntrySna
     if state.original_query is None:
         return []
     entries: list[DpLedgerEntrySnapshot] = []
+    cumulative_spend: dict[str, float] = {}
     for response in state.a3_responses:
         rho_spent = sum(record.rho_debited for record in response.provenance)
         if rho_spent <= 0:
@@ -1464,12 +1465,14 @@ def _dp_ledger_entries(state: SessionOrchestratorState) -> list[DpLedgerEntrySna
             requesting_bank_id=state.original_query.requesting_bank_id,
             responding_bank_id=response.responding_bank_id,
         )
+        current_total_spend = cumulative_spend.get(requester.stable_key, 0.0) + rho_spent
+        cumulative_spend[requester.stable_key] = current_total_spend
         entries.append(
             DpLedgerEntrySnapshot(
                 requester_key=_redacted_requester_key(requester),
                 responding_bank_id=response.responding_bank_id,
                 rho_spent=rho_spent,
-                rho_remaining=max(1.0 - rho_spent, 0.0),
+                rho_remaining=max(1.0 - current_total_spend, 0.0),
                 rho_max=1.0,
             )
         )
