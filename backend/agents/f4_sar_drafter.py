@@ -367,11 +367,13 @@ def contributor_attributions(
     """Create one deterministic attribution block per contributing bank."""
     attributions: list[ContributorAttribution] = []
     for bank_id, bank_contributions in by_bank.items():
-        evidence_ids = [
-            evidence.evidence_id
-            for contribution in bank_contributions
-            for evidence in contribution.contributed_evidence
-        ]
+        evidence_ids = unique_values(
+            [
+                evidence.evidence_id
+                for contribution in bank_contributions
+                for evidence in contribution.contributed_evidence
+            ]
+        )
         attributions.append(
             ContributorAttribution(
                 bank_id=bank_id,
@@ -423,12 +425,14 @@ def contribution_summary(
         high = max(high for _, high in amount_ranges)
         amount_text = f"amount range {low}-{high} cents"
     combined_rationale = " ".join(
-        unique_values(
-            [
-                contribution.local_rationale
-                for contribution in contributions
-                if contribution.local_rationale
-            ]
+        sorted(
+            unique_values(
+                [
+                    contribution.local_rationale
+                    for contribution in contributions
+                    if contribution.local_rationale
+                ]
+            )
         )
     )
     rationale = truncate_text(combined_rationale, 220)
