@@ -83,6 +83,7 @@ class F5AuditConfig(BaseModel):
         default=DEFAULT_BUDGET_PRESSURE_RHO_REMAINING,
         ge=0.0,
     )
+    min_dismissal_words: int = Field(default=4, ge=1)
     rate_limited_message_type: str = MessageType.SEC314B_QUERY.value
     governed_message_types: tuple[str, ...] = (
         MessageType.SEC314B_QUERY.value,
@@ -357,14 +358,14 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             )
         return findings
 
-    @staticmethod
     def _dismissal_findings(
+        self,
         dismissals: Iterable[DismissalRationale],
     ) -> list[ComplianceFinding]:
         return [
             _dismissal_finding(dismissal)
             for dismissal in dismissals
-            if _dismissal_is_vague(dismissal)
+            if _dismissal_is_vague(dismissal, self.config)
         ]
 
 
@@ -384,12 +385,15 @@ def _event_ids(events: Iterable[AuditEvent]) -> list[UUID]:
     return [event.event_id for event in events]
 
 
-def _dismissal_is_vague(dismissal: DismissalRationale) -> bool:
+def _dismissal_is_vague(
+    dismissal: DismissalRationale,
+    config: F5AuditConfig,
+) -> bool:
     reason = dismissal.reason.strip().lower()
     word_count = len(reason.split())
     return (
         reason in _VAGUE_DISMISSAL_REASONS
-        or (word_count < 4 and not dismissal.evidence_considered)
+        or (word_count < config.min_dismissal_words and not dismissal.evidence_considered)
     )
 
 

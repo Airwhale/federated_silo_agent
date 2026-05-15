@@ -350,3 +350,22 @@ def test_f5_vague_dismissal_finding_links_to_dismissal_message() -> None:
     assert result.findings[0].kind == DISMISSAL_REVIEW_FINDING
     assert result.findings[0].related_event_ids == [dismissal.message_id]
     assert str(dismissal.alert_id) in result.findings[0].detail
+
+
+def test_f5_dismissal_word_threshold_is_configurable() -> None:
+    f5, _ = agent(config=F5AuditConfig(min_dismissal_words=6))
+    dismissal = DismissalRationale(
+        sender_agent_id="bank_alpha.A2",
+        sender_role=AgentRole.A2,
+        sender_bank_id=BankId.BANK_ALPHA,
+        recipient_agent_id="federation.F5",
+        alert_id=uuid4(),
+        reason="reviewed local alert evidence",
+    )
+
+    result = f5.run(
+        request([rho_debited_event(rho_remaining=5.0)], dismissals=[dismissal])
+    )
+
+    assert result.human_review_required is True
+    assert result.findings[0].kind == DISMISSAL_REVIEW_FINDING
