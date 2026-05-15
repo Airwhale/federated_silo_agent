@@ -243,7 +243,7 @@ class StubBankStatsPrimitives:
     ) -> PrimitiveResult:
         _ = requester
         return PrimitiveResult(
-            value=max(len(name_hashes), 1),
+            value=len(name_hashes),
             records=[
                 _primitive_record(
                     field_name="entity_count",
