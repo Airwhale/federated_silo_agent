@@ -1076,6 +1076,10 @@ def _build_demo_principals() -> dict[str, DemoPrincipal]:
         ("bank_alpha.A2", AgentRole.A2, BankId.BANK_ALPHA),
         ("bank_beta.A3", AgentRole.A3, BankId.BANK_BETA),
         ("federation.F1", AgentRole.F1, BankId.FEDERATION),
+        ("bank_alpha.F6", AgentRole.F6, BankId.BANK_ALPHA),
+        ("bank_beta.F6", AgentRole.F6, BankId.BANK_BETA),
+        ("bank_gamma.F6", AgentRole.F6, BankId.BANK_GAMMA),
+        ("federation.F6", AgentRole.F6, BankId.FEDERATION),
     ]
     principals: dict[str, DemoPrincipal] = {}
     for agent_id, role, bank_id in specs:
@@ -1095,7 +1099,7 @@ def _allowlist_entries(principals: dict[str, DemoPrincipal]) -> list[PrincipalAl
     alpha_a2 = principals["bank_alpha.A2"]
     beta_a3 = principals["bank_beta.A3"]
     f1 = principals["federation.F1"]
-    return [
+    entries = [
         PrincipalAllowlistEntry(
             agent_id=alpha_a2.agent_id,
             role=alpha_a2.role,
@@ -1130,6 +1134,23 @@ def _allowlist_entries(principals: dict[str, DemoPrincipal]) -> list[PrincipalAl
             allowed_routes=[RouteKind.PEER_314B, RouteKind.LOCAL_CONTRIBUTION],
         ),
     ]
+    entries.extend(
+        PrincipalAllowlistEntry(
+            agent_id=principal.agent_id,
+            role=principal.role,
+            bank_id=principal.bank_id,
+            signing_key_id=principal.signing_key_id,
+            public_key=principal.public_key,
+            allowed_message_types=[
+                MessageType.POLICY_EVALUATION_RESULT.value,
+                MessageType.AUDIT_EVENT.value,
+            ],
+            allowed_recipients=["*"],
+        )
+        for principal in principals.values()
+        if principal.role == AgentRole.F6
+    )
+    return entries
 
 
 def _base_a2_query(

@@ -53,6 +53,21 @@ def test_f2_component_snapshot_surfaces_mode_without_leaking_hashes() -> None:
     assert "suspect_entity_hashes" not in body_text
 
 
+def test_signing_snapshot_includes_per_domain_f6_policy_keys() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.get(f"/sessions/{session_id}/components/signing")
+
+    assert response.status_code == 200
+    key_ids = response.json()["signing"]["known_signing_key_ids"]
+    assert "bank_alpha.F6.demo-key" in key_ids
+    assert "bank_beta.F6.demo-key" in key_ids
+    assert "bank_gamma.F6.demo-key" in key_ids
+    assert "federation.F6.demo-key" in key_ids
+    assert response.json()["signing"]["private_key_material_exposed"] is False
+
+
 def test_f3_component_snapshot_surfaces_watchlist_size_without_leaking_contents() -> None:
     # P10 adds an F3-specific branch to ``component_snapshot`` so the
     # judge-console inspector can show watchlist-loaded operational
