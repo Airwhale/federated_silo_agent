@@ -218,13 +218,19 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                         burst_events[window_event.event_id] = window_event
                 elif was_in_violation:
                     findings.append(
-                        self._rate_limit_finding(actor_id, list(burst_events.values()))
+                        self._rate_limit_finding(
+                            actor_id,
+                            _sort_events(burst_events.values()),
+                        )
                     )
                     in_violation = False
                     burst_events.clear()
             if in_violation:
                 findings.append(
-                    self._rate_limit_finding(actor_id, list(burst_events.values()))
+                    self._rate_limit_finding(
+                        actor_id,
+                        _sort_events(burst_events.values()),
+                    )
                 )
         return findings
 
@@ -406,7 +412,11 @@ def _dismissal_finding(dismissal: DismissalRationale) -> ComplianceFinding:
 
 
 def _event_ids(events: Iterable[AuditEvent]) -> list[UUID]:
-    return [event.event_id for event in events]
+    return [event.event_id for event in _sort_events(events)]
+
+
+def _sort_events(events: Iterable[AuditEvent]) -> list[AuditEvent]:
+    return sorted(events, key=lambda event: event.created_at)
 
 
 def _dismissal_is_vague(
