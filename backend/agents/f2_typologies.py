@@ -15,6 +15,38 @@ REPEATED_EDGE_BUCKET_INDEXES = (2, 3)
 DEFAULT_HIGH_CONFIDENCE = 0.88
 DEFAULT_NONE_CONFIDENCE = 0.18
 
+STRUCTURING_BASE_SCORE = 0.18
+STRUCTURING_WEIGHT_ACTIVE_BANKS = 0.20
+STRUCTURING_NORM_ACTIVE_BANKS = 3.0
+STRUCTURING_WEIGHT_CANDIDATES = 0.18
+STRUCTURING_NORM_CANDIDATES = 5.0
+STRUCTURING_WEIGHT_SUB_CTR_RATIO = 0.22
+STRUCTURING_WEIGHT_REPEATED_EDGE_RATIO = 0.14
+STRUCTURING_WEIGHT_SUB_CTR_ABS = 0.08
+STRUCTURING_NORM_SUB_CTR_ABS = 60.0
+
+LAYERING_BASE_SCORE = 0.16
+LAYERING_WEIGHT_ACTIVE_BANKS = 0.18
+LAYERING_NORM_ACTIVE_BANKS = 3.0
+LAYERING_WEIGHT_CANDIDATES = 0.16
+LAYERING_NORM_CANDIDATES = 4.0
+LAYERING_WEIGHT_HIGH_VALUE_RATIO = 0.25
+LAYERING_WEIGHT_MID_VALUE_RATIO = 0.10
+LAYERING_WEIGHT_HIGH_VALUE_ABS = 0.15
+LAYERING_NORM_HIGH_VALUE_ABS = 20.0
+
+MIN_ACTIVE_BANKS_FOR_PATTERN = 2
+MIN_CANDIDATES_FOR_PATTERN = 3
+CLEAR_NEGATIVE_MIN_FLOW_BUCKETS = 15
+CLEAR_NEGATIVE_MAX_SCORE = 0.50
+
+STRUCTURING_MIN_SUB_CTR_BUCKETS = 25
+STRUCTURING_MIN_SUB_CTR_RATIO = 0.45
+STRUCTURING_MIN_REPEATED_EDGES = 3
+
+LAYERING_MIN_HIGH_VALUE_BUCKETS = 8
+LAYERING_MIN_HIGH_VALUE_RATIO = 0.35
+
 
 class TypologySignals(BaseModel):
     """DP-noised aggregate features used by F2 rule gates."""
@@ -64,9 +96,8 @@ def extract_signals(aggregates: list[BankAggregate]) -> TypologySignals:
 
         total_edge_buckets += edge_total
         repeated_edge_buckets += sum(
-            aggregate.edge_count_distribution[index]
+            _bucket_value(aggregate.edge_count_distribution, index)
             for index in REPEATED_EDGE_BUCKET_INDEXES
-            if index < len(aggregate.edge_count_distribution)
         )
         total_flow_buckets += flow_total
         sub_ctr_flow_buckets += _bucket_value(
@@ -91,20 +122,27 @@ def extract_signals(aggregates: list[BankAggregate]) -> TypologySignals:
     high_value_ratio = _ratio(high_value_flow_buckets, total_flow_buckets)
 
     structuring_score = _clamp(
-        0.18
-        + 0.20 * min(active_bank_count / 3.0, 1.0)
-        + 0.18 * min(candidate_count / 5.0, 1.0)
-        + 0.22 * sub_ctr_ratio
-        + 0.14 * repeated_edge_ratio
-        + 0.08 * min(sub_ctr_flow_buckets / 60.0, 1.0)
+        STRUCTURING_BASE_SCORE
+        + STRUCTURING_WEIGHT_ACTIVE_BANKS
+        * min(active_bank_count / STRUCTURING_NORM_ACTIVE_BANKS, 1.0)
+        + STRUCTURING_WEIGHT_CANDIDATES
+        * min(candidate_count / STRUCTURING_NORM_CANDIDATES, 1.0)
+        + STRUCTURING_WEIGHT_SUB_CTR_RATIO * sub_ctr_ratio
+        + STRUCTURING_WEIGHT_REPEATED_EDGE_RATIO * repeated_edge_ratio
+        + STRUCTURING_WEIGHT_SUB_CTR_ABS
+        * min(sub_ctr_flow_buckets / STRUCTURING_NORM_SUB_CTR_ABS, 1.0)
     )
     layering_score = _clamp(
-        0.16
-        + 0.18 * min(active_bank_count / 3.0, 1.0)
-        + 0.16 * min(candidate_count / 4.0, 1.0)
-        + 0.25 * high_value_ratio
-        + 0.10 * _ratio(mid_value_flow_buckets + high_value_flow_buckets, total_flow_buckets)
-        + 0.15 * min(high_value_flow_buckets / 20.0, 1.0)
+        LAYERING_BASE_SCORE
+        + LAYERING_WEIGHT_ACTIVE_BANKS
+        * min(active_bank_count / LAYERING_NORM_ACTIVE_BANKS, 1.0)
+        + LAYERING_WEIGHT_CANDIDATES
+        * min(candidate_count / LAYERING_NORM_CANDIDATES, 1.0)
+        + LAYERING_WEIGHT_HIGH_VALUE_RATIO * high_value_ratio
+        + LAYERING_WEIGHT_MID_VALUE_RATIO
+        * _ratio(mid_value_flow_buckets, total_flow_buckets)
+        + LAYERING_WEIGHT_HIGH_VALUE_ABS
+        * min(high_value_flow_buckets / LAYERING_NORM_HIGH_VALUE_ABS, 1.0)
     )
 
     return TypologySignals(
@@ -160,31 +198,34 @@ def deterministic_match(signals: TypologySignals) -> TypologyMatch | None:
 
 def _is_structuring_ring(signals: TypologySignals) -> bool:
     return (
-        len(signals.active_banks) >= 2
-        and len(signals.candidate_entity_hashes) >= 3
-        and signals.sub_ctr_flow_buckets >= 25
-        and _ratio(signals.sub_ctr_flow_buckets, signals.total_flow_buckets) >= 0.45
+        len(signals.active_banks) >= MIN_ACTIVE_BANKS_FOR_PATTERN
+        and len(signals.candidate_entity_hashes) >= MIN_CANDIDATES_FOR_PATTERN
+        and signals.sub_ctr_flow_buckets >= STRUCTURING_MIN_SUB_CTR_BUCKETS
+        and _ratio(signals.sub_ctr_flow_buckets, signals.total_flow_buckets)
+        >= STRUCTURING_MIN_SUB_CTR_RATIO
         and signals.sub_ctr_flow_buckets > signals.high_value_flow_buckets
-        and signals.repeated_edge_buckets >= 3
+        and signals.repeated_edge_buckets >= STRUCTURING_MIN_REPEATED_EDGES
     )
 
 
 def _is_layering_chain(signals: TypologySignals) -> bool:
     return (
-        len(signals.active_banks) >= 2
-        and len(signals.candidate_entity_hashes) >= 3
-        and signals.high_value_flow_buckets >= 8
-        and _ratio(signals.high_value_flow_buckets, signals.total_flow_buckets) >= 0.35
+        len(signals.active_banks) >= MIN_ACTIVE_BANKS_FOR_PATTERN
+        and len(signals.candidate_entity_hashes) >= MIN_CANDIDATES_FOR_PATTERN
+        and signals.high_value_flow_buckets >= LAYERING_MIN_HIGH_VALUE_BUCKETS
+        and _ratio(signals.high_value_flow_buckets, signals.total_flow_buckets)
+        >= LAYERING_MIN_HIGH_VALUE_RATIO
         and signals.high_value_flow_buckets > signals.sub_ctr_flow_buckets
     )
 
 
 def _is_clear_negative(signals: TypologySignals) -> bool:
     return (
-        len(signals.active_banks) < 2
-        or len(signals.candidate_entity_hashes) < 3
-        or signals.total_flow_buckets < 15
-        or max(signals.structuring_score, signals.layering_score) < 0.50
+        len(signals.active_banks) < MIN_ACTIVE_BANKS_FOR_PATTERN
+        or len(signals.candidate_entity_hashes) < MIN_CANDIDATES_FOR_PATTERN
+        or signals.total_flow_buckets < CLEAR_NEGATIVE_MIN_FLOW_BUCKETS
+        or max(signals.structuring_score, signals.layering_score)
+        < CLEAR_NEGATIVE_MAX_SCORE
     )
 
 

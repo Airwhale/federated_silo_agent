@@ -34,6 +34,7 @@ from shared.messages import (
     CounterpartyLinkagePayload,
     EntityPresencePayload,
     HistogramResponseValue,
+    HashListResponseValue,
     IntResponseValue,
     LocalSiloContributionRequest,
     PrimitiveCallRecord,
@@ -60,26 +61,23 @@ class FakePrimitives:
             value=3,
             records=[primitive_record(field_name="alert_count", rho_debited=0.02)],
         )
-        self.pattern_result = PrimitiveResult(
-            value=BankAggregate(
-                bank_id=bank_id,
-                edge_count_distribution=[1, 0, 2, 0],
-                bucketed_flow_histogram=[0, 4, 1, 0, 0],
-                rho_debited=0.04,
+        self.pattern_records = [
+            primitive_record(
+                field_name="edge_count_distribution",
+                returned_value_kind=ResponseValueKind.HISTOGRAM,
+                rho_debited=0.02,
             ),
-            records=[
-                primitive_record(
-                    field_name="edge_count_distribution",
-                    returned_value_kind=ResponseValueKind.HISTOGRAM,
-                    rho_debited=0.02,
-                ),
-                primitive_record(
-                    field_name="bucketed_flow_histogram",
-                    returned_value_kind=ResponseValueKind.HISTOGRAM,
-                    rho_debited=0.02,
-                ),
-            ],
-        )
+            primitive_record(
+                field_name="bucketed_flow_histogram",
+                returned_value_kind=ResponseValueKind.HISTOGRAM,
+                rho_debited=0.02,
+            ),
+            primitive_record(
+                field_name="candidate_entity_hashes",
+                returned_value_kind=ResponseValueKind.HASH_LIST,
+                rho_debited=0.0,
+            ),
+        ]
 
     def count_entities_by_name_hash(
         self,
@@ -127,10 +125,23 @@ class FakePrimitives:
         *,
         window: tuple[date, date],
         requester: RequesterKey,
+        candidate_entity_hashes: list[str] | None = None,
         rho: float = 0.04,
     ) -> PrimitiveResult:
-        self.calls.append(f"pattern:{window[0]}:{window[1]}:{rho}")
-        return self.pattern_result
+        candidates = list(candidate_entity_hashes or [])
+        self.calls.append(
+            f"pattern:{window[0]}:{window[1]}:{rho}:{','.join(candidates)}"
+        )
+        return PrimitiveResult(
+            value=BankAggregate(
+                bank_id=self.bank_id,
+                edge_count_distribution=[1, 0, 2, 0],
+                bucketed_flow_histogram=[0, 4, 1, 0, 0],
+                candidate_entity_hashes=candidates,
+                rho_debited=0.04,
+            ),
+            records=self.pattern_records,
+        )
 
 
 def primitive_record(
@@ -656,9 +667,10 @@ def test_a3_accepts_local_contribution_request_for_pattern_aggregate() -> None:
     assert response.fields == {
         "edge_count_distribution": HistogramResponseValue(histogram=[1, 0, 2, 0]),
         "bucketed_flow_histogram": HistogramResponseValue(histogram=[0, 4, 1, 0, 0]),
+        "candidate_entity_hashes": HashListResponseValue(hash_list=[HASH_A]),
     }
     assert response.rho_debited_total == 0.04
-    assert primitives.calls == ["pattern:2026-05-01:2026-05-13:0.04"]
+    assert primitives.calls == ["pattern:2026-05-01:2026-05-13:0.04:aaaaaaaaaaaaaaaa"]
 
 
 def test_a3_llm_composition_wraps_matching_bundle_deterministically() -> None:

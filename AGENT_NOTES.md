@@ -289,19 +289,19 @@ What changed:
   ambiguous classifications.
 - Added `BankAggregate.candidate_entity_hashes` because the existing
   aggregate-only contract could not support `GraphPatternResponse.suspect_entity_hashes`.
-- Updated P7 `pattern_aggregate_for_f2` to populate the top 100 active
-  hash-only candidate tokens by transaction count, keeping the boundary capped
-  and avoiding raw names or transactions.
+- Updated P7/A3 so `candidate_entity_hashes` are approved query tokens carried
+  through for F2 output binding, not top-active local customers mined from bank
+  rows.
 - Marked F2 live in the UI readiness snapshot and added a generic F2 inspector
   branch exposing mode/rules/input boundary only.
 
 Assumptions:
 - F2 accepts `GraphPatternRequest` only from F1 and only inside the federation
   trust domain.
-- Candidate hashes are cross-bank linkage tokens, not customer names; they are
-  needed for F2 to return suspect hash sets honestly.
-- The top-100 candidate cap is the current Pydantic boundary and preserves the
-  planted high-activity fixtures used by the demo.
+- Candidate hashes are cross-bank linkage tokens, not customer names. They are
+  needed for F2 to return suspect hash sets honestly, but must be scoped to the
+  approved query.
+- The 100-token candidate cap is the current Pydantic boundary.
 
 Blockers:
 - None.
