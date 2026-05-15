@@ -326,6 +326,41 @@ def test_policy_result_decision_must_match_strongest_rule_hit() -> None:
         )
 
 
+def test_policy_rule_hit_redact_requires_at_least_one_redacted_field() -> None:
+    # A REDACT decision is meaningless without at least one redacted
+    # field. Two enclosing-result constraints make a REDACT hit with
+    # empty redacted_fields an unreachable state: PolicyEvaluationResult
+    # requires redacted_field_count >= 1 for REDACT decisions AND
+    # requires redacted_field_count to equal the sum of
+    # len(hit.redacted_fields). Enforcing the invariant on the hit
+    # itself fails loud at construction rather than producing a
+    # deferred result-level validation error. ALLOW/ESCALATE/BLOCK
+    # hits may legitimately carry zero redacted fields.
+    with pytest.raises(ValidationError, match="REDACT decision requires"):
+        PolicyRuleHit(
+            rule_id="F6-B-redact",
+            decision=PolicyDecision.REDACT,
+            severity=PolicySeverity.MEDIUM,
+            detail="Should not be constructible without redacted_fields.",
+            redacted_fields=[],
+        )
+
+    # Counter-cases: other decision values with empty redacted_fields
+    # are still valid -- the new validator only constrains REDACT.
+    for decision in (
+        PolicyDecision.ALLOW,
+        PolicyDecision.ESCALATE,
+        PolicyDecision.BLOCK,
+    ):
+        PolicyRuleHit(
+            rule_id=f"F6-B-{decision.value}",
+            decision=decision,
+            severity=PolicySeverity.LOW,
+            detail=f"{decision.value} hit with no redactions is valid.",
+            redacted_fields=[],
+        )
+
+
 def test_sar_assembly_request_must_target_f4() -> None:
     with pytest.raises(ValidationError, match="federation.F4"):
         SARAssemblyRequest(

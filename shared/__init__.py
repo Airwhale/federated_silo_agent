@@ -76,9 +76,9 @@ from shared.messages import (
 
 # Keep public exports alphabetized so drift is visible when adding a contract.
 __all__ = [
+    "AgentMessage",
     "AgentRole",
     "AggregateActivityPayload",
-    "AgentMessage",
     "Alert",
     "AuditEvent",
     "AuditEventKind",
@@ -104,12 +104,11 @@ __all__ = [
     "GraphPatternResponse",
     "HashListResponseValue",
     "HashString",
-    "hash_identifier",
     "HistogramResponseValue",
     "HumanReviewPayload",
     "IntResponseValue",
-    "LtVerdictPayload",
     "LocalSiloContributionRequest",
+    "LtVerdictPayload",
     "Message",
     "MessageSentPayload",
     "MessageType",
@@ -143,6 +142,7 @@ __all__ = [
     "Sha256Hex",
     "SignalType",
     "TypologyCode",
+    "hash_identifier",
     "is_cross_bank_hash_token",
     "reject_demo_customer_names",
     "response_value_kind",

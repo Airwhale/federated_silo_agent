@@ -652,6 +652,21 @@ class GraphPatternResponse(Message):
         return _reject_demo_customer_names(value, "narrative")
 
 
+# Strict ordering of ``PolicyDecision`` values from weakest to strongest.
+# Used by ``PolicyEvaluationResult.validate_policy_result`` to confirm the
+# top-level ``decision`` matches the strongest individual ``rule_hit``.
+# Defined at module level (not inside the validator) so the dict is
+# constructed once at import time rather than rebuilt on every result
+# validation. Order matters: ``BLOCK`` is the strongest verdict and must
+# override any combination of weaker hits.
+_POLICY_DECISION_RANK: dict[PolicyDecision, int] = {
+    PolicyDecision.ALLOW: 0,
+    PolicyDecision.REDACT: 1,
+    PolicyDecision.ESCALATE: 2,
+    PolicyDecision.BLOCK: 3,
+}
+
+
 class PolicyRuleHit(StrictModel):
     """One Lobster Trap or AML-adapter rule hit."""
 
@@ -665,6 +680,27 @@ class PolicyRuleHit(StrictModel):
     @classmethod
     def detail_must_not_contain_customer_names(cls, value: str) -> str:
         return _reject_demo_customer_names(value, "detail")
+
+    @model_validator(mode="after")
+    def redact_decision_requires_redacted_fields(self) -> Self:
+        # A REDACT decision is meaningless without at least one redacted
+        # field: ``PolicyEvaluationResult`` requires
+        # ``redacted_field_count >= 1`` when its top-level decision is
+        # REDACT, *and* requires ``redacted_field_count`` to equal the
+        # sum of ``len(hit.redacted_fields)`` across all hits. If a
+        # REDACT hit had an empty ``redacted_fields`` list, those two
+        # constraints together would be unsatisfiable -- the schema
+        # would silently admit a hit that no enclosing result could
+        # accept. Enforcing the invariant here, at hit construction,
+        # makes the impossible state unreachable rather than
+        # discoverable via deferred validation errors at the result
+        # level. ALLOW, ESCALATE, and BLOCK hits may legitimately
+        # carry zero redacted fields.
+        if self.decision == PolicyDecision.REDACT and not self.redacted_fields:
+            raise ValueError(
+                "REDACT decision requires at least one redacted field"
+            )
+        return self
 
 
 class PolicyEvaluationRequest(Message):
@@ -730,15 +766,9 @@ class PolicyEvaluationResult(Message):
             raise ValueError("non-allow policy decisions require at least one rule_hit")
 
         if self.rule_hits:
-            decision_rank = {
-                PolicyDecision.ALLOW: 0,
-                PolicyDecision.REDACT: 1,
-                PolicyDecision.ESCALATE: 2,
-                PolicyDecision.BLOCK: 3,
-            }
             strongest_rule_decision = max(
                 (hit.decision for hit in self.rule_hits),
-                key=lambda decision: decision_rank[decision],
+                key=lambda decision: _POLICY_DECISION_RANK[decision],
             )
             if self.decision != strongest_rule_decision:
                 raise ValueError(
@@ -1082,6 +1112,14 @@ class AuditReviewResult(Message):
         return self
 
 
+# Public message types, ordered by **investigation-lifecycle position**
+# rather than alphabetically. Reading top-to-bottom traces a canonical run:
+# Alert -> Sec314b query/response -> sanctions -> graph -> policy -> SAR
+# assembly -> audit review. Alphabetical ordering would scatter related
+# message pairs (e.g. ``GraphPatternRequest`` next to ``Sec314bQuery``
+# rather than to ``GraphPatternResponse``) and obscure the flow. The
+# discriminator-tagged ``AgentMessage`` union below mirrors the same
+# ordering for the same reason.
 PUBLIC_MESSAGE_MODELS: tuple[type[BaseModel], ...] = (
     Alert,
     Sec314bQuery,
