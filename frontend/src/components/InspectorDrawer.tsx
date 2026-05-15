@@ -29,28 +29,34 @@ export function InspectorDrawer() {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/70" />
         <Dialog.Content className="fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl">
-          <div className="flex items-start justify-between gap-3 border-b border-slate-800 p-4">
-            <div className="min-w-0">
-              <Dialog.Title className="truncate text-lg font-semibold text-white">
+          {/*
+            Compact drawer header: title + inline trust-domain badge +
+            status pill + close button on one row. Dropped the previous
+            ``Output: ...`` helper paragraph (the panels below already
+            show what's available; the helper read as filler).
+          */}
+          <div className="flex items-center justify-between gap-3 border-b border-slate-800 px-3 py-2">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <Dialog.Title className="truncate text-sm font-semibold text-slate-100">
                 {snapshot?.title ?? selection?.componentId ?? "Inspector"}
               </Dialog.Title>
-              <Dialog.Description className="mt-1 text-sm text-slate-500">
+              <Dialog.Description className="truncate text-[11px] uppercase tracking-wide text-slate-500">
                 {selection?.instanceId ? trustDomainLabel(selection.instanceId) : "Global component"}
               </Dialog.Description>
-              <p className="mt-1 text-xs text-slate-500">
-                Output: current snapshot plus any security, DP, route, or provider state.
-              </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               {snapshot ? <StatusPill status={snapshot.status} /> : null}
-              <Dialog.Close className="rounded-md border border-slate-700 p-2 text-slate-300 hover:bg-slate-800">
-                <X size={16} aria-hidden />
+              <Dialog.Close
+                className="rounded border border-slate-800 p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                aria-label="Close inspector"
+              >
+                <X size={14} aria-hidden />
               </Dialog.Close>
             </div>
           </div>
-          <div className="flex-1 space-y-3 overflow-y-auto p-4 scrollbar-thin">
+          <div className="flex-1 space-y-2 overflow-y-auto p-3 scrollbar-thin">
             {!snapshot ? (
-              <div className="rounded-lg border border-slate-800 p-4 text-sm text-slate-500">
+              <div className="rounded-lg border border-slate-800 p-3 text-xs text-slate-500">
                 Snapshot loading.
               </div>
             ) : (

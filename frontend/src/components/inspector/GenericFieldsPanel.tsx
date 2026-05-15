@@ -1,4 +1,5 @@
 import type { ComponentSnapshot } from "../../api/types";
+import { InspectorSection } from "./InspectorSection";
 import { KeyValueGrid } from "./KeyValueGrid";
 
 type Props = {
@@ -6,18 +7,17 @@ type Props = {
 };
 
 export function GenericFieldsPanel({ snapshot }: Props) {
+  const fields = snapshot.fields ?? [];
+  if (fields.length === 0) return null;
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <h3 className="text-sm font-semibold text-white">Fields</h3>
-      <div className="mt-3">
-        <KeyValueGrid
-          rows={snapshot.fields?.map((field) => ({
-            label: field.name,
-            value: field.redacted ? "redacted" : field.value,
-            tone: field.redacted ? "muted" : "default",
-          })) ?? []}
-        />
-      </div>
-    </section>
+    <InspectorSection title="Fields">
+      <KeyValueGrid
+        rows={fields.map((field) => ({
+          label: field.name,
+          value: field.redacted ? "redacted" : field.value,
+          tone: field.redacted ? "muted" : "default",
+        }))}
+      />
+    </InspectorSection>
   );
 }

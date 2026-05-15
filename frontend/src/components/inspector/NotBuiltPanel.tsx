@@ -1,4 +1,5 @@
 import type { ComponentSnapshot } from "../../api/types";
+import { InspectorSection } from "./InspectorSection";
 
 type Props = {
   snapshot: ComponentSnapshot;
@@ -6,11 +7,22 @@ type Props = {
 
 export function NotBuiltPanel({ snapshot }: Props) {
   if (snapshot.status !== "not_built") return null;
-  const available = snapshot.fields?.find((field) => field.name === "available_after")?.value ?? "later";
+  const available =
+    snapshot.fields?.find((field) => field.name === "available_after")?.value ?? "later";
+  const detail = snapshot.fields?.find((field) => field.name === "detail")?.value;
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <h3 className="text-sm font-semibold text-white">Not Built</h3>
-      <p className="mt-2 text-sm text-slate-400">Available after {available}.</p>
-    </section>
+    <InspectorSection
+      title="Not built"
+      status={snapshot.status}
+      hint={`Available after ${available}`}
+    >
+      {detail ? (
+        <p className="text-slate-400">{detail}</p>
+      ) : (
+        <p className="text-slate-500">
+          Live inspector data lands when the milestone above completes.
+        </p>
+      )}
+    </InspectorSection>
   );
 }
