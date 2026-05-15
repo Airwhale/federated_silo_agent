@@ -76,5 +76,7 @@ def next_turn(state: object) -> AgentTurn | None:
 
 def _routed_bank(request: Sec314bQuery | LocalSiloContributionRequest) -> BankId:
     if isinstance(request, Sec314bQuery):
+        if not request.target_bank_ids:
+            raise ValueError("routed Sec314bQuery is missing target_bank_ids")
         return request.target_bank_ids[0]
     return request.responding_bank_id

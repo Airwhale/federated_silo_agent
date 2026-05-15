@@ -81,6 +81,11 @@ class OrchestratorPrincipals:
                 for bank_id in BANK_IDS
             ),
             ("federation.F1", AgentRole.F1, BankId.FEDERATION),
+            *(
+                (f"{bank_id.value}.F6", AgentRole.F6, bank_id)
+                for bank_id in BANK_IDS
+            ),
+            ("federation.F6", AgentRole.F6, BankId.FEDERATION),
         ]
         for agent_id, role, bank_id in specs:
             pair = generate_key_pair(f"{agent_id}.demo-key")
@@ -391,6 +396,22 @@ def _allowlist_entries(
             allowed_recipients=["*"],
             allowed_routes=[RouteKind.PEER_314B, RouteKind.LOCAL_CONTRIBUTION],
         )
+    )
+    entries.extend(
+        PrincipalAllowlistEntry(
+            agent_id=principal.agent_id,
+            role=principal.role,
+            bank_id=principal.bank_id,
+            signing_key_id=principal.signing_key_id,
+            public_key=principal.public_key,
+            allowed_message_types=[
+                MessageType.POLICY_EVALUATION_RESULT.value,
+                MessageType.AUDIT_EVENT.value,
+            ],
+            allowed_recipients=["*"],
+        )
+        for principal in principals.values()
+        if principal.role == AgentRole.F6
     )
     return entries
 

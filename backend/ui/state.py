@@ -22,13 +22,10 @@ from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.a3_states import A3TurnInput
 from backend.agents.f3_sanctions import load_watchlist
 from backend.orchestrator import Orchestrator, OrchestratorPrincipals
-from backend.orchestrator.agents import OrchestratorPrincipal
 from backend.orchestrator.runtime import SessionOrchestratorState
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
 from backend.security import (
     PrincipalNotAllowed,
-    PrincipalAllowlist,
-    PrincipalAllowlistEntry,
     ReplayCache,
     ReplayCacheSnapshot,
     ReplayDetected,
@@ -37,7 +34,6 @@ from backend.security import (
 )
 from backend.security.signing import (
     approved_body_hash,
-    generate_key_pair,
     sign_message,
     sign_model_signature,
 )
@@ -46,7 +42,6 @@ from backend.silos.local_reader import bank_db_path
 from shared.enums import (
     AgentRole,
     BankId,
-    MessageType,
     QueryShape,
     RouteKind,
     TypologyCode,
@@ -249,22 +244,11 @@ class DemoControlService:
             raise ValueError(
                 f"MAX_ACTIVE_SESSIONS must be >= 1, got {MAX_ACTIVE_SESSIONS}"
             )
-        self._principals = _build_demo_principals()
-        self._allowlist = PrincipalAllowlist(_allowlist_entries(self._principals))
-        self._orchestrator_principals = OrchestratorPrincipals(
-            principals={
-                agent_id: OrchestratorPrincipal(
-                    agent_id=principal.agent_id,
-                    role=principal.role,
-                    bank_id=principal.bank_id,
-                    signing_key_id=principal.signing_key_id,
-                    private_key=principal.private_key,
-                    public_key=principal.public_key,
-                )
-                for agent_id, principal in self._principals.items()
-            },
-            allowlist=self._allowlist,
+        self._orchestrator_principals = OrchestratorPrincipals.build()
+        self._principals = _demo_principals_from_orchestrator(
+            self._orchestrator_principals
         )
+        self._allowlist = self._orchestrator_principals.allowlist
         self._orchestrator = Orchestrator(principals=self._orchestrator_principals)
         # Python dicts preserve insertion order since 3.7, which gives us
         # FIFO eviction for free without pulling in collections.OrderedDict.
@@ -307,13 +291,10 @@ class DemoControlService:
         session = self._session(session_id)
         with session.lock:
             self._ensure_orchestrator_state(session)
-            turns_run = 0
-            while turns_run < 50:
-                ran_turn = self._run_one_orchestrator_turn(session)
-                if not ran_turn:
+            for _ in range(50):
+                if not self._run_one_orchestrator_turn(session):
                     break
-                turns_run += 1
-            if turns_run >= 50:
+            else:
                 session.phase = "turn_cap_reached"
                 session.append_event(
                     TimelineEventSnapshot(
@@ -1196,100 +1177,20 @@ class DemoControlService:
                 raise KeyError(f"unknown session_id: {session_id}") from exc
 
 
-def _build_demo_principals() -> dict[str, DemoPrincipal]:
-    specs = [
-        *(
-            (f"{bank_id.value}.A2", AgentRole.A2, bank_id)
-            for bank_id in (BankId.BANK_ALPHA, BankId.BANK_BETA, BankId.BANK_GAMMA)
-        ),
-        *(
-            (f"{bank_id.value}.A3", AgentRole.A3, bank_id)
-            for bank_id in (BankId.BANK_ALPHA, BankId.BANK_BETA, BankId.BANK_GAMMA)
-        ),
-        ("federation.F1", AgentRole.F1, BankId.FEDERATION),
-        ("bank_alpha.F6", AgentRole.F6, BankId.BANK_ALPHA),
-        ("bank_beta.F6", AgentRole.F6, BankId.BANK_BETA),
-        ("bank_gamma.F6", AgentRole.F6, BankId.BANK_GAMMA),
-        ("federation.F6", AgentRole.F6, BankId.FEDERATION),
-    ]
-    principals: dict[str, DemoPrincipal] = {}
-    for agent_id, role, bank_id in specs:
-        pair = generate_key_pair(f"{agent_id}.demo-key")
-        principals[agent_id] = DemoPrincipal(
-            agent_id=agent_id,
-            role=role,
-            bank_id=bank_id,
-            signing_key_id=pair.signing_key_id,
-            private_key=pair.private_key,
-            public_key=pair.public_key,
-        )
-    return principals
-
-
-def _allowlist_entries(principals: dict[str, DemoPrincipal]) -> list[PrincipalAllowlistEntry]:
-    entries: list[PrincipalAllowlistEntry] = []
-    for bank_id in (BankId.BANK_ALPHA, BankId.BANK_BETA, BankId.BANK_GAMMA):
-        a2 = principals[f"{bank_id.value}.A2"]
-        entries.append(
-            PrincipalAllowlistEntry(
-                agent_id=a2.agent_id,
-                role=a2.role,
-                bank_id=a2.bank_id,
-                signing_key_id=a2.signing_key_id,
-                public_key=a2.public_key,
-                allowed_message_types=[MessageType.SEC314B_QUERY.value],
-                allowed_recipients=["federation.F1"],
-            )
-        )
-        a3 = principals[f"{bank_id.value}.A3"]
-        entries.append(
-            PrincipalAllowlistEntry(
-                agent_id=a3.agent_id,
-                role=a3.role,
-                bank_id=a3.bank_id,
-                signing_key_id=a3.signing_key_id,
-                public_key=a3.public_key,
-                allowed_message_types=[MessageType.SEC314B_RESPONSE.value],
-                allowed_recipients=["federation.F1"],
-            )
-        )
-
-    f1 = principals["federation.F1"]
-    entries.append(
-        PrincipalAllowlistEntry(
-            agent_id=f1.agent_id,
-            role=f1.role,
-            bank_id=f1.bank_id,
-            signing_key_id=f1.signing_key_id,
-            public_key=f1.public_key,
-            allowed_message_types=[
-                MessageType.SEC314B_QUERY.value,
-                MessageType.LOCAL_SILO_CONTRIBUTION_REQUEST.value,
-                # F1 emits the aggregate Sec314bResponse back to the requester A2.
-                MessageType.SEC314B_RESPONSE.value,
-                MessageType.SANCTIONS_CHECK_REQUEST.value,
-            ],
-            allowed_recipients=["*"],
-            allowed_routes=[RouteKind.PEER_314B, RouteKind.LOCAL_CONTRIBUTION],
-        ),
-    )
-    entries.extend(
-        PrincipalAllowlistEntry(
+def _demo_principals_from_orchestrator(
+    principals: OrchestratorPrincipals,
+) -> dict[str, DemoPrincipal]:
+    return {
+        agent_id: DemoPrincipal(
             agent_id=principal.agent_id,
             role=principal.role,
             bank_id=principal.bank_id,
             signing_key_id=principal.signing_key_id,
+            private_key=principal.private_key,
             public_key=principal.public_key,
-            allowed_message_types=[
-                MessageType.POLICY_EVALUATION_RESULT.value,
-                MessageType.AUDIT_EVENT.value,
-            ],
-            allowed_recipients=["*"],
         )
-        for principal in principals.values()
-        if principal.role == AgentRole.F6
-    )
-    return entries
+        for agent_id, principal in principals.principals.items()
+    }
 
 
 def _base_a2_query(
