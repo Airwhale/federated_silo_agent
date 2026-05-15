@@ -14,7 +14,14 @@ from backend.agents.f5_compliance_auditor import (
     ROUTE_ANOMALY_FINDING,
 )
 from backend.runtime.context import AgentRuntimeContext, LLMClientConfig, TrustDomain
-from shared.enums import AgentRole, AuditEventKind, AuditReviewScope, BankId, MessageType
+from shared.enums import (
+    AgentRole,
+    AuditEventKind,
+    AuditReviewScope,
+    BankId,
+    MessageType,
+    PolicySeverity,
+)
 from shared.messages import (
     AuditEvent,
     AuditReviewRequest,
@@ -184,6 +191,29 @@ def test_f5_rate_limit_threshold_is_configurable() -> None:
     assert len(result.findings[0].related_event_ids) == 3
 
 
+def test_f5_reports_multiple_distinct_rate_limit_bursts() -> None:
+    f5, _ = agent()
+    first_burst = [
+        message_event(created_at=BASE_TIME + timedelta(seconds=offset * 5))
+        for offset in range(6)
+    ]
+    second_burst = [
+        message_event(created_at=BASE_TIME + timedelta(seconds=120 + offset * 5))
+        for offset in range(6)
+    ]
+    query_events = [*first_burst, *second_burst]
+    events = [item for event in query_events for item in (event, lt_allow_event(event))]
+
+    result = f5.run(request(events, review_scope=AuditReviewScope.RATE_LIMIT))
+
+    rate_findings = [
+        finding for finding in result.findings if finding.kind == RATE_LIMIT_FINDING
+    ]
+    assert len(rate_findings) == 2
+    assert rate_findings[0].related_event_ids == [event.event_id for event in first_burst]
+    assert rate_findings[1].related_event_ids == [event.event_id for event in second_burst]
+
+
 def test_f5_budget_exhaustion_flags_budget_pressure() -> None:
     f5, _ = agent()
 
@@ -191,6 +221,21 @@ def test_f5_budget_exhaustion_flags_budget_pressure() -> None:
 
     assert result.human_review_required is True
     assert [finding.kind for finding in result.findings] == [BUDGET_PRESSURE_FINDING]
+
+
+def test_f5_reports_budget_exhaustion_and_low_remaining_budget() -> None:
+    f5, _ = agent()
+
+    result = f5.run(request([budget_exhausted_event(), rho_debited_event(rho_remaining=0.01)]))
+
+    assert [finding.kind for finding in result.findings] == [
+        BUDGET_PRESSURE_FINDING,
+        BUDGET_PRESSURE_FINDING,
+    ]
+    assert [finding.severity for finding in result.findings] == [
+        PolicySeverity.HIGH,
+        PolicySeverity.MEDIUM,
+    ]
 
 
 def test_f5_missing_lobster_trap_verdict_requires_review() -> None:

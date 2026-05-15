@@ -219,7 +219,7 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                         related_event_ids=[item.event_id for item in window],
                     )
                 )
-                break
+                window.clear()
         return findings
 
     def _budget_pressure_findings(
@@ -237,8 +237,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             ):
                 low_remaining_events.append(event)
 
+        findings: list[ComplianceFinding] = []
         if exhausted_events:
-            return [
+            findings.append(
                 ComplianceFinding(
                     kind=BUDGET_PRESSURE_FINDING,
                     severity=PolicySeverity.HIGH,
@@ -248,10 +249,10 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                     ),
                     related_event_ids=_event_ids(exhausted_events),
                 )
-            ]
+            )
 
         if low_remaining_events:
-            return [
+            findings.append(
                 ComplianceFinding(
                     kind=BUDGET_PRESSURE_FINDING,
                     severity=PolicySeverity.MEDIUM,
@@ -261,9 +262,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                     ),
                     related_event_ids=_event_ids(low_remaining_events),
                 )
-            ]
+            )
 
-        return []
+        return findings
 
     def _lt_verdict_findings(self, events: Iterable[AuditEvent]) -> list[ComplianceFinding]:
         event_list = list(events)
