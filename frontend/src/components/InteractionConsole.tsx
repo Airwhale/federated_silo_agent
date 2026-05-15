@@ -100,6 +100,19 @@ export function InteractionConsole() {
           <div className="flex flex-wrap items-center gap-2">
             <StatusPill status={interaction.data.status} />
             {interaction.data.blocked_by ? <StatusPill layer={interaction.data.blocked_by} /> : null}
+            {interaction.data.accepted && !interaction.data.executed ? (
+              <span
+                className="inline-flex items-center rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-200"
+                title="Recorded but not executed — live handler lands with P14/P15"
+              >
+                Placeholder ({interaction.data.available_after ?? "P14/P15"})
+              </span>
+            ) : null}
+            {interaction.data.accepted && interaction.data.executed ? (
+              <span className="inline-flex items-center rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-200">
+                Executed
+              </span>
+            ) : null}
           </div>
           <p className="mt-2 text-slate-300">{interaction.data.reason}</p>
         </div>

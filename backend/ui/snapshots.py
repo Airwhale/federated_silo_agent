@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 from backend.security.replay import ReplayCacheSnapshot
 from shared.enums import BankId, RouteKind
 
@@ -24,9 +24,30 @@ ProbePayloadText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
 ]
+
+# Allowed values for ``target_instance_id`` on probe and interaction
+# requests. Must mirror the frontend's ``TRUST_INSTANCES`` registry. The
+# character-class constraint catches raw garbage; this set catches
+# semantically wrong inputs (e.g. a ``ComponentId`` value, a random
+# string, or an injected payload that happens to be alphanumeric).
+KNOWN_TRUST_DOMAIN_IDS: frozenset[str] = frozenset(
+    {"investigator", "federation", "bank_alpha", "bank_beta", "bank_gamma"}
+)
+
+
+def _validate_known_trust_domain(value: str) -> str:
+    if value not in KNOWN_TRUST_DOMAIN_IDS:
+        raise ValueError(
+            f"target_instance_id {value!r} is not a known trust domain "
+            f"(expected one of: {sorted(KNOWN_TRUST_DOMAIN_IDS)})"
+        )
+    return value
+
+
 InstanceIdText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$"),
+    AfterValidator(_validate_known_trust_domain),
 ]
 
 
@@ -332,7 +353,21 @@ class ProbeResult(UiModel):
 
 
 class ComponentInteractionResult(UiModel):
-    """Outcome of one safe component-directed interaction."""
+    """Outcome of one safe component-directed interaction.
+
+    Two boolean fields disambiguate "we got it" from "we ran it":
+
+    * ``accepted`` -- the request passed validation and was recorded.
+      False only when the component is not built yet (and therefore
+      cannot be interacted with at all).
+    * ``executed`` -- a live handler actually ran and produced
+      meaningful output. False for PROMPT / SAFE_INPUT today because
+      the live LT / LLM adapter lands with P14/P15; the request is
+      still ``accepted`` and shows up on the timeline.
+
+    The UI uses both to distinguish "successfully inspected" from
+    "queued for a future handler" from "refused / not built".
+    """
 
     interaction_id: UUID = Field(default_factory=uuid4)
     interaction_kind: ComponentInteractionKind
@@ -340,6 +375,7 @@ class ComponentInteractionResult(UiModel):
     target_instance_id: str | None = None
     attacker_profile: AttackerProfile
     accepted: bool
+    executed: bool
     status: SnapshotStatus
     blocked_by: SecurityLayer | None = None
     reason: ShortText

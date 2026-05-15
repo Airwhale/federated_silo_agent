@@ -69,13 +69,19 @@ export function useCreateSession() {
   });
 }
 
+// Mutations all invalidate `qk.session(sessionId)` and `qk.timeline(sessionId)`
+// so the topology + timeline refresh after step / run-until-idle / probe /
+// interaction. Routed through the key factory so a future shape change in
+// keys.ts cannot silently break invalidation.
+
 export function useStepSession(sessionId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => api.stepSession(sessionId ?? ""),
     onSuccess: async () => {
       if (!sessionId) return;
-      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
     },
   });
 }
@@ -86,7 +92,8 @@ export function useRunUntilIdle(sessionId: string | null) {
     mutationFn: () => api.runUntilIdle(sessionId ?? ""),
     onSuccess: async () => {
       if (!sessionId) return;
-      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
     },
   });
 }
@@ -97,7 +104,8 @@ export function useProbe(sessionId: string | null) {
     mutationFn: (request: ProbeRequest) => api.probe(sessionId ?? "", request),
     onSuccess: async () => {
       if (!sessionId) return;
-      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
     },
   });
 }
@@ -109,7 +117,8 @@ export function useInteraction(sessionId: string | null, componentId: ComponentI
       api.interaction(sessionId ?? "", componentId, request),
     onSuccess: async (_result, variables) => {
       if (!sessionId) return;
-      await queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
       await queryClient.invalidateQueries({
         queryKey: qk.component(sessionId, componentId, variables.target_instance_id ?? undefined),
       });

@@ -1,6 +1,6 @@
-import { ShieldCheck } from "lucide-react";
+import { AlertTriangle, Loader2, ShieldCheck } from "lucide-react";
 import { useComponent } from "../../api/hooks";
-import type { ComponentId } from "../../api/types";
+import type { ComponentId, SnapshotStatus } from "../../api/types";
 import type { TrustDomain } from "../../domain/instances";
 import { StatusPill } from "../StatusPill";
 
@@ -13,6 +13,11 @@ type Props = {
   onSelect: (componentId: ComponentId, instanceId: TrustDomain) => void;
 };
 
+type StatusKind =
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; status: SnapshotStatus };
+
 export function InstanceTile({
   sessionId,
   instanceId,
@@ -22,7 +27,18 @@ export function InstanceTile({
   onSelect,
 }: Props) {
   const component = useComponent(sessionId, componentId, instanceId);
-  const status = component.data?.status ?? "pending";
+
+  // Three distinct visual states; never silently fall back to "pending"
+  // which would be visually identical to a real pending component and
+  // hide both transport errors and API contract breaches.
+  const state: StatusKind = !sessionId || component.isLoading
+    ? { kind: "loading" }
+    : component.error
+    ? {
+        kind: "error",
+        message: component.error instanceof Error ? component.error.message : "unknown error",
+      }
+    : { kind: "ready", status: component.data?.status ?? "error" };
 
   return (
     <button
@@ -37,7 +53,18 @@ export function InstanceTile({
         <span className="block truncate text-sm font-medium text-slate-100">{label}</span>
         <span className="block truncate text-[11px] text-slate-500">{kind}</span>
       </span>
-      <StatusPill status={status} />
+      {state.kind === "loading" ? (
+        <Loader2 size={14} className="shrink-0 animate-spin text-slate-500" aria-label="loading" />
+      ) : state.kind === "error" ? (
+        <span
+          className="inline-flex items-center gap-1 rounded-md border border-rose-400/40 bg-rose-500/10 px-1.5 py-0.5 text-[11px] text-rose-200"
+          title={state.message}
+        >
+          <AlertTriangle size={12} aria-hidden /> err
+        </span>
+      ) : (
+        <StatusPill status={state.status} />
+      )}
     </button>
   );
 }

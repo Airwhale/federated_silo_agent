@@ -98,14 +98,23 @@ export function LlmRouteView() {
     [system.data?.components],
   );
 
+  // System-readiness loading state is distinct from "the component is
+  // genuinely pending" — fall back to ``pending`` only while we have no
+  // data, and use ``error`` when the system snapshot failed outright.
+  // ``simulated`` is reserved for a future P14 per-instance status.
+  const readinessFallback: SnapshotStatus = system.isLoading
+    ? "pending"
+    : system.error
+    ? "error"
+    : "pending";
   const nodeStates = useMemo<RouteNodeState[]>(
     () =>
       TRUST_INSTANCES.map((instance) => ({
         domain: instance.id,
-        status: readinessByComponent.get(destination)?.status ?? "pending",
+        status: readinessByComponent.get(destination)?.status ?? readinessFallback,
         lastResult: lastResults[instance.id],
       })),
-    [destination, lastResults, readinessByComponent],
+    [destination, lastResults, readinessByComponent, readinessFallback],
   );
 
   const selectedDestination = ROUTE_DESTINATIONS.find((item) => item.id === destination)

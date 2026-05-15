@@ -259,6 +259,9 @@ def test_live_component_interaction_returns_snapshot_and_event() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["accepted"] is True
+    assert body["executed"] is True
+    assert body["status"] == "live"
+    assert body["blocked_by"] is None
     assert body["target_instance_id"] == "federation"
     assert body["component_snapshot"]["signing"]["private_key_material_exposed"] is False
     assert any(event["title"] == "Interaction: inspect" for event in timeline.json())
@@ -287,6 +290,9 @@ def test_not_built_component_interaction_returns_available_after() -> None:
 
 
 def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
+    # Contract: PROMPT / SAFE_INPUT on a *live* component is accepted
+    # (request was recorded) but not executed (no live handler yet);
+    # protected state must stay untouched.
     test_client = client()
     session_id = create_session(test_client)
 
@@ -304,10 +310,73 @@ def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["accepted"] is False
+    assert body["accepted"] is True
+    assert body["executed"] is False
     assert body["status"] == "pending"
-    assert body["blocked_by"] == "not_built"
+    assert body["blocked_by"] is None
+    assert "P14/P15" in body["reason"]
+    assert "No protected state was mutated" in body["reason"]
     assert before["replay"] == after["replay"]
+
+
+def test_interaction_rejects_unknown_target_instance_id() -> None:
+    # InstanceIdText AfterValidator must reject any string outside the
+    # canonical five trust domains, including character-class-valid
+    # but semantically invalid values like a ComponentId.
+    test_client = client()
+    session_id = create_session(test_client)
+
+    for bad in ("bank_delta", "F1", "bank_alpha.A3", "investigator-eve"):
+        response = test_client.post(
+            f"/sessions/{session_id}/components/signing/interactions",
+            json={"interaction_kind": "inspect", "target_instance_id": bad},
+        )
+        assert response.status_code == 422, f"unexpected pass for target_instance_id={bad!r}"
+        detail = response.json()["detail"]
+        assert any("not a known trust domain" in entry["msg"] for entry in detail)
+
+
+def test_concurrent_interactions_do_not_split_timeline() -> None:
+    # The run_component_interaction handler must take ``session.lock``
+    # before its read-modify-write so a concurrent probe firing on the
+    # same session cannot interleave a half-applied outcome. Fire many
+    # interactions + probes concurrently; assert the final timeline is
+    # internally consistent (no duplicate event_ids, every event_id is
+    # findable by id, total count matches what we sent).
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    test_client = client()
+    session_id = create_session(test_client)
+
+    def fire_interaction(idx: int) -> int:
+        r = test_client.post(
+            f"/sessions/{session_id}/components/signing/interactions",
+            json={"interaction_kind": "inspect", "target_instance_id": "federation"},
+        )
+        return r.status_code
+
+    def fire_probe(idx: int) -> int:
+        r = test_client.post(
+            f"/sessions/{session_id}/probes",
+            json={
+                "probe_kind": "body_tamper",
+                "target_component": "F1",
+                "attacker_profile": "valid_but_malicious",
+            },
+        )
+        return r.status_code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(fire_interaction, i) for i in range(20)]
+        futures.extend(pool.submit(fire_probe, i) for i in range(20))
+        codes = [f.result() for f in as_completed(futures)]
+
+    assert all(code == 200 for code in codes)
+    timeline = test_client.get(f"/sessions/{session_id}/timeline").json()
+    event_ids = [event["event_id"] for event in timeline]
+    # 1 init event + 20 interactions + 20 probes = 41.
+    assert len(event_ids) == 41
+    assert len(set(event_ids)) == 41  # no duplicates, no torn writes
 
 
 def test_interaction_payload_text_is_bounded() -> None:

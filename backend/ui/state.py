@@ -392,57 +392,94 @@ class DemoControlService:
         component_id: ComponentId,
         request: ComponentInteractionRequest,
     ) -> ComponentInteractionResult:
+        # ``target_instance_id`` is already validated against
+        # ``KNOWN_TRUST_DOMAIN_IDS`` by the Pydantic AfterValidator on
+        # ``InstanceIdText`` (returns 422 on unknown values), so this
+        # handler can assume any non-None value is one of the five
+        # canonical trust domains.
         session = self._session(session_id)
-        snapshot = self.component_snapshot(session_id, component_id)
-        readiness = {item.component_id: item for item in self.component_readiness()}
-        readiness_item = readiness[component_id]
+        # Atomic snapshot read + state write + event append. Matches the
+        # locking discipline ``run_probe`` already uses; without this, a
+        # concurrent probe firing on the same session could interleave
+        # between the snapshot read and the event append, leaving a
+        # half-applied view for any reader. RLock means nested
+        # acquisitions in ``component_snapshot`` / ``append_event`` are
+        # safe.
+        with session.lock:
+            snapshot = self.component_snapshot(session_id, component_id)
+            readiness = {item.component_id: item for item in self.component_readiness()}
+            readiness_item = readiness[component_id]
 
-        accepted = (
-            readiness_item.status != SnapshotStatus.NOT_BUILT
-            and request.interaction_kind
-            in {ComponentInteractionKind.INSPECT, ComponentInteractionKind.EXPLAIN_STATE}
-        )
-        status = snapshot.status
-        blocked_by = None if accepted else SecurityLayer.NOT_BUILT
-        if readiness_item.status == SnapshotStatus.NOT_BUILT:
-            reason = (
-                f"{readiness_item.label} is available after "
-                f"{readiness_item.available_after or 'a later milestone'}."
-            )
-        elif accepted:
-            if request.interaction_kind == ComponentInteractionKind.INSPECT:
-                reason = f"{readiness_item.label} snapshot returned."
+            component_built = readiness_item.status != SnapshotStatus.NOT_BUILT
+            is_read_only = request.interaction_kind in {
+                ComponentInteractionKind.INSPECT,
+                ComponentInteractionKind.EXPLAIN_STATE,
+            }
+
+            if not component_built:
+                # Cannot process: the component itself does not exist yet.
+                accepted = False
+                executed = False
+                status = SnapshotStatus.NOT_BUILT
+                blocked_by: SecurityLayer | None = SecurityLayer.NOT_BUILT
+                event_status = SnapshotStatus.BLOCKED
+                reason = (
+                    f"{readiness_item.label} is available after "
+                    f"{readiness_item.available_after or 'a later milestone'}."
+                )
+            elif is_read_only:
+                # Live read-only interaction; a real handler ran and the
+                # full snapshot is returned to the caller.
+                accepted = True
+                executed = True
+                status = snapshot.status
+                blocked_by = None
+                event_status = status
+                if request.interaction_kind == ComponentInteractionKind.INSPECT:
+                    reason = f"{readiness_item.label} snapshot returned."
+                else:
+                    reason = (
+                        f"{readiness_item.label} is {snapshot.status.value}: "
+                        f"{readiness_item.detail}"
+                    )
             else:
-                reason = f"{readiness_item.label} is {snapshot.status.value}: {readiness_item.detail}"
-        else:
-            status = SnapshotStatus.PENDING
-            reason = (
-                f"{request.interaction_kind.value} was recorded for {readiness_item.label}; "
-                "the live component input adapter lands with P14/P15."
-            )
+                # PROMPT or SAFE_INPUT on a live component: the request is
+                # accepted and recorded, but no live handler exists yet
+                # (lands with P14/P15). Protected state stays untouched.
+                accepted = True
+                executed = False
+                status = SnapshotStatus.PENDING
+                blocked_by = None
+                event_status = SnapshotStatus.PENDING
+                reason = (
+                    f"{request.interaction_kind.value} was recorded for "
+                    f"{readiness_item.label}; the live handler lands with "
+                    "P14/P15. No protected state was mutated."
+                )
 
-        event = TimelineEventSnapshot(
-            component_id=component_id,
-            title=f"Interaction: {request.interaction_kind.value}",
-            detail=reason,
-            status=status if accepted else SnapshotStatus.BLOCKED,
-            blocked_by=blocked_by,
-        )
-        result = ComponentInteractionResult(
-            interaction_kind=request.interaction_kind,
-            target_component=component_id,
-            target_instance_id=request.target_instance_id,
-            attacker_profile=request.attacker_profile,
-            accepted=accepted,
-            status=status,
-            blocked_by=blocked_by,
-            reason=reason,
-            timeline_event=event,
-            component_snapshot=snapshot,
-            available_after=readiness_item.available_after,
-        )
-        session.append_event(event)
-        return result
+            event = TimelineEventSnapshot(
+                component_id=component_id,
+                title=f"Interaction: {request.interaction_kind.value}",
+                detail=reason,
+                status=event_status,
+                blocked_by=blocked_by,
+            )
+            result = ComponentInteractionResult(
+                interaction_kind=request.interaction_kind,
+                target_component=component_id,
+                target_instance_id=request.target_instance_id,
+                attacker_profile=request.attacker_profile,
+                accepted=accepted,
+                executed=executed,
+                status=status,
+                blocked_by=blocked_by,
+                reason=reason,
+                timeline_event=event,
+                component_snapshot=snapshot,
+                available_after=readiness_item.available_after,
+            )
+            session.append_event(event)
+            return result
 
     def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
         session = self._session(session_id)

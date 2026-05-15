@@ -12,6 +12,13 @@ import { SystemView } from "@/views/SystemView";
 
 export type AppTab = "console" | "attack-lab" | "llm-route" | "system";
 
+const SESSION_STORAGE_KEY = "federated_silo_session_id";
+// Match the UUID shape FastAPI emits (uuid4 in canonical hyphenated form).
+// A stricter regex (UUID v4 only) is overkill; this just guards against
+// corrupted or hand-edited localStorage values fetching `/sessions/garbage`
+// and producing a confusing 404 on first paint.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const tabFromHash = (): AppTab => {
   const value = window.location.hash.replace(/^#\/?/, "");
   if (value === "attack-lab" || value === "llm-route" || value === "system") {
@@ -20,11 +27,27 @@ const tabFromHash = (): AppTab => {
   return "console";
 };
 
+const readStoredSessionId = (): string | null => {
+  try {
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (raw && UUID_RE.test(raw)) {
+      return raw;
+    }
+    if (raw) {
+      // Corrupted or stale (e.g. from a different server instance). Drop
+      // it now so the create-session effect can run with a clean slate.
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage can throw in private-mode Safari, file:// origins, etc.
+    // Falling back to a fresh session is the right behavior.
+  }
+  return null;
+};
+
 export function App() {
   const [activeTab, setActiveTab] = useState<AppTab>(tabFromHash);
-  const [sessionId, setSessionId] = useState<string | null>(() =>
-    window.localStorage.getItem("federated_silo_session_id"),
-  );
+  const [sessionId, setSessionId] = useState<string | null>(readStoredSessionId);
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
   const createSession = useCreateSession();
   const session = useSession(sessionId);
@@ -42,7 +65,11 @@ export function App() {
       {
         onSuccess: (created) => {
           setSessionId(created.session_id);
-          window.localStorage.setItem("federated_silo_session_id", created.session_id);
+          try {
+            window.localStorage.setItem(SESSION_STORAGE_KEY, created.session_id);
+          } catch {
+            // Private mode / file:// origin — session lives only for this tab.
+          }
         },
       },
     );
@@ -60,10 +87,14 @@ export function App() {
 
   const setStoredSessionId = (nextSessionId: string | null) => {
     setSessionId(nextSessionId);
-    if (nextSessionId) {
-      window.localStorage.setItem("federated_silo_session_id", nextSessionId);
-    } else {
-      window.localStorage.removeItem("federated_silo_session_id");
+    try {
+      if (nextSessionId) {
+        window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+      } else {
+        window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+    } catch {
+      // See readStoredSessionId for the cases this guards.
     }
   };
 

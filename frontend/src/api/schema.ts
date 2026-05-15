@@ -248,6 +248,19 @@ export interface components {
         /**
          * ComponentInteractionResult
          * @description Outcome of one safe component-directed interaction.
+         *
+         *     Two boolean fields disambiguate "we got it" from "we ran it":
+         *
+         *     * ``accepted`` -- the request passed validation and was recorded.
+         *       False only when the component is not built yet (and therefore
+         *       cannot be interacted with at all).
+         *     * ``executed`` -- a live handler actually ran and produced
+         *       meaningful output. False for PROMPT / SAFE_INPUT today because
+         *       the live LT / LLM adapter lands with P14/P15; the request is
+         *       still ``accepted`` and shows up on the timeline.
+         *
+         *     The UI uses both to distinguish "successfully inspected" from
+         *     "queued for a future handler" from "refused / not built".
          */
         ComponentInteractionResult: {
             /**
@@ -262,6 +275,8 @@ export interface components {
             attacker_profile: components["schemas"]["AttackerProfile"];
             /** Accepted */
             accepted: boolean;
+            /** Executed */
+            executed: boolean;
             status: components["schemas"]["SnapshotStatus"];
             blocked_by?: components["schemas"]["SecurityLayer"] | null;
             /** Reason */
