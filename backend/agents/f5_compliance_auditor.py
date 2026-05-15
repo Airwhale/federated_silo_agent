@@ -208,18 +208,20 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                     > self.config.window_seconds
                 ):
                     window.popleft()
-                if in_violation and len(window) <= self.config.max_queries:
+                was_in_violation = in_violation
+                window.append(event)
+                is_now_in_violation = len(window) > self.config.max_queries
+
+                if is_now_in_violation:
+                    in_violation = True
+                    for window_event in window:
+                        burst_events[window_event.event_id] = window_event
+                elif was_in_violation:
                     findings.append(
                         self._rate_limit_finding(actor_id, list(burst_events.values()))
                     )
                     in_violation = False
                     burst_events.clear()
-                window.append(event)
-
-                if len(window) > self.config.max_queries:
-                    in_violation = True
-                    for window_event in window:
-                        burst_events[window_event.event_id] = window_event
             if in_violation:
                 findings.append(
                     self._rate_limit_finding(actor_id, list(burst_events.values()))

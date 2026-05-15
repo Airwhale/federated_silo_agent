@@ -195,6 +195,28 @@ def test_f5_sustained_rate_limit_burst_emits_one_actionable_finding() -> None:
     ]
 
 
+def test_f5_rate_limit_burst_stays_open_when_next_event_rebreaches_window() -> None:
+    f5, _ = agent()
+    query_events = [
+        *[
+            message_event(created_at=BASE_TIME + timedelta(seconds=offset * 5))
+            for offset in range(7)
+        ],
+        message_event(created_at=BASE_TIME + timedelta(seconds=61)),
+    ]
+    events = [item for event in query_events for item in (event, lt_allow_event(event))]
+
+    result = f5.run(request(events, review_scope=AuditReviewScope.RATE_LIMIT))
+
+    rate_findings = [
+        finding for finding in result.findings if finding.kind == RATE_LIMIT_FINDING
+    ]
+    assert len(rate_findings) == 1
+    assert rate_findings[0].related_event_ids == [
+        event.event_id for event in query_events
+    ]
+
+
 def test_f5_rate_limit_threshold_is_configurable() -> None:
     f5, _ = agent(config=F5AuditConfig(max_queries=2, window_seconds=30))
     query_events = [
