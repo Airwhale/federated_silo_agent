@@ -48,7 +48,7 @@ class TypologyMatch(BaseModel):
 def extract_signals(aggregates: list[BankAggregate]) -> TypologySignals:
     """Summarize the noised histograms without inspecting raw transactions."""
     active_banks: list[BankId] = []
-    candidate_entity_hashes: list[CrossBankHashToken] = []
+    unique_hashes: set[CrossBankHashToken] = set()
     total_edge_buckets = 0
     repeated_edge_buckets = 0
     total_flow_buckets = 0
@@ -81,10 +81,9 @@ def extract_signals(aggregates: list[BankAggregate]) -> TypologySignals:
             aggregate.bucketed_flow_histogram,
             HIGH_VALUE_BUCKET_INDEX,
         )
-        for entity_hash in aggregate.candidate_entity_hashes:
-            if entity_hash not in candidate_entity_hashes:
-                candidate_entity_hashes.append(entity_hash)
+        unique_hashes.update(aggregate.candidate_entity_hashes)
 
+    candidate_entity_hashes = sorted(unique_hashes)
     active_bank_count = len(active_banks)
     candidate_count = len(candidate_entity_hashes)
     repeated_edge_ratio = _ratio(repeated_edge_buckets, total_edge_buckets)
