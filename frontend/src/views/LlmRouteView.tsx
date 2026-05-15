@@ -15,15 +15,63 @@ import { KeyValueGrid, type KeyValueRow } from "@/components/inspector/KeyValueG
 import { ModelRoutePanel } from "@/components/inspector/ModelRoutePanel";
 import { useSessionContext } from "@/components/SessionContext";
 import { StatusPill } from "@/components/StatusPill";
-import { TRUST_INSTANCES, trustDomainLabel, type TrustDomain } from "@/domain/instances";
+import {
+  TRUST_INSTANCES,
+  trustDomainLabel,
+  type TrustDomain,
+  type TrustTier,
+} from "@/domain/instances";
 
 type RouteDestination = Extract<ComponentId, "litellm" | "lobster_trap">;
 
-type RouteNodeState = {
-  domain: TrustDomain;
+// Route graph models the actual LLM call chain:
+//
+//   LLM-driven agent ──→ Lobster Trap ──→ LiteLLM ──→ provider
+//
+// Five trust-domain nodes is a topology that fits on a slide but lies
+// about the LLM graph: F3 sanctions and F5 auditor are deterministic
+// (no LLM call), F2 graph analysis is aggregate-only (no LLM), and the
+// LT + LiteLLM proxies are single global hops shared by every LLM-
+// driven agent. The layered DAG below reflects that.
+
+type LlmAgentNode = {
+  id: string;
+  label: string;
+  componentId: ComponentId;
+  trustDomain: TrustDomain;
+  tier: TrustTier;
+};
+
+type LlmAgentNodeState = {
+  agent: LlmAgentNode;
   status: SnapshotStatus;
   lastResult?: ComponentInteractionResult;
 };
+
+const LLM_AGENTS: LlmAgentNode[] = [
+  { id: "A1", label: "A1 monitor", componentId: "A1", trustDomain: "investigator", tier: "investigator" },
+  { id: "A2", label: "A2 investigator", componentId: "A2", trustDomain: "investigator", tier: "investigator" },
+  { id: "F1", label: "F1 coordinator", componentId: "F1", trustDomain: "federation", tier: "federation" },
+  { id: "F4", label: "F4 SAR drafter", componentId: "F4", trustDomain: "federation", tier: "federation" },
+  { id: "A3a", label: "A3 alpha", componentId: "bank_alpha.A3", trustDomain: "bank_alpha", tier: "silo" },
+  { id: "A3b", label: "A3 beta", componentId: "bank_beta.A3", trustDomain: "bank_beta", tier: "silo" },
+  { id: "A3g", label: "A3 gamma", componentId: "bank_gamma.A3", trustDomain: "bank_gamma", tier: "silo" },
+];
+
+const TIER_LABEL: Record<TrustTier, string> = {
+  investigator: "Investigator",
+  federation: "Federation",
+  silo: "Silos",
+};
+
+// Deterministic agents -- listed off-graph so a judge can see at a
+// glance what's deliberately not on the LLM path (and why those
+// branches don't need policy/proxy oversight today).
+const DETERMINISTIC_AGENTS: { id: string; label: string; componentId: ComponentId; rationale: string }[] = [
+  { id: "F2", label: "F2 graph", componentId: "F2", rationale: "Aggregate-only graph analytics over DP-noised signals." },
+  { id: "F3", label: "F3 sanctions", componentId: "F3", rationale: "Exact-hash watchlist screening; LLM would risk list leakage." },
+  { id: "F5", label: "F5 auditor", componentId: "F5", rationale: "Schema-based audit-chain checks; deterministic by design." },
+];
 
 const ROUTE_DESTINATIONS: { id: RouteDestination; label: string; detail: string }[] = [
   {
@@ -51,70 +99,19 @@ const ATTACKER_PROFILES: AttackerProfile[] = [
   "wrong_role",
 ];
 
-// Compact hub-and-spoke layout: investigator -- federation -- 3 banks.
-// Viewbox is small so the graph fits without forcing a horizontal
-// scrollbar on narrow viewports, and the page can scroll the rest of
-// the content vertically.
-const NODE_POSITIONS: Record<TrustDomain, { x: number; y: number }> = {
-  investigator: { x: 120, y: 200 },
-  federation: { x: 400, y: 200 },
-  bank_alpha: { x: 660, y: 90 },
-  bank_beta: { x: 680, y: 200 },
-  bank_gamma: { x: 660, y: 310 },
-};
-
-const NODE_ABBREV: Record<TrustDomain, string> = {
-  investigator: "INV",
-  federation: "FED",
-  bank_alpha: "ALP",
-  bank_beta: "BET",
-  bank_gamma: "GAM",
-};
-
-const EDGES: { from: TrustDomain; to: TrustDomain }[] = [
-  { from: "investigator", to: "federation" },
-  { from: "federation", to: "bank_alpha" },
-  { from: "federation", to: "bank_beta" },
-  { from: "federation", to: "bank_gamma" },
-];
-
-// Pip semantics. Each pip is a small circle arched over a node; the
-// legend on the side spells out what each one represents so we never
-// repeat the names per-node.
-type PipKey = "LT" | "Proxy" | "Key" | "IO";
-
-interface PipSpec {
-  key: PipKey;
-  label: string;
-  describe: (provider: ProviderHealthSnapshot | null, node: RouteNodeState) => boolean;
-}
-
-const PIPS: PipSpec[] = [
-  {
-    key: "LT",
-    label: "Lobster Trap configured",
-    describe: (p) => Boolean(p?.lobster_trap_configured),
-  },
-  {
-    key: "Proxy",
-    label: "LiteLLM proxy configured",
-    describe: (p) => Boolean(p?.litellm_configured),
-  },
-  {
-    key: "Key",
-    label: "Provider key present (Gemini or OpenRouter)",
-    describe: (p) =>
-      Boolean(p?.gemini_api_key_present) || Boolean(p?.openrouter_api_key_present),
-  },
-  {
-    key: "IO",
-    label: "Last route I/O recorded for this instance",
-    describe: (_p, node) => Boolean(node.lastResult),
-  },
-];
-
-const NODE_RADIUS = 34;
-const PIP_RADIUS = 5;
+// Layout: 7 agent origins on the left, then LT, LiteLLM, provider in a
+// horizontal chain. Y positions stack the agents from top to bottom in
+// tier order (investigator > federation > silos) so the visual grouping
+// matches the rest of the console.
+const AGENT_X = 170;
+const LT_X = 400;
+const LITELLM_X = 560;
+const PROVIDER_X = 720;
+const CHAIN_Y = 230;
+const AGENT_Y_TOP = 70;
+const AGENT_Y_STEP = 50;
+const NODE_RADIUS = 22;
+const NODE_RADIUS_CHAIN = 30;
 
 export function LlmRouteView() {
   const { sessionId, setSelection } = useSessionContext();
@@ -165,13 +162,21 @@ export function LlmRouteView() {
     : system.error
     ? "error"
     : "pending";
-  const nodeStates = useMemo<RouteNodeState[]>(
+
+  const statusOf = (componentId: ComponentId): SnapshotStatus =>
+    readinessByComponent.get(componentId)?.status ?? readinessFallback;
+
+  const agentStates = useMemo<LlmAgentNodeState[]>(
     () =>
-      TRUST_INSTANCES.map((instance) => ({
-        domain: instance.id,
-        status: readinessByComponent.get(destination)?.status ?? readinessFallback,
-        lastResult: lastResults[resultKey(instance.id, destination)],
+      LLM_AGENTS.map((agent) => ({
+        agent,
+        status: statusOf(agent.componentId),
+        lastResult: lastResults[resultKey(agent.trustDomain, destination)],
       })),
+    // statusOf depends on readinessByComponent + readinessFallback; the
+    // function reference itself rotates each render but its inputs are
+    // captured by the dependencies list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [destination, lastResults, readinessByComponent, readinessFallback],
   );
 
@@ -208,22 +213,25 @@ export function LlmRouteView() {
               LLM route graph
             </h2>
             <span className="text-[11px] text-slate-500">
-              Hub-and-spoke &middot; click a node to focus the input form
+              Agent &rarr; Lobster Trap &rarr; LiteLLM &rarr; provider &middot; click an agent to focus the input form
             </span>
           </div>
           <StatusPill status={providerHealth?.status ?? "pending"} />
         </header>
 
         <RouteGraph
-          nodes={nodeStates}
+          agents={agentStates}
           providerHealth={providerHealth}
+          ltStatus={statusOf("lobster_trap")}
+          litellmStatus={statusOf("litellm")}
           selectedDomain={selectedDomain}
-          onSelect={(domain) => {
-            setSelectedDomain(domain);
-            setSelection({ componentId: destination, instanceId: domain });
+          onSelectAgent={(agent) => {
+            setSelectedDomain(agent.trustDomain);
+            setSelection({ componentId: agent.componentId, instanceId: agent.trustDomain });
           }}
         />
 
+        <OffGraphRow />
         <Legend providerHealth={providerHealth} />
       </section>
 
@@ -345,67 +353,185 @@ export function LlmRouteView() {
 }
 
 interface RouteGraphProps {
-  nodes: RouteNodeState[];
+  agents: LlmAgentNodeState[];
   providerHealth: ProviderHealthSnapshot | null;
+  ltStatus: SnapshotStatus;
+  litellmStatus: SnapshotStatus;
   selectedDomain: TrustDomain;
-  onSelect: (domain: TrustDomain) => void;
+  onSelectAgent: (agent: LlmAgentNode) => void;
 }
 
-function RouteGraph({ nodes, providerHealth, selectedDomain, onSelect }: RouteGraphProps) {
+function statusStroke(status: SnapshotStatus, selected = false): string {
+  if (selected) return "rgb(56 189 248)"; // sky-400
+  switch (status) {
+    case "live":
+      return "rgb(52 211 153)"; // emerald-400
+    case "simulated":
+      return "rgb(125 211 252)"; // sky-300
+    case "blocked":
+    case "error":
+      return "rgb(248 113 113)"; // red-400
+    case "pending":
+      return "rgb(234 179 8)"; // amber-500
+    case "not_built":
+    default:
+      return "rgb(71 85 105)"; // slate-600
+  }
+}
+
+function tierMidY(tier: TrustTier, agents: LlmAgentNode[]): number {
+  const indices = agents
+    .map((agent, idx) => ({ agent, idx }))
+    .filter((entry) => entry.agent.tier === tier);
+  if (indices.length === 0) return CHAIN_Y;
+  const sum = indices.reduce(
+    (acc, entry) => acc + AGENT_Y_TOP + entry.idx * AGENT_Y_STEP,
+    0,
+  );
+  return sum / indices.length;
+}
+
+function RouteGraph({
+  agents,
+  providerHealth,
+  ltStatus,
+  litellmStatus,
+  selectedDomain,
+  onSelectAgent,
+}: RouteGraphProps) {
+  const providerStatus = providerHealth?.status ?? "pending";
+  const tiers: TrustTier[] = ["investigator", "federation", "silo"];
+
   return (
     <div className="overflow-x-auto px-3 py-2">
       <svg
-        viewBox="40 40 740 320"
+        viewBox="0 30 800 410"
         role="img"
-        aria-label="LLM route topology: investigator and three bank silos around the federation hub"
-        className="h-auto w-full max-w-[820px]"
+        aria-label="LLM route graph: LLM-driven agents flow through Lobster Trap and LiteLLM to the model provider"
+        className="h-auto w-full max-w-[860px]"
         preserveAspectRatio="xMidYMid meet"
       >
-        {/* Edges first so the nodes paint on top. Dashed lines, label-less:
-            the labels are documented in the legend, not repeated per edge. */}
-        {EDGES.map((edge) => {
-          const from = NODE_POSITIONS[edge.from];
-          const to = NODE_POSITIONS[edge.to];
+        {/* Tier band labels on the far left so the visual grouping is
+            labelled once instead of decorating each agent node. */}
+        {tiers.map((tier) => {
+          const y = tierMidY(tier, LLM_AGENTS);
+          return (
+            <text
+              key={tier}
+              x={40}
+              y={y}
+              dominantBaseline="middle"
+              fill="rgb(148 163 184)"
+              fontSize={10}
+              fontFamily="ui-sans-serif, system-ui, -apple-system"
+              fontWeight={600}
+              style={{ letterSpacing: "0.08em" }}
+            >
+              {TIER_LABEL[tier].toUpperCase()}
+            </text>
+          );
+        })}
+
+        {/* Edges -- agents to LT, then LT -> LiteLLM -> Provider.
+            Dashed lines so the nodes stay visually dominant. */}
+        {agents.map((state, idx) => {
+          const y = AGENT_Y_TOP + idx * AGENT_Y_STEP;
           return (
             <line
-              key={`${edge.from}-${edge.to}`}
-              x1={from.x}
-              y1={from.y}
-              x2={to.x}
-              y2={to.y}
+              key={`edge-${state.agent.id}-lt`}
+              x1={AGENT_X + NODE_RADIUS}
+              y1={y}
+              x2={LT_X - NODE_RADIUS_CHAIN}
+              y2={CHAIN_Y}
               stroke="rgb(51 65 85)"
-              strokeWidth={1.5}
+              strokeWidth={1.25}
               strokeDasharray="3 4"
             />
           );
         })}
+        <line
+          x1={LT_X + NODE_RADIUS_CHAIN}
+          y1={CHAIN_Y}
+          x2={LITELLM_X - NODE_RADIUS_CHAIN}
+          y2={CHAIN_Y}
+          stroke="rgb(71 85 105)"
+          strokeWidth={1.75}
+        />
+        <line
+          x1={LITELLM_X + NODE_RADIUS_CHAIN}
+          y1={CHAIN_Y}
+          x2={PROVIDER_X - NODE_RADIUS_CHAIN}
+          y2={CHAIN_Y}
+          stroke="rgb(71 85 105)"
+          strokeWidth={1.75}
+        />
 
-        {nodes.map((node) => (
-          <RouteNode
-            key={node.domain}
-            node={node}
-            providerHealth={providerHealth}
-            selected={node.domain === selectedDomain}
-            onSelect={() => onSelect(node.domain)}
+        {/* Column captions above each chain node. */}
+        <text x={LT_X} y={50} textAnchor="middle" fill="rgb(148 163 184)" fontSize={10} fontWeight={600} style={{ letterSpacing: "0.08em" }}>
+          POLICY GATE
+        </text>
+        <text x={LITELLM_X} y={50} textAnchor="middle" fill="rgb(148 163 184)" fontSize={10} fontWeight={600} style={{ letterSpacing: "0.08em" }}>
+          MODEL PROXY
+        </text>
+        <text x={PROVIDER_X} y={50} textAnchor="middle" fill="rgb(148 163 184)" fontSize={10} fontWeight={600} style={{ letterSpacing: "0.08em" }}>
+          PROVIDER
+        </text>
+
+        {/* Agent nodes. */}
+        {agents.map((state, idx) => (
+          <AgentNode
+            key={state.agent.id}
+            state={state}
+            y={AGENT_Y_TOP + idx * AGENT_Y_STEP}
+            selected={state.agent.trustDomain === selectedDomain}
+            onSelect={() => onSelectAgent(state.agent)}
           />
         ))}
+
+        <ChainNode
+          x={LT_X}
+          label="Lobster Trap"
+          subtitle="Policy gate"
+          status={ltStatus}
+        />
+        <ChainNode
+          x={LITELLM_X}
+          label="LiteLLM"
+          subtitle="Single global proxy"
+          status={litellmStatus}
+        />
+        <ChainNode
+          x={PROVIDER_X}
+          label="Provider"
+          subtitle={providerLabel(providerHealth)}
+          status={providerStatus}
+        />
       </svg>
     </div>
   );
 }
 
-interface RouteNodeProps {
-  node: RouteNodeState;
-  providerHealth: ProviderHealthSnapshot | null;
+function providerLabel(providerHealth: ProviderHealthSnapshot | null): string {
+  if (!providerHealth) return "Gemini / OpenRouter";
+  if (providerHealth.gemini_api_key_present && providerHealth.openrouter_api_key_present) {
+    return "Gemini + OpenRouter";
+  }
+  if (providerHealth.gemini_api_key_present) return "Gemini";
+  if (providerHealth.openrouter_api_key_present) return "OpenRouter";
+  return "Gemini / OpenRouter";
+}
+
+interface AgentNodeProps {
+  state: LlmAgentNodeState;
+  y: number;
   selected: boolean;
   onSelect: () => void;
 }
 
-function RouteNode({ node, providerHealth, selected, onSelect }: RouteNodeProps) {
-  const { x, y } = NODE_POSITIONS[node.domain];
-  const abbrev = NODE_ABBREV[node.domain];
-  const label = trustDomainLabel(node.domain);
-  const lastStatus = node.lastResult?.status ?? node.status;
+function AgentNode({ state, y, selected, onSelect }: AgentNodeProps) {
+  const { agent } = state;
+  const x = AGENT_X;
+  const effectiveStatus = state.lastResult?.status ?? state.status;
 
   return (
     <g
@@ -419,67 +545,133 @@ function RouteNode({ node, providerHealth, selected, onSelect }: RouteNodeProps)
         }
       }}
       className="cursor-pointer outline-none"
-      aria-label={`Focus ${label} route input`}
+      aria-label={`Focus ${agent.label} route input`}
     >
       <circle
         cx={x}
         cy={y}
         r={NODE_RADIUS}
         fill="rgb(15 23 42)"
-        stroke={selected ? "rgb(56 189 248)" : "rgb(71 85 105)"}
+        stroke={statusStroke(effectiveStatus, selected)}
         strokeWidth={selected ? 2.5 : 1.5}
         className="hover:stroke-emerald-400/70"
       />
       <text
         x={x}
-        y={y + 2}
+        y={y + 1}
         textAnchor="middle"
         dominantBaseline="middle"
         fill="rgb(226 232 240)"
-        fontSize={abbrev.length === 1 ? 22 : 14}
+        fontSize={11}
         fontFamily="ui-monospace, SFMono-Regular, monospace"
       >
-        {abbrev}
+        {agent.id}
       </text>
       <text
-        x={x}
-        y={y + NODE_RADIUS + 14}
-        textAnchor="middle"
-        fill="rgb(148 163 184)"
+        x={x + NODE_RADIUS + 6}
+        y={y + 2}
+        textAnchor="start"
+        dominantBaseline="middle"
+        fill="rgb(203 213 225)"
         fontSize={10}
+      >
+        {agent.label}
+      </text>
+      <text
+        x={x + NODE_RADIUS + 6}
+        y={y + 14}
+        textAnchor="start"
+        dominantBaseline="middle"
+        fill="rgb(100 116 139)"
+        fontSize={9}
+      >
+        {trustDomainLabel(agent.trustDomain)}
+      </text>
+      <title>{`${agent.label} (${agent.componentId}) -- status: ${effectiveStatus}`}</title>
+    </g>
+  );
+}
+
+function ChainNode({
+  x,
+  label,
+  subtitle,
+  status,
+}: {
+  x: number;
+  label: string;
+  subtitle: string;
+  status: SnapshotStatus;
+}) {
+  return (
+    <g>
+      <circle
+        cx={x}
+        cy={CHAIN_Y}
+        r={NODE_RADIUS_CHAIN}
+        fill="rgb(15 23 42)"
+        stroke={statusStroke(status)}
+        strokeWidth={2}
+      />
+      <text
+        x={x}
+        y={CHAIN_Y + 1}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill="rgb(226 232 240)"
+        fontSize={10}
+        fontWeight={600}
       >
         {label}
       </text>
       <text
         x={x}
-        y={y + NODE_RADIUS + 26}
+        y={CHAIN_Y + NODE_RADIUS_CHAIN + 14}
+        textAnchor="middle"
+        fill="rgb(148 163 184)"
+        fontSize={9}
+      >
+        {subtitle}
+      </text>
+      <text
+        x={x}
+        y={CHAIN_Y + NODE_RADIUS_CHAIN + 26}
         textAnchor="middle"
         fill="rgb(100 116 139)"
         fontSize={9}
       >
-        {lastStatus}
+        {status}
       </text>
-      {/* Four pips arched over the top of the circle, evenly spaced. */}
-      {PIPS.map((pip, idx) => {
-        const angle = -Math.PI / 2 + (idx - 1.5) * 0.5;
-        const px = x + Math.cos(angle) * (NODE_RADIUS + 4);
-        const py = y + Math.sin(angle) * (NODE_RADIUS + 4);
-        const on = pip.describe(providerHealth, node);
-        return (
-          <circle
-            key={pip.key}
-            cx={px}
-            cy={py}
-            r={PIP_RADIUS}
-            fill={on ? "rgb(52 211 153)" : "rgb(51 65 85)"}
-            stroke="rgb(15 23 42)"
-            strokeWidth={1.5}
-          >
-            <title>{`${pip.label}: ${on ? "yes" : "no"}`}</title>
-          </circle>
-        );
-      })}
     </g>
+  );
+}
+
+function OffGraphRow() {
+  return (
+    <div className="border-t border-slate-800/70 px-3 py-2 text-xs">
+      <div className="mb-1.5 flex items-baseline gap-2">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          Off-graph &middot; no LLM call
+        </h3>
+        <span className="text-[10px] text-slate-600">
+          Deterministic agents are deliberately off the policy / proxy chain.
+        </span>
+      </div>
+      <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+        {DETERMINISTIC_AGENTS.map((agent) => (
+          <li
+            key={agent.id}
+            className="flex flex-col gap-0.5 rounded border border-slate-800/70 bg-slate-900/40 px-2 py-1.5 opacity-70"
+          >
+            <span className="flex items-baseline gap-2">
+              <span className="font-mono text-[10px] text-slate-300">{agent.id}</span>
+              <span className="text-[11px] text-slate-200">{agent.label}</span>
+            </span>
+            <span className="text-[10px] text-slate-500">{agent.rationale}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -488,55 +680,36 @@ interface LegendProps {
 }
 
 function Legend({ providerHealth }: LegendProps) {
+  const items: { label: string; on: boolean }[] = [
+    { label: "Lobster Trap configured", on: Boolean(providerHealth?.lobster_trap_configured) },
+    { label: "LiteLLM proxy configured", on: Boolean(providerHealth?.litellm_configured) },
+    {
+      label: "Provider key present (Gemini or OpenRouter)",
+      on: Boolean(providerHealth?.gemini_api_key_present)
+        || Boolean(providerHealth?.openrouter_api_key_present),
+    },
+  ];
+
   return (
     <div className="border-t border-slate-800/70 px-3 py-2 text-xs">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-            Pip key
-          </h3>
-          <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-            {PIPS.map((pip) => {
-              // For LT / Proxy / Key, the legend shows current state at a
-              // glance; for IO, the legend's pip is grey because IO is
-              // per-instance, not global.
-              const isGlobal = pip.key !== "IO";
-              const on = isGlobal
-                ? pip.describe(providerHealth, { domain: "federation", status: "live" })
-                : false;
-              return (
-                <li key={pip.key} className="flex items-center gap-2">
-                  <span
-                    className="inline-block h-2 w-2 shrink-0 rounded-full"
-                    style={{ background: on ? "rgb(52 211 153)" : "rgb(51 65 85)" }}
-                    aria-hidden
-                  />
-                  <span className="font-mono text-[10px] text-slate-500">{pip.key}</span>
-                  <span className="text-slate-300">{pip.label}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-        <div>
-          <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-            Nodes
-          </h3>
-          <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 text-[11px]">
-            {TRUST_INSTANCES.map((instance) => (
-              <li key={instance.id} className="flex items-center gap-2 text-slate-300">
-                <span className="inline-flex h-4 w-7 shrink-0 items-center justify-center rounded border border-slate-700 bg-slate-900 font-mono text-[10px] text-slate-200">
-                  {NODE_ABBREV[instance.id]}
-                </span>
-                {instance.label}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        Provider config
+      </h3>
+      <ul className="grid grid-cols-1 gap-1 sm:grid-cols-3">
+        {items.map((item) => (
+          <li key={item.label} className="flex items-center gap-2">
+            <span
+              className="inline-block h-2 w-2 shrink-0 rounded-full"
+              style={{ background: item.on ? "rgb(52 211 153)" : "rgb(51 65 85)" }}
+              aria-hidden
+            />
+            <span className="text-slate-300">{item.label}</span>
+          </li>
+        ))}
+      </ul>
       <p className="mt-2 text-[10px] text-slate-500">
-        Pips reflect global provider configuration today; per-domain route
-        metadata lands with P14.
+        LT and LiteLLM are single global hops shared by every LLM-driven
+        agent today; per-agent route metadata lands with P14.
       </p>
     </div>
   );
