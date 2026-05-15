@@ -424,7 +424,11 @@ def contribution_summary(
         amount_text = f"amount range {low}-{high} cents"
     combined_rationale = " ".join(
         unique_values(
-            [contribution.local_rationale for contribution in contributions]
+            [
+                contribution.local_rationale
+                for contribution in contributions
+                if contribution.local_rationale
+            ]
         )
     )
     rationale = truncate_text(combined_rationale, 220)
