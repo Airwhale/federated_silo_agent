@@ -32,6 +32,7 @@ def test_create_session_returns_typed_component_readiness() -> None:
     assert components["F2"]["status"] == "live"
     assert components["F2"]["available_after"] is None
     assert components["F3"]["status"] == "live"
+    assert components["F4"]["status"] == "live"
     assert components["dp_ledger"]["status"] == "live"
 
 
@@ -98,6 +99,22 @@ def test_f3_component_snapshot_surfaces_watchlist_size_without_leaking_contents(
     assert "PEP" not in body_text
     assert "Fictional SDN fixture" not in body_text
     assert "notes" not in body_text
+
+
+def test_f4_component_snapshot_surfaces_drafting_mode() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.get(f"/sessions/{session_id}/components/F4")
+
+    assert response.status_code == 200
+    body = response.json()
+    fields = {field["name"]: field["value"] for field in body["fields"]}
+    assert fields["drafting_mode"] == "llm_narrative"
+    assert fields["structured_fields"] == "deterministic"
+    assert fields["missing_input_behavior"] == "typed SARContributionRequest"
+    assert "private_key" not in response.text
+    assert "api_key" not in response.text
 
 
 def test_system_snapshot_redacts_secret_values(monkeypatch) -> None:

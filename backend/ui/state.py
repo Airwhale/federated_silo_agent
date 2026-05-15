@@ -453,6 +453,21 @@ class DemoControlService:
                     SnapshotField(name="screening_mode", value="deterministic"),
                 ],
             )
+        if component_id == ComponentId.F4:
+            return ComponentSnapshot(
+                component_id=component_id,
+                status=item.status,
+                title=item.label,
+                fields=[
+                    *fields,
+                    SnapshotField(name="drafting_mode", value="llm_narrative"),
+                    SnapshotField(name="structured_fields", value="deterministic"),
+                    SnapshotField(
+                        name="missing_input_behavior",
+                        value="typed SARContributionRequest",
+                    ),
+                ],
+            )
         if component_id in {ComponentId.LOBSTER_TRAP, ComponentId.LITELLM}:
             return ComponentSnapshot(
                 component_id=component_id,
@@ -726,7 +741,7 @@ class DemoControlService:
             _component(ComponentId.P7, "P7 stats primitives", SnapshotStatus.LIVE, db_status),
             _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."),
             _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.LIVE, "P11 complete."),
-            _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.NOT_BUILT, "Available after P12.", "P12"),
+            _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.LIVE, "P12 complete."),
             _component(ComponentId.F5, "F5 auditor", SnapshotStatus.NOT_BUILT, "Available after P13.", "P13"),
             _component(ComponentId.LOBSTER_TRAP, "Lobster Trap", SnapshotStatus.PENDING, "P0 scaffolded; API verdict adapter lands P14."),
             _component(ComponentId.LITELLM, "LiteLLM", SnapshotStatus.PENDING, "P0 scaffolded; provider health adapter lands P14/P15."),
