@@ -199,6 +199,7 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         for actor_id, actor_events in events_by_actor.items():
             sorted_events = sorted(actor_events, key=lambda event: event.created_at)
             window: deque[AuditEvent] = deque()
+            in_violation = False
             for event in sorted_events:
                 while (
                     window
@@ -207,19 +208,24 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                 ):
                     window.popleft()
                 window.append(event)
-                if len(window) <= self.config.max_queries:
-                    continue
-                findings.append(
-                    ComplianceFinding(
-                        kind=RATE_LIMIT_FINDING,
-                        severity=PolicySeverity.HIGH,
-                        detail=(
-                            f"{actor_id} sent {len(window)} query messages inside "
-                            f"{self.config.window_seconds} seconds."
-                        ),
-                        related_event_ids=[item.event_id for item in window],
-                    )
-                )
+
+                if len(window) > self.config.max_queries:
+                    if not in_violation:
+                        findings.append(
+                            ComplianceFinding(
+                                kind=RATE_LIMIT_FINDING,
+                                severity=PolicySeverity.HIGH,
+                                detail=(
+                                    f"{actor_id} exceeded {self.config.max_queries} "
+                                    f"query messages inside "
+                                    f"{self.config.window_seconds} seconds."
+                                ),
+                                related_event_ids=[item.event_id for item in window],
+                            )
+                        )
+                        in_violation = True
+                else:
+                    in_violation = False
         return findings
 
     def _budget_pressure_findings(

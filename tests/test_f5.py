@@ -176,7 +176,7 @@ def test_f5_rate_limit_triggers_on_sixth_query_by_default() -> None:
     assert any(event.kind == AuditEventKind.RATE_LIMIT for event in audit.events)
 
 
-def test_f5_sustained_rate_limit_burst_keeps_sliding_window_active() -> None:
+def test_f5_sustained_rate_limit_burst_emits_one_actionable_finding() -> None:
     f5, _ = agent()
     query_events = [
         message_event(created_at=BASE_TIME + timedelta(seconds=offset * 5))
@@ -189,12 +189,9 @@ def test_f5_sustained_rate_limit_burst_keeps_sliding_window_active() -> None:
     rate_findings = [
         finding for finding in result.findings if finding.kind == RATE_LIMIT_FINDING
     ]
-    assert len(rate_findings) == 2
+    assert len(rate_findings) == 1
     assert rate_findings[0].related_event_ids == [
         event.event_id for event in query_events[:6]
-    ]
-    assert rate_findings[1].related_event_ids == [
-        event.event_id for event in query_events
     ]
 
 
