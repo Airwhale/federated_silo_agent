@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections import OrderedDict
+from collections.abc import Hashable
 from functools import lru_cache
 from pathlib import Path
-import re
 from typing import Annotated, TypeVar
 from uuid import UUID
 
@@ -44,7 +45,7 @@ NarrativeText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
 ]
-StringT = TypeVar("StringT", bound=str)
+ValueT = TypeVar("ValueT", bound=Hashable)
 
 
 class F4NarrativeContributor(BaseModel):
@@ -311,7 +312,7 @@ def compute_sar_fields(request: SARAssemblyRequest) -> ComputedSARFields:
         typology_code=typology_code,
         graph_pattern_class=graph_pattern.pattern_class,
         graph_confidence=graph_pattern.confidence,
-        suspect_entity_hashes=unique_strings(graph_pattern.suspect_entity_hashes),
+        suspect_entity_hashes=unique_values(graph_pattern.suspect_entity_hashes),
         contributors=narrative_contributors(contributions_by_bank, contributors),
         sanctions_hits=sanctions_hits(request),
         related_query_ids=related_query_ids,
@@ -449,7 +450,7 @@ def entity_hashes_for_contributions(
     for contribution in contributions:
         for evidence in contribution.contributed_evidence:
             hashes.extend(evidence.entity_hashes)
-    return unique_strings(hashes)
+    return unique_values(hashes)
 
 
 def has_sanctions_or_pep_evidence(request: SARAssemblyRequest) -> bool:
@@ -478,21 +479,16 @@ def sanctions_hits(request: SARAssemblyRequest) -> list[F4SanctionsHit]:
 
 def aggregate_related_query_ids(request: SARAssemblyRequest) -> list[UUID]:
     """Return query IDs from assembly and contributions in stable order."""
-    seen: set[UUID] = set()
-    related: list[UUID] = []
-    for query_id in [
-        *request.related_query_ids,
-        *(
-            query_id
-            for contribution in request.contributions
-            for query_id in contribution.related_query_ids
-        ),
-    ]:
-        if query_id in seen:
-            continue
-        seen.add(query_id)
-        related.append(query_id)
-    return related
+    return unique_values(
+        [
+            *request.related_query_ids,
+            *(
+                query_id
+                for contribution in request.contributions
+                for query_id in contribution.related_query_ids
+            ),
+        ]
+    )
 
 
 def missing_request_reason(missing_fields: list[str]) -> str:
@@ -509,7 +505,10 @@ def narrative_violation(
     narrative: str,
 ) -> str | None:
     """Validate narrative-only LLM output against deterministic facts."""
-    if "314(b)" not in narrative and "USA_PATRIOT_314b" not in narrative:
+    if not contains_exact_token(narrative, "314(b)") and not contains_exact_token(
+        narrative,
+        "USA_PATRIOT_314b",
+    ):
         return "SAR narrative must reference Section 314(b) authority"
 
     for contributor in fields.contributors:
@@ -552,7 +551,7 @@ def narrative_violation(
 def narrative_required_hashes(facts: F4NarrativeFacts) -> list[CrossBankHashToken]:
     """Return a bounded set of hash tokens that must appear in narrative text."""
     sanctions_hashes = [hit.entity_hash for hit in facts.sanctions_hits]
-    required = unique_strings([*sanctions_hashes, *facts.suspect_entity_hashes])
+    required = unique_values([*sanctions_hashes, *facts.suspect_entity_hashes])
     return required[:5]
 
 
@@ -562,10 +561,10 @@ def contains_exact_token(text: str, token: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def unique_strings(values: list[StringT]) -> list[StringT]:
-    """Deduplicate strings in input order."""
-    seen: set[str] = set()
-    output: list[StringT] = []
+def unique_values(values: list[ValueT]) -> list[ValueT]:
+    """Deduplicate hashable values in input order."""
+    seen: set[ValueT] = set()
+    output: list[ValueT] = []
     for value in values:
         if value in seen:
             continue
