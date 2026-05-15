@@ -112,14 +112,18 @@ cd frontend && npm run build
 
 ### Local code-review harness
 
-Before final handoff on anything touching security, privacy, signing, replay, DP, policy, or shared contracts, iterate to clean with the local code-review harness:
+After coding a workstream, each agent should commit its work, push its branch,
+and open a PR from that branch. Then run the local code-review harness against
+the PR branch and keep fixing accepted findings until the review reports no
+issues or only cosmetic/stylistic issues that the agent explicitly declines.
+Commit and push each accepted-fix round back to the same PR branch.
 
 ```bash
 uv run --project /path/to/local-gemini-code-review \
   /path/to/local-gemini-code-review/review.py --base origin/main
 ```
 
-Harness fork: <https://github.com/Airwhale/local-gemini-code-review>. The runbook at [`docs/llm-code-review-runbook.md`](https://github.com/Airwhale/local-gemini-code-review/blob/main/docs/llm-code-review-runbook.md) within the fork documents the iteration loop, accept / decline heuristics, the decline-comment contract, and known gotchas. Iterate to "No issues found. Code looks clean and ready to merge." before opening the PR.
+Harness fork: <https://github.com/Airwhale/local-gemini-code-review>. The runbook at [`docs/llm-code-review-runbook.md`](https://github.com/Airwhale/local-gemini-code-review/blob/main/docs/llm-code-review-runbook.md) within the fork documents the iteration loop, accept / decline heuristics, the decline-comment contract, and known gotchas. Use the default Gemini path unless the agent has a clear reason to use a different configured provider/model.
 
 For whole-codebase review (e.g. before P15 lands, or for periodic audits):
 
@@ -129,12 +133,13 @@ uv run review.py --codebase --include 'backend/**/*.py'
 
 ### Branch / PR / merge process
 
-1. Branch off `main` with the pattern `<milestone>-<short-feature>` (e.g. `p11-f2-graph`, `p12-f4-sar`, `p14-f6-policy`).
+1. Branch off `short-contract` for P11-P15 parallel work, unless `plan.md` says a later base is required.
 2. Implement; run focused tests + the frontend build if you touched anything frontend-adjacent.
-3. Iterate with the local code-review harness to a clean pass.
-4. Push the branch; open a PR.
-5. (Optional, recommended on high-risk surfaces) Call `/gemini review` on the PR for an independent final-mile verification.
-6. Merge requires explicit human approval. Match prior PRs' merge-commit style. Delete the branch after merge.
+3. Commit and push the implementation branch; open a PR from that branch.
+4. Run the local code-review harness. Fix accepted CRITICAL/HIGH/MEDIUM correctness, security, privacy, concurrency, schema, and test findings. Commit and push each accepted-fix round.
+5. Stop when the harness reports no issues or only cosmetic/stylistic findings that are explicitly declined with a note or code comment.
+6. (Optional, recommended on high-risk surfaces) Call `/gemini review` on the PR for an independent final-mile verification.
+7. Merge requires explicit human approval. Match prior PRs' merge-commit style. Delete the branch after merge.
 
 ### UI integration triple
 
