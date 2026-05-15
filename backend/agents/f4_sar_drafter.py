@@ -296,7 +296,8 @@ def compute_sar_fields(request: SARAssemblyRequest) -> ComputedSARFields:
 
     amount_range = aggregate_amount_range(request.contributions)
     typology_code = typology_from_pattern(graph_pattern.pattern_class)
-    contributors = contributor_attributions(request.contributions)
+    contributions_by_bank = group_contributions_by_bank(request.contributions)
+    contributors = contributor_attributions(contributions_by_bank)
     related_query_ids = aggregate_related_query_ids(request)
     priority = (
         SARPriority.HIGH
@@ -311,7 +312,7 @@ def compute_sar_fields(request: SARAssemblyRequest) -> ComputedSARFields:
         graph_pattern_class=graph_pattern.pattern_class,
         graph_confidence=graph_pattern.confidence,
         suspect_entity_hashes=unique_strings(graph_pattern.suspect_entity_hashes),
-        contributors=narrative_contributors(request.contributions, contributors),
+        contributors=narrative_contributors(contributions_by_bank, contributors),
         sanctions_hits=sanctions_hits(request),
         related_query_ids=related_query_ids,
     )
@@ -349,14 +350,20 @@ def typology_from_pattern(pattern_class: PatternClass) -> TypologyCode:
     raise ValueError(f"unsupported SAR pattern_class: {pattern_class}")
 
 
-def contributor_attributions(
+def group_contributions_by_bank(
     contributions: list[SARContribution],
-) -> list[ContributorAttribution]:
-    """Create one deterministic attribution block per contributing bank."""
+) -> OrderedDict[BankId, list[SARContribution]]:
+    """Group contributions by bank in first-seen order."""
     by_bank: OrderedDict[BankId, list[SARContribution]] = OrderedDict()
     for contribution in contributions:
         by_bank.setdefault(contribution.contributing_bank_id, []).append(contribution)
+    return by_bank
 
+
+def contributor_attributions(
+    by_bank: OrderedDict[BankId, list[SARContribution]],
+) -> list[ContributorAttribution]:
+    """Create one deterministic attribution block per contributing bank."""
     attributions: list[ContributorAttribution] = []
     for bank_id, bank_contributions in by_bank.items():
         evidence_ids = [
@@ -367,7 +374,7 @@ def contributor_attributions(
         attributions.append(
             ContributorAttribution(
                 bank_id=bank_id,
-                investigator_id=bank_contributions[0].contributing_investigator_id,
+                investigator_id=combined_investigator_ids(bank_contributions),
                 evidence_item_ids=evidence_ids,
                 contribution_summary=contribution_summary(
                     bank_id,
@@ -379,7 +386,7 @@ def contributor_attributions(
 
 
 def narrative_contributors(
-    contributions: list[SARContribution],
+    by_bank: OrderedDict[BankId, list[SARContribution]],
     attributions: list[ContributorAttribution],
 ) -> list[F4NarrativeContributor]:
     """Build hash-only contributor facts for the LLM."""
@@ -388,7 +395,9 @@ def narrative_contributors(
             bank_id=attribution.bank_id,
             investigator_id=attribution.investigator_id,
             evidence_item_ids=attribution.evidence_item_ids,
-            entity_hashes=entity_hashes_for_bank(contributions, attribution.bank_id),
+            entity_hashes=entity_hashes_for_contributions(
+                by_bank[attribution.bank_id],
+            ),
             contribution_summary=attribution.contribution_summary,
         )
         for attribution in attributions
@@ -401,7 +410,7 @@ def contribution_summary(
 ) -> str:
     """Summarize hash-only evidence for one bank."""
     evidence_count = sum(len(item.contributed_evidence) for item in contributions)
-    entity_count = len(entity_hashes_for_bank(contributions, bank_id))
+    entity_count = len(entity_hashes_for_contributions(contributions))
     amount_ranges = [
         contribution.suspicious_amount_range
         for contribution in contributions
@@ -421,14 +430,23 @@ def contribution_summary(
     )
 
 
-def entity_hashes_for_bank(
+def combined_investigator_ids(contributions: list[SARContribution]) -> str:
+    """Return stable attribution for all investigators at one bank."""
+    return ", ".join(
+        sorted(
+            {
+                contribution.contributing_investigator_id
+                for contribution in contributions
+            }
+        )
+    )
+
+
+def entity_hashes_for_contributions(
     contributions: list[SARContribution],
-    bank_id: BankId,
 ) -> list[CrossBankHashToken]:
     hashes: list[CrossBankHashToken] = []
     for contribution in contributions:
-        if contribution.contributing_bank_id != bank_id:
-            continue
         for evidence in contribution.contributed_evidence:
             hashes.extend(evidence.entity_hashes)
     return unique_strings(hashes)

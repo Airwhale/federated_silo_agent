@@ -232,6 +232,39 @@ def test_without_sanctions_or_pep_evidence_priority_is_standard() -> None:
     assert result.sar_priority == SARPriority.STANDARD
 
 
+def test_multiple_investigators_at_one_bank_are_attributed() -> None:
+    agent, _llm, _audit = agent_with_responses({"narrative": GOOD_NARRATIVE})
+    request = assembly_request()
+    extra_query_id = uuid4()
+    extra_alpha_contribution = contribution(
+        bank_id=BankId.BANK_ALPHA,
+        investigator_id="investigator-alpha-2",
+        entity_hashes=[PEP_HASH],
+        amount_range=(5_000_000, 8_000_000),
+        query_id=extra_query_id,
+    )
+    request = SARAssemblyRequest.model_validate(
+        {
+            **request.model_dump(),
+            "contributions": [*request.contributions, extra_alpha_contribution],
+            "related_query_ids": [*request.related_query_ids, extra_query_id],
+        }
+    )
+
+    result = agent.run(request)
+
+    assert isinstance(result, SARDraft)
+    assert result.suspicious_amount_range == (5_000_000, 79_500_000)
+    alpha_contributor = next(
+        contributor
+        for contributor in result.contributors
+        if contributor.bank_id == BankId.BANK_ALPHA
+    )
+    assert alpha_contributor.investigator_id == (
+        "investigator-alpha-1, investigator-alpha-2"
+    )
+
+
 def test_customer_name_in_narrative_is_rejected_and_repaired() -> None:
     unsafe_narrative = (
         "Under Section 314(b), bank_alpha, bank_beta, and bank_gamma shared "
