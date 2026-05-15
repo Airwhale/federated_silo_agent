@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -54,7 +55,7 @@ class WatchlistDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
 
     @model_validator(mode="after")
-    def no_duplicate_source_entries(self) -> WatchlistDocument:
+    def no_duplicate_source_entries(self: WatchlistDocument) -> WatchlistDocument:
         seen: set[tuple[str, WatchlistSource]] = set()
         for entry in self.entities:
             key = (entry.name_hash, entry.source)
@@ -94,7 +95,7 @@ class SanctionsWatchlist:
             raise ValueError(f"invalid sanctions watchlist at {path}: {exc}") from exc
         return cls(document)
 
-    def screen(self, entity_hash: str) -> SanctionsResult:
+    def screen(self, entity_hash: CrossBankHashToken) -> SanctionsResult:
         flags = self._flags.get(entity_hash, WatchlistFlags())
         return SanctionsResult(
             sdn_match=flags.sdn_match,
@@ -114,9 +115,16 @@ class SanctionsWatchlist:
         return len(self._flags)
 
 
+@lru_cache(maxsize=8)
 def load_prompt(path: Path = PROMPT_PATH) -> str:
     """Load the versioned F3 prompt for future LLM adjudication."""
     return path.read_text(encoding="utf-8")
+
+
+@lru_cache(maxsize=8)
+def load_watchlist(path: Path = DEFAULT_WATCHLIST_PATH) -> SanctionsWatchlist:
+    """Load the static watchlist once per process for agent instances."""
+    return SanctionsWatchlist.from_path(path)
 
 
 class F3SanctionsAgent(Agent[SanctionsCheckRequest, SanctionsCheckResponse]):
@@ -145,7 +153,7 @@ class F3SanctionsAgent(Agent[SanctionsCheckRequest, SanctionsCheckResponse]):
         if runtime.trust_domain != TrustDomain.FEDERATION:
             raise ValueError("F3 must run in the federation trust domain")
         self.system_prompt = load_prompt()
-        self.watchlist = watchlist or SanctionsWatchlist.from_path(watchlist_path)
+        self.watchlist = watchlist or load_watchlist(watchlist_path.resolve())
         super().__init__(runtime=runtime, llm=llm, audit=audit)
 
     def run(self, input_data: SanctionsCheckRequest | object) -> SanctionsCheckResponse:
@@ -182,7 +190,11 @@ class F3SanctionsAgent(Agent[SanctionsCheckRequest, SanctionsCheckResponse]):
         request = self._validate_input(input_data)
         self._validate_route(request)
 
-        results = {entity_hash: self.watchlist.screen(entity_hash) for entity_hash in request.entity_hashes}
+        unique_entity_hashes = dict.fromkeys(request.entity_hashes)
+        results = {
+            entity_hash: self.watchlist.screen(entity_hash)
+            for entity_hash in unique_entity_hashes
+        }
         response = SanctionsCheckResponse(
             sender_agent_id=self.agent_id,
             sender_role=self.role,
@@ -228,18 +240,20 @@ class F3SanctionsAgent(Agent[SanctionsCheckRequest, SanctionsCheckResponse]):
 
     def _validate_route(self, request: SanctionsCheckRequest) -> None:
         if request.recipient_agent_id != self.agent_id:
+            detail = "SanctionsCheckRequest must be addressed to federation.F3"
             self._emit(
                 kind=AuditEventKind.CONSTRAINT_VIOLATION,
                 phase="input_validation",
                 status="blocked",
-                detail="SanctionsCheckRequest must be addressed to federation.F3",
+                detail=detail,
             )
-            raise InvalidAgentInput("SanctionsCheckRequest must be addressed to federation.F3")
+            raise InvalidAgentInput(detail)
         if request.sender_role not in {AgentRole.A2, AgentRole.F1}:
+            detail = "F3 only accepts requests from A2 or F1"
             self._emit(
                 kind=AuditEventKind.CONSTRAINT_VIOLATION,
                 phase="input_validation",
                 status="blocked",
-                detail="F3 only accepts requests from A2 or F1",
+                detail=detail,
             )
-            raise InvalidAgentInput("F3 only accepts requests from A2 or F1")
+            raise InvalidAgentInput(detail)
