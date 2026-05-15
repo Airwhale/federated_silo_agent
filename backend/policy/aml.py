@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from threading import Lock
+from typing import Annotated, Any, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from backend.policy.redaction import CustomerNameRedactor, load_customer_name_redactor
 from backend.security import (
@@ -28,7 +30,6 @@ from shared.enums import (
     PolicyDecision,
     PolicySeverity,
     RouteKind,
-    TypologyCode,
 )
 from shared.messages import (
     AgentMessage,
@@ -48,12 +49,6 @@ from shared.messages import (
 
 
 NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-_DECISION_RANK: dict[PolicyDecision, int] = {
-    PolicyDecision.ALLOW: 0,
-    PolicyDecision.REDACT: 1,
-    PolicyDecision.ESCALATE: 2,
-    PolicyDecision.BLOCK: 3,
-}
 _PROMPT_INJECTION_RE = re.compile(
     r"("
     r"ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions|"
@@ -105,18 +100,22 @@ class RawPolicyContent(BaseModel):
 
     @property
     def content_hash(self) -> str:
-        payload = "\n".join(
-            (
-                self.evaluated_message_type.value
-                if self.evaluated_message_type is not None
-                else "",
-                self.evaluated_sender_agent_id,
-                self.evaluated_sender_role.value,
-                self.evaluated_sender_bank_id.value,
-                self.content_channel.value,
-                self.content_summary,
-                self.declared_purpose or "",
-            )
+        payload = json.dumps(
+            {
+                "content_channel": self.content_channel.value,
+                "content_summary": self.content_summary,
+                "declared_purpose": self.declared_purpose,
+                "evaluated_message_type": (
+                    self.evaluated_message_type.value
+                    if self.evaluated_message_type is not None
+                    else None
+                ),
+                "evaluated_sender_agent_id": self.evaluated_sender_agent_id,
+                "evaluated_sender_bank_id": self.evaluated_sender_bank_id.value,
+                "evaluated_sender_role": self.evaluated_sender_role.value,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -126,6 +125,7 @@ class AmlPolicyEvaluation(BaseModel):
 
     result: PolicyEvaluationResult
     audit_events: list[AuditEvent] = Field(default_factory=list)
+    redacted_fields: list[NonEmptyStr] = Field(default_factory=list)
     sanitized_content_summary: str
     sanitized_declared_purpose: str | None = None
 
@@ -142,21 +142,13 @@ class LobsterTrapAuditRecord(BaseModel):
 
     model_config = ConfigDict(extra="allow", strict=True, validate_assignment=True)
 
-    @field_validator("verdict", "action", "rule_name")
-    @classmethod
-    def normalize_token(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        return value.strip()
-
-
 class NormalizedLobsterTrapAudit(BaseModel):
     """LT audit normalization preserving fields that P4 AuditEvent cannot hold."""
 
-    request_id: str | None
-    verdict: str
-    action: str
-    rule_name: str | None
+    request_id: NonEmptyStr | None
+    verdict: NonEmptyStr
+    action: NonEmptyStr
+    rule_name: NonEmptyStr | None
     audit_event: AuditEvent
 
     model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
@@ -169,23 +161,27 @@ class RateLimitTracker:
         self.threshold = threshold
         self.window = window
         self._events: dict[str, deque[datetime]] = defaultdict(deque)
+        self._lock = Lock()
 
-    def record(self, requester_id: str, *, now: datetime) -> int:
-        now = _normalize_now(now)
+    def _pruned_entries(self, requester_id: str, *, now: datetime) -> deque[datetime]:
         entries = self._events[requester_id]
         cutoff = now - self.window
         while entries and entries[0] <= cutoff:
             entries.popleft()
-        entries.append(now)
-        return len(entries)
+        return entries
 
-    def count(self, requester_id: str, *, now: datetime | None = None) -> int:
+    def record(self, requester_id: str, *, now: datetime) -> int:
+        now = _normalize_now(now)
+        with self._lock:
+            entries = self._pruned_entries(requester_id, now=now)
+            entries.append(now)
+            return len(entries)
+
+    def prune_and_count(self, requester_id: str, *, now: datetime | None = None) -> int:
         now_value = _normalize_now(now)
-        entries = self._events[requester_id]
-        cutoff = now_value - self.window
-        while entries and entries[0] <= cutoff:
-            entries.popleft()
-        return len(entries)
+        with self._lock:
+            entries = self._pruned_entries(requester_id, now=now_value)
+            return len(entries)
 
 
 class AmlPolicyEvaluator:
@@ -311,8 +307,8 @@ class AmlPolicyEvaluator:
         replay_cache: ReplayCache | None,
         now: datetime,
     ) -> AmlPolicyEvaluation:
+        block_hits = self._blocking_hits(request, text)
         sanitized_text, redacted_fields = self._redact_policy_text(text)
-        block_hits = self._blocking_hits(request, sanitized_text)
         audit_events: list[AuditEvent] = []
 
         if evaluated_message is not None:
@@ -331,49 +327,61 @@ class AmlPolicyEvaluator:
             if purpose_hit is not None:
                 block_hits.append(purpose_hit)
 
-        request_purpose_hit = self._request_purpose_hit(request, sanitized_text)
+        request_purpose_hit = self._request_purpose_hit(request, text)
         if request_purpose_hit is not None:
             block_hits.append(request_purpose_hit)
 
-        if block_hits:
-            audit_events.append(self._constraint_event(block_hits[0]))
-            return self._evaluation(
-                request=request,
-                decision=PolicyDecision.BLOCK,
-                rule_hits=block_hits,
-                audit_events=audit_events,
-                sanitized_text=sanitized_text,
-                summary="AML policy blocked this content before release.",
-            )
-
+        redaction_hit: PolicyRuleHit | None = None
         if redacted_fields:
-            hit = PolicyRuleHit(
+            redaction_hit = PolicyRuleHit(
                 rule_id="F6-REDACT-CUSTOMER-NAME",
                 decision=PolicyDecision.REDACT,
                 severity=PolicySeverity.MEDIUM,
                 detail="Policy redacted customer-identifying text before release.",
                 redacted_fields=redacted_fields,
             )
-            audit_events.append(self._constraint_event(hit, blocked=False))
+
+        if block_hits:
+            audit_events.extend(self._constraint_event(hit) for hit in block_hits)
+            if redaction_hit is not None:
+                audit_events.append(self._constraint_event(redaction_hit, blocked=False))
             return self._evaluation(
                 request=request,
-                decision=PolicyDecision.REDACT,
-                rule_hits=[hit],
+                decision=PolicyDecision.BLOCK,
+                rule_hits=block_hits,
                 audit_events=audit_events,
                 sanitized_text=sanitized_text,
-                summary="AML policy redacted customer-identifying text before release.",
+                redacted_fields=redacted_fields,
+                summary="AML policy blocked this content before release.",
             )
+
+        if redaction_hit is not None:
+            audit_events.append(self._constraint_event(redaction_hit, blocked=False))
 
         rate_hit = self._rate_limit_hit(evaluated_message, now=now)
         if rate_hit is not None:
-            audit_events.append(self._rate_limit_event(evaluated_message))
+            rate_limited_message = cast(Sec314bQuery, evaluated_message)
+            audit_events.append(self._rate_limit_event(rate_limited_message, now=now))
+            # Shared PolicyEvaluationResult cannot combine REDACT fields with ESCALATE.
             return self._evaluation(
                 request=request,
                 decision=PolicyDecision.ESCALATE,
                 rule_hits=[rate_hit],
                 audit_events=audit_events,
                 sanitized_text=sanitized_text,
+                redacted_fields=redacted_fields,
                 summary="AML policy allowed the content with a rate-limit advisory.",
+            )
+
+        if redaction_hit is not None:
+            return self._evaluation(
+                request=request,
+                decision=PolicyDecision.REDACT,
+                rule_hits=[redaction_hit],
+                audit_events=audit_events,
+                sanitized_text=sanitized_text,
+                redacted_fields=redacted_fields,
+                summary="AML policy redacted customer-identifying text before release.",
             )
 
         audit_events.append(
@@ -393,6 +401,7 @@ class AmlPolicyEvaluator:
             rule_hits=[],
             audit_events=audit_events,
             sanitized_text=sanitized_text,
+            redacted_fields=redacted_fields,
             summary="AML policy allowed hash-only content.",
         )
 
@@ -473,10 +482,29 @@ class AmlPolicyEvaluator:
             )
             route_approval = getattr(message, "route_approval", None)
             if route_approval is not None:
-                principal_allowlist.verify_route_approval(
-                    route_approval,
-                    now=now,
-                )
+                try:
+                    principal_allowlist.verify_route_approval(
+                        route_approval,
+                        now=now,
+                    )
+                except SignatureInvalid:
+                    return _rule_hit(
+                        rule_id="F6-B6-SIGNATURE",
+                        detail="Route approval signature verification failed.",
+                        severity=PolicySeverity.CRITICAL,
+                    )
+                except PrincipalNotAllowed:
+                    return _rule_hit(
+                        rule_id="F6-B7-PRINCIPAL",
+                        detail="Route approval principal is not allowed.",
+                        severity=PolicySeverity.HIGH,
+                    )
+                except SecurityEnvelopeError:
+                    return _rule_hit(
+                        rule_id="F6-B8-ENVELOPE",
+                        detail="Route approval security envelope validation failed.",
+                        severity=PolicySeverity.HIGH,
+                    )
                 if route_approval.approved_query_body_hash != approved_body_hash(
                     message
                 ):
@@ -516,11 +544,9 @@ class AmlPolicyEvaluator:
             if message.sender_role == AgentRole.A2:
                 if message.recipient_agent_id != "federation.F1":
                     return _route_violation("A2 Sec314bQuery must route through F1.")
-                if message.requesting_bank_id in message.target_bank_ids:
-                    return _route_violation("Peer query cannot target requester bank.")
                 return None
             if message.sender_role == AgentRole.F1:
-                approval = message.route_approval
+                approval = getattr(message, "route_approval", None)
                 if approval is None:
                     return _route_violation("F1-routed Sec314bQuery requires approval.")
                 if approval.route_kind != RouteKind.PEER_314B:
@@ -535,7 +561,10 @@ class AmlPolicyEvaluator:
         if isinstance(message, LocalSiloContributionRequest):
             if message.sender_role != AgentRole.F1:
                 return _route_violation("Local contribution must be sent by F1.")
-            if message.route_approval.route_kind != RouteKind.LOCAL_CONTRIBUTION:
+            approval = getattr(message, "route_approval", None)
+            if approval is None:
+                return _route_violation("Local contribution requires route approval.")
+            if approval.route_kind != RouteKind.LOCAL_CONTRIBUTION:
                 return _route_violation(
                     "Local contribution requires local_contribution route kind."
                 )
@@ -562,8 +591,6 @@ class AmlPolicyEvaluator:
         purpose = message.purpose_declaration
         if purpose.authority != "USA_PATRIOT_314b":
             return _purpose_violation("Section 314(b) authority is missing.")
-        if purpose.typology_code not in set(TypologyCode):
-            return _purpose_violation("Purpose typology is unsupported.")
         if not purpose.suspicion_rationale.strip():
             return _purpose_violation("Suspicion rationale is required.")
         return None
@@ -602,13 +629,14 @@ class AmlPolicyEvaluator:
             detail="Investigator exceeded the F6 hourly Section 314(b) advisory threshold.",
         )
 
-    def _rate_limit_event(self, message: AgentMessage | None) -> AuditEvent:
-        requester_id = (
-            message.requesting_investigator_id
-            if isinstance(message, Sec314bQuery)
-            else "unknown"
-        )
-        count = self.rate_limiter.count(requester_id)
+    def _rate_limit_event(
+        self,
+        message: Sec314bQuery,
+        *,
+        now: datetime,
+    ) -> AuditEvent:
+        requester_id = message.requesting_investigator_id
+        count = self.rate_limiter.prune_and_count(requester_id, now=now)
         return self._audit_event(
             kind=AuditEventKind.RATE_LIMIT,
             actor_agent_id=self.config.policy_agent_id,
@@ -660,13 +688,9 @@ class AmlPolicyEvaluator:
         rule_hits: list[PolicyRuleHit],
         audit_events: list[AuditEvent],
         sanitized_text: _PolicyText,
+        redacted_fields: list[str],
         summary: str,
     ) -> AmlPolicyEvaluation:
-        if rule_hits:
-            decision = max(
-                (hit.decision for hit in rule_hits),
-                key=lambda item: _DECISION_RANK[item],
-            )
         result = PolicyEvaluationResult(
             sender_agent_id=self.config.policy_agent_id,
             sender_role=AgentRole.F6,
@@ -676,15 +700,14 @@ class AmlPolicyEvaluator:
             decision=decision,
             rule_hits=rule_hits,
             safe_output_summary=summary,
-            redacted_field_count=(
-                sum(len(hit.redacted_fields) for hit in rule_hits)
-                if decision == PolicyDecision.REDACT
-                else 0
-            ),
+            # Shared contract count mirrors result rule hits. Adapter-level
+            # redacted_fields reports sanitization in combined ESCALATE cases.
+            redacted_field_count=sum(len(hit.redacted_fields) for hit in rule_hits),
         )
         return AmlPolicyEvaluation(
             result=result,
             audit_events=audit_events,
+            redacted_fields=redacted_fields,
             sanitized_content_summary=sanitized_text.content_summary,
             sanitized_declared_purpose=sanitized_text.declared_purpose,
         )

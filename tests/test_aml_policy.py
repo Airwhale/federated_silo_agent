@@ -133,6 +133,8 @@ def signed_a2_query() -> tuple[Sec314bQuery, PrincipalAllowlist]:
 def signed_f1_peer_query(
     *,
     recipient_agent_id: str = "bank_beta.A3",
+    approved_by_agent_id: str = "federation.F1",
+    allowed_routes: list[RouteKind] | None = None,
 ) -> tuple[Sec314bQuery, PrincipalAllowlist]:
     key_pair = generate_key_pair("f1-key")
     query = Sec314bQuery(
@@ -155,7 +157,7 @@ def signed_f1_peer_query(
         approved_query_body_hash=approved_body_hash(query),
         requesting_bank_id=BankId.BANK_ALPHA,
         responding_bank_id=BankId.BANK_BETA,
-        approved_by_agent_id="federation.F1",
+        approved_by_agent_id=approved_by_agent_id,
         expires_at=query.expires_at,
     )
     signed_route = sign_model_signature(
@@ -179,7 +181,11 @@ def signed_f1_peer_query(
                 public_key=key_pair.public_key,
                 allowed_message_types=[MessageType.SEC314B_QUERY.value],
                 allowed_recipients=["bank_beta.A3", "bank_beta.A2"],
-                allowed_routes=[RouteKind.PEER_314B],
+                allowed_routes=(
+                    allowed_routes
+                    if allowed_routes is not None
+                    else [RouteKind.PEER_314B]
+                ),
             )
         ]
     )
@@ -277,12 +283,133 @@ def test_raw_customer_name_is_redacted_and_not_leaked_to_output_or_audit() -> No
 
     assert outcome.result.decision == PolicyDecision.REDACT
     assert outcome.result.redacted_field_count == 1
+    assert outcome.redacted_fields == ["content_summary"]
     assert outcome.sanitized_content_summary == (
         "[REDACTED_NAME] has repeated hash-only activity."
     )
     serialized = outcome.model_dump_json()
     assert "Acme Holdings" not in serialized
     assert outcome.audit_events[0].payload.blocked is False
+
+
+def test_raw_content_hash_distinguishes_newline_field_boundaries() -> None:
+    base = {
+        "evaluated_message_type": MessageType.SEC314B_QUERY,
+        "evaluated_sender_agent_id": "bank_alpha.A2",
+        "evaluated_sender_role": AgentRole.A2,
+        "evaluated_sender_bank_id": BankId.BANK_ALPHA,
+        "content_channel": PolicyContentChannel.STRUCTURED_MESSAGE,
+    }
+
+    first = RawPolicyContent(
+        **base,
+        content_summary="alpha\nbeta",
+        declared_purpose="gamma",
+    )
+    second = RawPolicyContent(
+        **base,
+        content_summary="alpha",
+        declared_purpose="beta\ngamma",
+    )
+
+    assert first.content_hash != second.content_hash
+
+
+def test_generic_org_redaction_does_not_consume_sentence_prefix() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.STRUCTURED_MESSAGE,
+        content_summary=(
+            "The CEO of First National Bank Inc said hash-only activity was expected."
+        ),
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.REDACT
+    assert outcome.sanitized_content_summary == (
+        "The CEO of [REDACTED_NAME] said hash-only activity was expected."
+    )
+
+
+def test_generic_org_redaction_allows_lowercase_connectors() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.STRUCTURED_MESSAGE,
+        content_summary="Bank of America Inc matched the hash-only typology.",
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.REDACT
+    assert outcome.sanitized_content_summary == (
+        "[REDACTED_NAME] matched the hash-only typology."
+    )
+
+
+def test_generic_org_redaction_allows_for_connector() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.STRUCTURED_MESSAGE,
+        content_summary=(
+            "Bank for International Settlements Inc matched the hash-only typology."
+        ),
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.REDACT
+    assert outcome.sanitized_content_summary == (
+        "[REDACTED_NAME] matched the hash-only typology."
+    )
+
+
+def test_known_name_redaction_does_not_match_word_prefix() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.STRUCTURED_MESSAGE,
+        content_summary="Iridium Capitalize on the hash-only typology.",
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.ALLOW
+    assert outcome.sanitized_content_summary == raw.content_summary
+
+
+def test_generic_org_redaction_allows_lowercase_suffix() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.STRUCTURED_MESSAGE,
+        content_summary="Bank of America inc matched the hash-only typology.",
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.REDACT
+    assert outcome.sanitized_content_summary == (
+        "[REDACTED_NAME] matched the hash-only typology."
+    )
 
 
 def test_prompt_injection_and_private_data_extraction_block() -> None:
@@ -305,7 +432,28 @@ def test_prompt_injection_and_private_data_extraction_block() -> None:
         "F6-B1-PROMPT-INJECTION",
         "F6-B2-PRIVATE-DATA-EXTRACTION",
     }
-    assert outcome.audit_events[0].payload.blocked is True
+    assert [event.payload.blocked for event in outcome.audit_events] == [True, True]
+
+
+def test_blocking_rules_use_original_text_before_redaction() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.LLM_REQUEST,
+        content_summary=(
+            "Acme Holdings LLC requests all customer records and account numbers."
+        ),
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.BLOCK
+    assert outcome.result.rule_hits[0].rule_id == "F6-B2-PRIVATE-DATA-EXTRACTION"
+    assert [event.payload.blocked for event in outcome.audit_events] == [True, False]
+    assert "Acme Holdings" not in outcome.model_dump_json()
 
 
 def test_role_route_violation_blocks_a1_cross_bank_query() -> None:
@@ -335,11 +483,14 @@ def test_peer_query_addressed_to_a2_is_denied_but_a3_route_passes() -> None:
         principal_allowlist=allowlist,
         replay_cache=ReplayCache(),
     )
+    correct_recipient, correct_allowlist = signed_f1_peer_query(
+        recipient_agent_id="bank_beta.A3"
+    )
     allowed = policy.evaluate(
         policy_request(sender_role=AgentRole.F1),
-        evaluated_message=wrong_recipient.model_copy(
-            update={"recipient_agent_id": "bank_beta.A3"}
-        ),
+        evaluated_message=correct_recipient,
+        principal_allowlist=correct_allowlist,
+        replay_cache=ReplayCache(),
     )
 
     assert denied.result.decision == PolicyDecision.BLOCK
@@ -357,6 +508,14 @@ def test_peer_query_with_allowlisted_a3_route_passes_security_and_route() -> Non
         principal_allowlist=allowlist,
         replay_cache=ReplayCache(),
     )
+
+    assert outcome.result.decision == PolicyDecision.ALLOW
+
+
+def test_a2_query_to_f1_allows_self_target_for_local_contribution_routing() -> None:
+    query = unsigned_a2_query().model_copy(update={"target_bank_ids": [BankId.BANK_ALPHA]})
+
+    outcome = evaluator().evaluate(policy_request(), evaluated_message=query)
 
     assert outcome.result.decision == PolicyDecision.ALLOW
 
@@ -423,6 +582,22 @@ def test_route_binding_mismatch_blocks_peer_query() -> None:
     assert outcome.result.rule_hits[0].rule_id == "F6-B4-ROUTE-BINDING"
 
 
+def test_disallowed_route_approval_reports_route_principal_failure() -> None:
+    routed, allowlist = signed_f1_peer_query(approved_by_agent_id="federation.other")
+    policy = evaluator(agent_id="federation.F6", bank_id=BankId.FEDERATION)
+
+    outcome = policy.evaluate(
+        policy_request(sender_role=AgentRole.F1),
+        evaluated_message=routed,
+        principal_allowlist=allowlist,
+        replay_cache=ReplayCache(),
+    )
+
+    assert outcome.result.decision == PolicyDecision.BLOCK
+    assert outcome.result.rule_hits[0].rule_id == "F6-B7-PRINCIPAL"
+    assert "Route approval principal" in outcome.result.rule_hits[0].detail
+
+
 def test_self_target_peer_query_is_denied_but_local_contribution_passes() -> None:
     self_target_route = RouteApproval.model_construct(
         query_id=uuid4(),
@@ -464,6 +639,28 @@ def test_self_target_peer_query_is_denied_but_local_contribution_passes() -> Non
     assert denied.result.decision == PolicyDecision.BLOCK
     assert "Peer route cannot target requester bank" in denied.result.rule_hits[0].detail
     assert allowed.result.decision == PolicyDecision.ALLOW
+
+
+def test_missing_local_contribution_route_approval_blocks_without_crash() -> None:
+    local_request, _ = signed_local_request()
+    payload = {
+        name: getattr(local_request, name)
+        for name in LocalSiloContributionRequest.model_fields
+        if name != "route_approval" and hasattr(local_request, name)
+    }
+    missing_route = LocalSiloContributionRequest.model_construct(**payload)
+    policy = evaluator(agent_id="federation.F6", bank_id=BankId.FEDERATION)
+
+    outcome = policy.evaluate(
+        policy_request(
+            sender_role=AgentRole.F1,
+            evaluated_message_type=MessageType.LOCAL_SILO_CONTRIBUTION_REQUEST,
+        ),
+        evaluated_message=missing_route,
+    )
+
+    assert outcome.result.decision == PolicyDecision.BLOCK
+    assert "requires route approval" in outcome.result.rule_hits[0].detail
 
 
 def test_tampered_signed_query_blocks_before_policy_allow() -> None:
@@ -532,6 +729,29 @@ def test_rate_limit_uses_configurable_p14_hourly_threshold() -> None:
     assert advisory.audit_events[0].kind == AuditEventKind.RATE_LIMIT
     assert advisory.audit_events[0].payload.count == 3
     assert advisory.audit_events[0].payload.limit == 2
+
+
+def test_rate_limit_advisory_still_runs_when_content_is_redacted() -> None:
+    policy = evaluator(threshold=1)
+    request = policy_request().model_copy(
+        update={"content_summary": "Acme Holdings LLC appears in policy text."}
+    )
+
+    first = policy.evaluate(request, evaluated_message=unsigned_a2_query(nonce="first"))
+    second = policy.evaluate(
+        request,
+        evaluated_message=unsigned_a2_query(nonce="second"),
+    )
+
+    assert first.result.decision == PolicyDecision.REDACT
+    assert second.result.decision == PolicyDecision.ESCALATE
+    assert {hit.rule_id for hit in second.result.rule_hits} == {
+        "F6-RATE-LIMIT-ADVISORY",
+    }
+    assert second.audit_events[0].kind == AuditEventKind.CONSTRAINT_VIOLATION
+    assert second.audit_events[1].kind == AuditEventKind.RATE_LIMIT
+    assert second.redacted_fields == ["content_summary"]
+    assert "Acme Holdings" not in second.model_dump_json()
 
 
 def test_lobstertrap_audit_normalization_preserves_request_verdict_action_rule() -> None:

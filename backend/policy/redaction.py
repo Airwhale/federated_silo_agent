@@ -47,43 +47,51 @@ class CustomerNameRedactor:
         )
 
     def redact(self, value: str) -> RedactionResult:
-        matches = list(self._pattern.finditer(value))
-        if not matches:
-            return RedactionResult(text=value, redaction_count=0)
-        return RedactionResult(
-            text=self._pattern.sub(REDACTION_TOKEN, value),
-            redaction_count=len(matches),
-        )
+        text, count = self._pattern.subn(REDACTION_TOKEN, value)
+        return RedactionResult(text=text, redaction_count=count)
+
+
+def load_aml_terms(path: Path = DEFAULT_AML_TERMS_PATH) -> AmlTermsDictionary:
+    """Load the AML policy dictionary once per process."""
+    return _load_aml_terms_from_resolved_path(_resolve_terms_path(path))
 
 
 @lru_cache(maxsize=8)
-def load_aml_terms(path: Path = DEFAULT_AML_TERMS_PATH) -> AmlTermsDictionary:
-    """Load the AML policy dictionary once per process."""
-    resolved_path = path if path.is_absolute() else (POLICY_ROOT / path).resolve()
+def _load_aml_terms_from_resolved_path(path: Path) -> AmlTermsDictionary:
     return AmlTermsDictionary.model_validate_json(
-        resolved_path.read_text(encoding="utf-8")
+        path.read_text(encoding="utf-8")
     )
 
 
-@lru_cache(maxsize=8)
 def load_customer_name_redactor(
     path: Path = DEFAULT_AML_TERMS_PATH,
 ) -> CustomerNameRedactor:
     """Load a customer-name redactor from the validated AML terms file."""
-    return CustomerNameRedactor(load_aml_terms(path))
+    return _load_customer_name_redactor_from_resolved_path(_resolve_terms_path(path))
+
+
+@lru_cache(maxsize=8)
+def _load_customer_name_redactor_from_resolved_path(path: Path) -> CustomerNameRedactor:
+    return CustomerNameRedactor(_load_aml_terms_from_resolved_path(path))
+
+
+def _resolve_terms_path(path: Path) -> Path:
+    return path.resolve() if path.is_absolute() else (POLICY_ROOT / path).resolve()
 
 
 def _compile_customer_name_pattern(names: list[str]) -> re.Pattern[str]:
     escaped_names = sorted((re.escape(name) for name in names), key=len, reverse=True)
-    known_name_pattern = "|".join(escaped_names)
+    known_name_pattern = rf"(?i:{'|'.join(escaped_names)})"
+    organization_word_pattern = r"(?:[A-Z][A-Za-z0-9&.,'-]*|[A-Z]{2,})"
+    connector_word_pattern = r"(?i:of|and|for)"
+    subsequent_word_pattern = rf"(?:{organization_word_pattern}|{connector_word_pattern})"
     organization_suffix_pattern = (
-        r"[A-Z][A-Za-z0-9&.,' -]{2,80}\s+"
-        r"(?:LLC|Inc|Ltd|Co|Group|Holdings|Trading|Logistics|"
+        rf"{organization_word_pattern}(?:\s+{subsequent_word_pattern}){{0,3}}\s+"
+        r"(?i:LLC|Inc|Ltd|Co|Group|Holdings|Trading|Logistics|"
         r"Consulting|Ventures|Investments|Capital|Partners)\b"
     )
     return re.compile(
-        rf"\b(?:{known_name_pattern}|{organization_suffix_pattern})",
-        re.IGNORECASE,
+        rf"\b(?:(?:{known_name_pattern})\b|{organization_suffix_pattern})",
     )
 
 

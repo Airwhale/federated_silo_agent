@@ -552,15 +552,24 @@ Assumptions:
   threshold.
 - LT overlay YAML and smoke wiring remain optional integration artifacts. This
   branch does not depend on local LT tooling.
+- Combined redaction plus rate-limit advisory preserves the sanitized output
+  and redaction audit event, while the shared `PolicyEvaluationResult` carries
+  the stronger rate-limit rule hit.
+- Repeated code-assist suggestions to include redaction hits/counts in
+  non-`REDACT` `PolicyEvaluationResult` messages were declined. The shared
+  result contract rejects redacted counts on `BLOCK` and `ESCALATE`; the
+  adapter wrapper exposes `redacted_fields` for those combined cases.
+- Generic organization redaction is intentionally conservative about
+  capitalization to reduce false-positive sentence redactions.
 - Shared contracts were not changed.
 
 Blockers:
 - None.
 
 Checks:
-- `uv run pytest tests\test_aml_policy.py tests\test_messages.py -q`
-- `uv run pytest tests\test_ui_api.py -q`
-- `uv run ruff check backend\policy tests\test_aml_policy.py`
+- `uv run pytest tests/test_aml_policy.py tests/test_messages.py -q`
+- `uv run pytest tests/test_ui_api.py -q`
+- `uv run ruff check backend/policy tests/test_aml_policy.py`
 - `uv run pytest -q` after regenerating canonical `data/silos/*.db`
 
 Next agent:
