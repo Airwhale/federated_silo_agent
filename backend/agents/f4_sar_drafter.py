@@ -563,7 +563,7 @@ def narrative_violation(
         ]
         if missing_hashes:
             return (
-                "SAR narrative must reference supplied suspect entity hashes. "
+                "SAR narrative must reference all required entity hashes. "
                 f"Missing: {missing_hashes!r}"
             )
 
