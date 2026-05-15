@@ -92,7 +92,7 @@ Default expectations:
 | F3 sanctions | Deterministic | Built. Binary hash lookup; LLM here would be a list-content leak risk. |
 | F2 graph | **Hybrid** | Deterministic community detection feeds an LLM classifier. |
 | F4 SAR drafter | **LLM-driven** | Narrative synthesis; deterministic mandatory-field gate. |
-| F5 auditor | **Hybrid** | Rate-limit checks deterministic; anomaly judgment LLM. |
+| F5 auditor | **Deterministic in P13** | Hard audit findings are deterministic; optional LLM explanation or anomaly review can be added later without deciding compliance findings. |
 | F6 policy | **Mostly deterministic** | Audit-critical and must be reproducible; LLM only for adjudication rules. |
 
 ### Test commands
@@ -413,10 +413,10 @@ Next agent:
 
 ### P13 - F5 Compliance Auditor
 
-Owner:
-Branch:
-Status: not_started
-Mode: hybrid (deterministic rate-limit / authorization checks; LLM anomaly judgment over event traces)
+Owner: Codex
+Branch: `codex/p13-f5`
+Status: ready_for_review
+Mode: deterministic for P13 (rate-limit, authorization, budget, LT-coverage, route, and purpose checks; optional LLM explanation can come later)
 Fixtures: signed audit-event traces from a canonical run; injected over-quota traces (one actor exceeds 5 queries/min); injected unauthorized-actor traces (A1 attempting cross-bank query). Construct in test setup.
 
 Goal:
@@ -452,6 +452,33 @@ Acceptance:
 - F5 remains read-only and cannot block or rewrite runtime behavior.
 
 Notes:
+
+### 2026-05-15 - Codex - codex/p13-f5
+Status: ready_for_review
+Touched files:
+- `backend/agents/f5_compliance_auditor.py`
+- `backend/agents/prompts/f5_system.md`
+- `backend/agents/__init__.py`
+- `tests/test_f5.py`
+- `docs/workstreams/p13-f5.md`
+- `plan.md`
+- `AGENT_NOTES.md`
+
+What changed:
+- Implemented deterministic F5 audit review over `AuditReviewRequest`.
+- Added configurable rate-limit defaults of `max_queries=5` and `window_seconds=60`, triggering on the sixth query in-window.
+- Added deterministic findings for budget pressure, missing or non-allow LT verdicts, route anomalies, purpose anomalies, and thin dismissals.
+- Kept the prompt file for future optional explanation or anomaly review only.
+
+Assumptions:
+- LT verdict correlation uses `LtVerdictPayload.request_id == str(message_sent_event.event_id)` for governed cross-boundary message events.
+- Generated silo DB files are local test artifacts and are not tracked in git.
+
+Blockers:
+- None.
+
+Next agent:
+- P15 should send bounded `AuditReviewRequest` batches to F5 and mirror `AuditReviewResult.findings` into timeline or audit-panel records without granting F5 mutation authority.
 
 ### P14 - F6 Policy Adapter And Lobster Trap Overlay
 
