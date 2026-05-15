@@ -1,7 +1,7 @@
 param(
-    [int]$Port = 5173,
+    [int]$Port = 5200,
     [string]$HostAddress = "127.0.0.1",
-    [string]$ApiBase = "http://localhost:8000"
+    [string]$ApiBase = "http://localhost:8050"
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,5 +35,6 @@ if (-not (Test-Path -LiteralPath "node_modules")) {
 # `uv run uvicorn backend.ui.server:app --port 8000`.
 $env:VITE_API_BASE = $ApiBase
 
-Write-Host "Starting Vite dev server on http://${HostAddress}:${Port} (API base: $ApiBase)..." -ForegroundColor Green
+$startMsg = "Starting Vite dev server on http://{0}:{1} (API base: {2})..." -f $HostAddress, $Port, $ApiBase
+Write-Host $startMsg -ForegroundColor Green
 npm run dev -- --host $HostAddress --port $Port

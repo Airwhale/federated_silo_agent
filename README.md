@@ -321,10 +321,10 @@ The current shell can also use `OPENROUTER_API_KEY` if the LiteLLM config is swi
 
 ### Run the judge console (P9b)
 
-Two terminals. First, start the P9a control API:
+Two terminals. First, start the P9a control API on port 8050:
 
 ```powershell
-uv run uvicorn backend.ui.server:app --port 8000
+uv run uvicorn backend.ui.server:app --port 8050
 ```
 
 Then start the Vite dev server for the console:
@@ -333,7 +333,7 @@ Then start the Vite dev server for the console:
 ./scripts/start_frontend.ps1
 ```
 
-The script installs `frontend/node_modules` on first run (Node 20+ required), then serves `http://127.0.0.1:5173`. The frontend reads its API base from `VITE_API_BASE` (default `http://localhost:8000`); override with `./scripts/start_frontend.ps1 -ApiBase http://your-host:8000` to point at a non-local API.
+The script installs `frontend/node_modules` on first run (Node 20+ required), then serves `http://127.0.0.1:5200`. The frontend reads its API base from `VITE_API_BASE` (default `http://localhost:8050`); override with `./scripts/start_frontend.ps1 -ApiBase http://your-host:8050` to point at a non-local API. The Vite default port 5173 is intentionally avoided so this branch can run alongside the parallel Codex build; backend CORS allows both 5173 and 5200.
 
 When the backend's `/openapi.json` changes, regenerate the committed TypeScript schema:
 

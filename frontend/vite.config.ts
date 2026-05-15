@@ -11,7 +11,9 @@ export default defineConfig({
   },
   server: {
     host: "127.0.0.1",
-    port: 5173,
+    // 5200, not Vite's default 5173, so this branch can run alongside
+    // a parallel build that holds 5173. Backend CORS allows both.
+    port: 5200,
     strictPort: true,
   },
   build: {

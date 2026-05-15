@@ -23,9 +23,13 @@ def create_app(service: DemoControlService | None = None) -> FastAPI:
     )
     app.add_middleware(
         CORSMiddleware,
+        # 5173 is the Vite default; 5200 is this branch's working default
+        # (the original 5173 collides with Codex's parallel dev server).
         allow_origins=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            "http://localhost:5200",
+            "http://127.0.0.1:5200",
         ],
         allow_credentials=False,
         allow_methods=["*"],
