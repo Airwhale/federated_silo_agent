@@ -135,7 +135,7 @@ uv run review.py --codebase --include 'backend/**/*.py'
 
 1. Branch off `short-contract` for P11-P15 parallel work, unless `plan.md` says a later base is required.
 2. Implement; run focused tests + the frontend build if you touched anything frontend-adjacent.
-3. Commit and push the implementation branch; open a PR from that branch.
+3. Commit and push the implementation branch; open a PR from that branch. Use `short-contract` as the PR base until it is merged into `main`; retarget to `main` only after `main` contains the P10a contracts.
 4. Run the local code-review harness. Fix accepted CRITICAL/HIGH/MEDIUM correctness, security, privacy, concurrency, schema, and test findings. Commit and push each accepted-fix round.
 5. Stop when the harness reports no issues or only cosmetic/stylistic findings that are explicitly declined with a note or code comment.
 6. (Optional, recommended on high-risk surfaces) Call `/gemini review` on the PR for an independent final-mile verification.
