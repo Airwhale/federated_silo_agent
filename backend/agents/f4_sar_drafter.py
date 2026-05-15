@@ -583,8 +583,10 @@ def narrative_violation(
             related_query_ids=fields.related_query_ids,
         )
     except ValidationError as exc:
-        first_error = exc.errors(include_url=False)[0]
-        return f"Narrative validation failed: {first_error['msg']}"
+        all_errors = "; ".join(
+            error["msg"] for error in exc.errors(include_url=False)
+        )
+        return f"Narrative validation failed: {all_errors}"
     return None
 
 
