@@ -290,7 +290,7 @@ Every cross-boundary message is also assumed to need the security envelope from 
 
 ### 8.3 Agent roles and instances
 
-There are **8 agent roles** and **14 running instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. A3 and F1 default to deterministic control-plane/data-plane behavior for security-critical paths; A3's optional Gemini composition is guarded by exact provenance matching. The remaining reasoning-heavy roles are Gemini-backed LLM agents wrapped in deterministic rule checks of two kinds:
+There are **8 business agent roles** and **14 business-agent instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. There is also a signed **F6 policy actor role** for each trust-domain Lobster Trap / AML adapter instance. F6 is not a reasoning business agent; it is the per-domain policy gate that evaluates content and metadata before messages continue. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. A3 and F1 default to deterministic control-plane/data-plane behavior for security-critical paths; A3's optional Gemini composition is guarded by exact provenance matching. The remaining reasoning-heavy roles are Gemini-backed LLM agents wrapped in deterministic rule checks of two kinds:
 
 - **Rule constraints** — hard checks that the LLM cannot override. If a constraint is violated, the agent refuses; the LLM doesn't get to argue.
 - **Rule bypasses** — hard checks that override the LLM. Certain conditions force a specific output regardless of what the LLM would have said. The catalog below is the source of truth for trigger and action semantics.
@@ -322,6 +322,8 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 | F4-B2 | F4 | Input is missing data needed for a mandatory SAR field | Emit `SARContributionRequest` instead of an incomplete `SARDraft` | P12 | `tests/test_f4.py` |
 | F5-B1 | F5 | More than 10 `Sec314bQuery` events from one investigator in 60 minutes | Emit a `rate_limit` `AuditEvent` | P13 | `tests/test_f5.py` |
 | F5-B2 | F5 | `PurposeDeclaration.suspicion_rationale` lacks ML/TF keywords | Emit a `human_review` `AuditEvent` | P13 | `tests/test_f5.py` |
+| F6-B1 | F6 | Prompt injection, jailbreak, private-data extraction, sensitive-path request, or customer-name leakage detected by LT/AML policy | Return `PolicyEvaluationResult(decision="block"|"redact")` with rule hits before the protected message proceeds | P14 | `tests/test_aml_policy.py`, `tests/test_short_contracts.py` |
+| F6-B2 | F6 | Sender role, purpose, recipient, or channel metadata violates the allowed route matrix | Return `PolicyEvaluationResult(decision="block")` and emit an LT verdict audit event | P14 | `tests/test_aml_policy.py`, `tests/test_short_contracts.py` |
 
 #### Bank-local and silo-boundary agents (×3 banks)
 
@@ -413,6 +415,18 @@ These are the canonical bypass rules. Agent and phase sections below reference t
   - Read-only on the audit stream (cannot block or modify agent behavior)
   - Cannot suppress audit events from being logged
 - **Rule bypasses:** `F5-B1` and `F5-B2` in the bypass rule catalog.
+
+**Agent F6: Per-domain policy / Lobster Trap actor** (one per trust domain)
+
+- **Role:** Receives `PolicyEvaluationRequest` objects from the local node gateway before an NL prompt, LLM response, structured message, or audit event crosses a sensitive boundary. Returns a `PolicyEvaluationResult` to the caller. F6 represents the local Lobster Trap plus Python AML adapter decision as a signed actor so every domain can expose policy state consistently.
+- **Inputs:** `PolicyEvaluationRequest` addressed to the local F6/Lobster Trap instance, with evaluated sender metadata, content channel, content hash, and safe summary.
+- **Outputs:** `PolicyEvaluationResult` with `decision in {"allow","block","redact","escalate"}` plus typed `PolicyRuleHit` records.
+- **Reasoning:** Deterministic policy adapter plus Lobster Trap verdicts in P14. F6 may call Gemini only for later explainability or ambiguous policy scoring; it must not own the signing, replay, route-approval, or DP-ledger state it observes.
+- **Rule constraints (LLM cannot override):**
+  - Cannot mutate signing state, replay caches, route approvals, DP ledgers, or A3 primitive decisions.
+  - Cannot log raw customer names, private signing keys, API keys, or raw account identifiers.
+  - Non-allow decisions require at least one typed rule hit.
+- **Rule bypasses:** `F6-B1` and `F6-B2` in the bypass rule catalog.
 
 ### 8.4 Threat model
 
@@ -563,6 +577,7 @@ The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lo
 - **P9a** Control API + typed state contracts ✓
 - **P9b** Browser UI frame + placeholder panels ✓
 - **P10** F3 sanctions / PEP screening agent ✓
+- **P10a** Short contract pass for F4/F5/F6 ✓
 - **P11** F2 graph-analysis agent ·
 - **P12** F4 SAR drafter agent ·
 - **P13** F5 compliance auditor agent ·
@@ -1029,6 +1044,20 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Risks specific to this part:* a hash-only design is less visually impressive than fuzzy name matching, but it is more honest and preserves the privacy story. Later bank-local fuzzy matching can produce the tokens that F3 screens.
 - *Depends on:* P5.
 - *Scope check:* complete.
+
+**P10a - Short contract pass for F4/F5/F6**
+
+- *Goal:* Freeze the next shared wire contracts before parallel agent work starts. This pass is intentionally not a business-logic implementation; it prevents F4, F5, and F6 workers from inventing incompatible request/response shapes.
+- *Files:* `shared/enums.py`, `shared/messages.py`, `shared/__init__.py`, `tests/test_short_contracts.py`, `docs/architecture/0001-short-contract-pass.md`, README and plan updates.
+- *Contracts added:*
+  - `PolicyEvaluationRequest`, `PolicyEvaluationResult`, and `PolicyRuleHit` for per-domain F6/Lobster Trap plus AML policy decisions. F6 is a signed actor with `AgentRole.F6`, but it is not allowed to mutate signing, replay, route approval, DP ledger, or A3 primitive decisions.
+  - `SARAssemblyRequest` and `SARContributionRequest` for F4. F4 receives one assembled package of SAR inputs and requests missing mandatory fields instead of emitting incomplete drafts.
+  - `AuditReviewRequest`, `AuditReviewResult`, and `ComplianceFinding` for F5. F5 reviews signed audit artifacts and returns read-only compliance findings.
+- *Trust-boundary defaults:* F4, F5, and F6 use signed envelopes for cross-node traffic from day one. F6 is per trust domain, not a central singleton. F5 consumes audit artifacts and emits findings; it does not block or rewrite runtime behavior. F4 may author narrative text, but structured fields and attribution remain typed.
+- *Out of scope for this part:* no F2/F4/F5/F6 agent implementation, no live LT adapter, no orchestrator wiring, no UI redesign. Those parts should consume these contracts rather than modify them unless a real mismatch is discovered.
+- *Acceptance:* `tests/test_short_contracts.py` validates round trips, discriminated-union parsing, F6 non-allow rule-hit requirements, F4 recipient constraints, and F5 finding requirements.
+- *Depends on:* P4, P10.
+- *Scope check:* one short session. Parallel work can start after this lands.
 
 **P11 — F2 graph-analysis agent**
 

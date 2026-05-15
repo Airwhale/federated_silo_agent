@@ -12,7 +12,7 @@ Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab
 
 A multi-agent federated AML investigation platform:
 
-1. **8 agent roles, 14 running agent instances.** Three A1 transaction-monitoring instances, three outside-TEE A2 investigator instances, three inside-bank A3 silo responder instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor.
+1. **8 business agent roles, 14 business-agent instances, plus F6 policy actors.** Three A1 transaction-monitoring instances, three outside-TEE A2 investigator instances, three inside-bank A3 silo responder instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor. F6 is the signed per-domain Lobster Trap / AML policy actor, not a business-reasoning agent.
 2. **Lobster Trap polices inter-agent messages.** The P0 policy already blocks prompt injection, jailbreaks, obfuscation, private-data extraction, data exfiltration, dangerous commands, and sensitive path access. The AML-specific policy pack comes later in P14.
 3. **Privacy enforcement is layered.** Hash-based entity linkage is the primary cross-bank correlation mechanism. A2 has no raw database or stats-primitive handle. A3 invokes deterministic stats primitives inside each bank boundary. Schema validation limits what can leave a silo. Differential privacy applies to aggregate-count and histogram-style primitives where it provides useful protection.
 4. **The demo UI is an inspection surface.** The planned judge console should show the state of signing, envelope verification, route approvals, replay protection, DP budget, LT verdicts, LiteLLM/provider health, and audit-chain integrity through read-only typed snapshots. These panels explain the trust machinery without granting extra privileges.
@@ -68,8 +68,16 @@ User or analyst
 | P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
 | P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, LLM route cards, system view, timeline filters, and attack lab over the P9a API. |
 | P10 | Done | F3 sanctions/PEP screener over cross-bank hash tokens. It performs exact mock watchlist lookup and returns only boolean flags, never raw names, list sources, or notes. |
+| P10a | Done | Short shared-contract pass for F4 SAR assembly, F5 audit review, and per-domain F6 policy/Lobster Trap evaluation before parallel implementation. |
 
 See [`plan.md`](plan.md) for the full build plan.
+
+The short-contract pass freezes the next shared interfaces before parallel work:
+`SARAssemblyRequest`/`SARContributionRequest` for F4, `AuditReviewRequest`/
+`AuditReviewResult` for F5, and `PolicyEvaluationRequest`/
+`PolicyEvaluationResult` for each per-domain F6 policy instance. These are
+strict Pydantic boundary models only; live F4, F5, F6, LT adapter, and
+orchestrator behavior still land in later milestones.
 
 ## Data
 
@@ -140,8 +148,10 @@ flowchart TB
         F3["F3 sanctions or PEP screener"]
         F4["F4 SAR drafter"]
         F5["F5 compliance auditor"]
+        F6["F6 policy actor"]
         LT["Lobster Trap"]
         LLM["LiteLLM to Gemini"]
+        F6 --> LT
         LT --> LLM
         F1 --> F2
         F1 --> F3
@@ -196,7 +206,7 @@ The design assumes a possible man-in-the-middle attacker on inter-agent network 
 Planned message-security controls:
 
 - **mTLS service identity** between A2, F1, A3, Lobster Trap, LiteLLM, and supporting services.
-- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `LocalSiloContributionRequest`, `Sec314bResponse`, SAR contributions, and audit events. Hackathon scope uses Ed25519, not a production PKI.
+- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `LocalSiloContributionRequest`, `Sec314bResponse`, SAR contributions, policy evaluations, audit reviews, and audit events. Hackathon scope uses Ed25519, not a production PKI.
 - **Principal allowlist** that binds `agent_id`, role, bank id, `signing_key_id`, public key, allowed message types, allowed recipients, and allowed routes.
 - **Request/response binding** through `message_id`, `query_id`, `in_reply_to`, route approval metadata, route kind, and a hash of the exact approved query body.
 - **Replay protection** through timestamp, expiration, nonce, and an idempotency cache.
