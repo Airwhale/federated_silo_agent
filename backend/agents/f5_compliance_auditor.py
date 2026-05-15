@@ -200,6 +200,7 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             sorted_events = sorted(actor_events, key=lambda event: event.created_at)
             window: deque[AuditEvent] = deque()
             in_violation = False
+            burst_events: dict[UUID, AuditEvent] = {}
             for event in sorted_events:
                 while (
                     window
@@ -207,26 +208,38 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                     > self.config.window_seconds
                 ):
                     window.popleft()
+                if in_violation and len(window) <= self.config.max_queries:
+                    findings.append(
+                        self._rate_limit_finding(actor_id, list(burst_events.values()))
+                    )
+                    in_violation = False
+                    burst_events.clear()
                 window.append(event)
 
                 if len(window) > self.config.max_queries:
-                    if not in_violation:
-                        findings.append(
-                            ComplianceFinding(
-                                kind=RATE_LIMIT_FINDING,
-                                severity=PolicySeverity.HIGH,
-                                detail=(
-                                    f"{actor_id} exceeded {self.config.max_queries} "
-                                    f"query messages inside "
-                                    f"{self.config.window_seconds} seconds."
-                                ),
-                                related_event_ids=[item.event_id for item in window],
-                            )
-                        )
-                        in_violation = True
-                else:
-                    in_violation = False
+                    in_violation = True
+                    for window_event in window:
+                        burst_events[window_event.event_id] = window_event
+            if in_violation:
+                findings.append(
+                    self._rate_limit_finding(actor_id, list(burst_events.values()))
+                )
         return findings
+
+    def _rate_limit_finding(
+        self,
+        actor_id: str,
+        violating_events: list[AuditEvent],
+    ) -> ComplianceFinding:
+        return ComplianceFinding(
+            kind=RATE_LIMIT_FINDING,
+            severity=PolicySeverity.HIGH,
+            detail=(
+                f"{actor_id} exceeded {self.config.max_queries} query messages "
+                f"inside {self.config.window_seconds} seconds."
+            ),
+            related_event_ids=[event.event_id for event in violating_events],
+        )
 
     def _budget_pressure_findings(
         self,

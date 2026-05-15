@@ -191,7 +191,7 @@ def test_f5_sustained_rate_limit_burst_emits_one_actionable_finding() -> None:
     ]
     assert len(rate_findings) == 1
     assert rate_findings[0].related_event_ids == [
-        event.event_id for event in query_events[:6]
+        event.event_id for event in query_events
     ]
 
 
