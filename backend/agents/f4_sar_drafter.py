@@ -526,7 +526,10 @@ def narrative_violation(
             if not contains_exact_token(narrative, hash_value)
         ]
         if missing_hashes:
-            return "SAR narrative must reference supplied suspect entity hashes"
+            return (
+                "SAR narrative must reference supplied suspect entity hashes. "
+                f"Missing: {missing_hashes!r}"
+            )
 
     try:
         SARDraft(
