@@ -609,4 +609,7 @@ def truncate_text(value: str, max_length: int) -> str:
     stripped = value.strip()
     if len(stripped) <= max_length:
         return stripped
-    return stripped[: max_length - 3].rstrip() + "..."
+    ellipsis = "..."
+    if max_length < len(ellipsis):
+        return stripped[:max_length]
+    return stripped[: max_length - len(ellipsis)].rstrip() + ellipsis
