@@ -41,6 +41,7 @@ from shared.messages import (
 
 PROMPT_PATH = BACKEND_ROOT / "agents" / "prompts" / "f4_system.md"
 F4_AGENT_ID = "federation.F4"
+CONTRIBUTION_SUMMARY_MAX_LENGTH = 500
 NarrativeText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
@@ -446,14 +447,20 @@ def contribution_summary(
             )
         )
     )
-    rationale = truncate_text(combined_rationale, 220)
     summary = (
         f"{bank_id.value} contributed {evidence_count} evidence item(s), "
         f"{entity_count} entity hash(es), and {amount_text}."
     )
-    if rationale:
-        summary += f" Rationale: {rationale}"
-    return truncate_text(summary, 500)
+    if combined_rationale:
+        available_length = (
+            CONTRIBUTION_SUMMARY_MAX_LENGTH
+            - len(summary)
+            - len(" Rationale: ")
+        )
+        if available_length > 0:
+            rationale = truncate_text(combined_rationale, available_length)
+            summary += f" Rationale: {rationale}"
+    return truncate_text(summary, CONTRIBUTION_SUMMARY_MAX_LENGTH)
 
 
 def combined_investigator_ids(contributions: list[SARContribution]) -> str:
