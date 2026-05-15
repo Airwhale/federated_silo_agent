@@ -7,7 +7,6 @@ own privileged mutators such as "approve route" or "mark signature valid".
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import logging
 import os
@@ -21,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.a3_states import A3TurnInput
-from backend.agents.f3_sanctions import SanctionsWatchlist
+from backend.agents.f3_sanctions import load_watchlist
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
 from backend.security import (
     PrincipalNotAllowed,
@@ -189,23 +188,6 @@ def _infra_root() -> Path:
 # surfacing as a 500 on what should be a refusal path.
 _DETAIL_MAX_LEN = 2048
 _DETAIL_ELLIPSIS = " …[truncated]"
-
-
-@functools.lru_cache(maxsize=1)
-def _cached_sanctions_watchlist() -> SanctionsWatchlist:
-    """Load ``SanctionsWatchlist`` once per process and cache the result.
-
-    The F3 component snapshot is rebuilt on every UI poll
-    (``component_snapshot`` re-runs as the inspector / topology refreshes),
-    so reading and parsing the watchlist JSON file every call would issue
-    one disk read per poll per session. The file is read-only application
-    data; one cache miss at startup is correct. If the file is missing or
-    malformed, ``SanctionsWatchlist.from_path`` raises ``ValueError`` and
-    ``lru_cache`` does not memoize the exception, so subsequent calls
-    will retry the load (the F3 snapshot branch catches and surfaces the
-    error to the inspector instead of 500-ing).
-    """
-    return SanctionsWatchlist.from_path()
 
 
 def _truncate_detail(text: str, *, limit: int = _DETAIL_MAX_LEN) -> str:
@@ -414,7 +396,13 @@ class DemoControlService:
             # public information about the watchlist file existing and
             # parsing, which the demo treats as acceptable to display.
             try:
-                watchlist = _cached_sanctions_watchlist()
+                # Shares the ``load_watchlist`` lru_cache with
+                # ``F3SanctionsAgent.__init__`` so the size reported in
+                # the inspector is guaranteed to match what live agents
+                # observe -- no separate snapshot cache that could drift
+                # away from agent state if an agent is constructed with
+                # a non-default path.
+                watchlist = load_watchlist()
                 watchlist_field = SnapshotField(
                     name="watchlist_size", value=str(watchlist.size)
                 )

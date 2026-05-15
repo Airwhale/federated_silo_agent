@@ -115,6 +115,13 @@ class SanctionsWatchlist:
         return len(self._flags)
 
 
+# ``maxsize=8`` is deliberately larger than the single-default case
+# ``maxsize=1`` would model. Tests and the judge-console snapshot may
+# call these helpers with custom paths (e.g. temp fixtures); a maxsize
+# of 1 would thrash and re-read the default file every time a test
+# briefly probed an alternate path. Eight is enough headroom for any
+# realistic combination of (default + a handful of test fixtures) and
+# the cached value is a tiny in-memory object regardless.
 @lru_cache(maxsize=8)
 def load_prompt(path: Path = PROMPT_PATH) -> str:
     """Load the versioned F3 prompt for future LLM adjudication."""
@@ -123,7 +130,14 @@ def load_prompt(path: Path = PROMPT_PATH) -> str:
 
 @lru_cache(maxsize=8)
 def load_watchlist(path: Path = DEFAULT_WATCHLIST_PATH) -> SanctionsWatchlist:
-    """Load the static watchlist once per process for agent instances."""
+    """Load the static watchlist once per process for agent instances.
+
+    The judge-console UI snapshot in ``backend/ui/state.py`` calls this
+    same helper so the size reported in the inspector is guaranteed to
+    match what live ``F3SanctionsAgent`` instances see -- a single
+    process-wide cache avoids the snapshot-vs-agent state-drift class
+    described in Gemini PR-7 round 1.
+    """
     return SanctionsWatchlist.from_path(path)
 
 
@@ -153,7 +167,23 @@ class F3SanctionsAgent(Agent[SanctionsCheckRequest, SanctionsCheckResponse]):
         if runtime.trust_domain != TrustDomain.FEDERATION:
             raise ValueError("F3 must run in the federation trust domain")
         self.system_prompt = load_prompt()
-        self.watchlist = watchlist or load_watchlist(watchlist_path.resolve())
+        # Anchor relative paths to ``PROJECT_ROOT`` rather than the
+        # process CWD before handing to ``load_watchlist``. ``.resolve()``
+        # alone would join a relative ``watchlist_path`` against whatever
+        # directory the process happened to be launched from (uvicorn
+        # from repo root vs. pytest from a temp dir vs. a container with
+        # WORKDIR=/app), producing surprising "file not found" errors
+        # that vary across hosts. Absolute paths flow through unchanged;
+        # the default ``DEFAULT_WATCHLIST_PATH`` is already absolute.
+        if watchlist is not None:
+            self.watchlist = watchlist
+        else:
+            resolved_path = (
+                watchlist_path
+                if watchlist_path.is_absolute()
+                else PROJECT_ROOT / watchlist_path
+            ).resolve()
+            self.watchlist = load_watchlist(resolved_path)
         super().__init__(runtime=runtime, llm=llm, audit=audit)
 
     def run(self, input_data: SanctionsCheckRequest | object) -> SanctionsCheckResponse:
