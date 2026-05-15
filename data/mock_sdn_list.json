@@ -3,12 +3,57 @@
     {
       "name_hash": "661f729972ae2156",
       "source": "SDN",
-      "notes": "P6 synthetic SDN counterparty fixture"
+      "notes": "Fictional SDN fixture 01 used by A1 and F3 tests"
+    },
+    {
+      "name_hash": "1b4e8f70a9c2d351",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 02"
+    },
+    {
+      "name_hash": "2c5f9011bad3e462",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 03"
+    },
+    {
+      "name_hash": "3d60a122cbe4f573",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 04"
+    },
+    {
+      "name_hash": "4e71b233dcf50684",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 05"
+    },
+    {
+      "name_hash": "5f82c344ed061795",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 06"
+    },
+    {
+      "name_hash": "6a93d455fe1728a6",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 07"
+    },
+    {
+      "name_hash": "7ba4e5660f2839b7",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 08"
+    },
+    {
+      "name_hash": "8cb5f6771a394ac8",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 09"
+    },
+    {
+      "name_hash": "9dc607882b4a5bd9",
+      "source": "SDN",
+      "notes": "Fictional SDN fixture 10"
     },
     {
       "name_hash": "9ca42fcf00e1dea0",
       "source": "PEP",
-      "notes": "S1-D planted PEP entity hash for later F3 tests"
+      "notes": "S1-D planted PEP fixture; not returned by F3"
     }
   ]
 }

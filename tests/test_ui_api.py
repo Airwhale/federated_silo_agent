@@ -31,7 +31,56 @@ def test_create_session_returns_typed_component_readiness() -> None:
     assert components["bank_beta.A3"]["status"] == "live"
     assert components["F2"]["status"] == "not_built"
     assert components["F2"]["available_after"] == "P11"
+    assert components["F3"]["status"] == "live"
     assert components["dp_ledger"]["status"] == "live"
+
+
+def test_f3_component_snapshot_surfaces_watchlist_size_without_leaking_contents() -> None:
+    # P10 adds an F3-specific branch to ``component_snapshot`` so the
+    # judge-console inspector can show watchlist-loaded operational
+    # state. Per the F3 non-disclosure contract: the snapshot must
+    # surface a *total* count but must NOT include source-broken counts
+    # (which would leak the SDN-vs-PEP list shape) and must NOT include
+    # any entry payload (notes, source labels, raw names).
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.get(f"/sessions/{session_id}/components/F3")
+
+    assert response.status_code == 200
+    body = response.json()
+    fields = {field["name"]: field["value"] for field in body["fields"]}
+    assert "watchlist_size" in fields
+    # The committed mock list has 10 SDN entries + 1 PEP entry, all on
+    # distinct hashes, so the unique-hash count is 11.
+    #
+    # This assertion is deliberately a *hardcoded literal* rather than a
+    # value computed from the fixture file. The point of the test is to
+    # verify that the UI surfaces the operationally meaningful number;
+    # if we re-parsed the same JSON the production code reads and
+    # compared the results, the test would degenerate into a tautology
+    # (``what the code reports == what the code reads``) and could not
+    # catch a regression like "the snapshot stops including
+    # watchlist_size at all" or "the snapshot reports a stale cached
+    # count after a fixture edit". Fixture drift breaking this test is
+    # the intended behavior: a human reviews whether the new count is
+    # the right number to expose, and updates this assertion plus
+    # ``data/mock_sdn_list.json`` together.
+    assert fields["watchlist_size"] == "11"
+    assert fields["screening_mode"] == "deterministic"
+    # Negative checks: source-broken counts and any list-contents
+    # strings must not leak through the snapshot. None of the labels
+    # the F3 branch emits today (``F3 sanctions``, ``watchlist_size``,
+    # ``screening_mode``, ``deterministic``, ``available_after``,
+    # ``detail``, ``P10 complete.``) contain the literal ``SDN`` or
+    # ``PEP`` substrings, so the naked check is the strictest form.
+    # If we ever rename a label to include ``SDN``/``PEP``, this test
+    # is intended to fail loud rather than be relaxed.
+    body_text = response.text
+    assert "SDN" not in body_text
+    assert "PEP" not in body_text
+    assert "Fictional SDN fixture" not in body_text
+    assert "notes" not in body_text
 
 
 def test_system_snapshot_redacts_secret_values(monkeypatch) -> None:

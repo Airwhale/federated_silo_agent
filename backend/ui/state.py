@@ -8,6 +8,7 @@ own privileged mutators such as "approve route" or "mark signature valid".
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import threading
 from datetime import timedelta
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.a3_states import A3TurnInput
+from backend.agents.f3_sanctions import load_watchlist
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
 from backend.security import (
     PrincipalNotAllowed,
@@ -157,6 +159,12 @@ class DemoSessionRuntime:
 
 
 MAX_ACTIVE_SESSIONS = 50
+
+# Module-level logger for server-side diagnostics that should not be exposed
+# to the UI. Uses ``logging.getLogger(__name__)`` so deployments can route or
+# silence ``backend.ui.state`` messages via the standard logging config
+# without changing call sites.
+_logger = logging.getLogger(__name__)
 
 # backend/ui/state.py → backend/ui/ → backend/ → repo root.
 # The demo runs from the repo root via `uv run uvicorn`, but a container
@@ -376,6 +384,62 @@ class DemoControlService:
                 title=item.label,
                 fields=fields,
                 dp_ledger=ledger,
+            )
+        if component_id == ComponentId.F3:
+            # Surface F3-specific operational state in the inspector: the
+            # number of unique-hash entries loaded into the screener and
+            # the screening mode (deterministic vs LLM-adjudicated; we are
+            # always deterministic until P14/P15). Per the F3
+            # non-disclosure contract, this intentionally does NOT break
+            # the count down by source (SDN vs PEP); the per-source counts
+            # would leak the shape of each list. The total-size signal is
+            # public information about the watchlist file existing and
+            # parsing, which the demo treats as acceptable to display.
+            try:
+                # Shares the ``load_watchlist`` lru_cache with
+                # ``F3SanctionsAgent.__init__`` so the size reported in
+                # the inspector is guaranteed to match what live agents
+                # observe -- no separate snapshot cache that could drift
+                # away from agent state if an agent is constructed with
+                # a non-default path.
+                watchlist = load_watchlist()
+                watchlist_field = SnapshotField(
+                    name="watchlist_size", value=str(watchlist.size)
+                )
+            except (ValueError, OSError):
+                # File missing or invalid (e.g. test environment without
+                # the data fixture). Surface as a field rather than 500
+                # so the inspector renders something rather than crashing.
+                # ``SanctionsWatchlist.from_path`` currently re-wraps
+                # ``OSError`` into ``ValueError``, but catching both keeps
+                # the snapshot resilient if that translation is ever
+                # removed upstream -- the caller should not be coupled
+                # to the loader's exception-translation policy.
+                # Do NOT echo the underlying ``ValueError`` message into
+                # the snapshot: it can include the resolved filesystem
+                # path of the watchlist file or JSON parse details,
+                # which is server-internal information the UI shouldn't
+                # carry. The full exception (including the path /
+                # parse-error context) IS logged server-side at WARNING
+                # so a developer can diagnose; ``exc_info=True`` attaches
+                # the traceback.
+                _logger.warning(
+                    "F3 sanctions watchlist failed to load for UI snapshot",
+                    exc_info=True,
+                )
+                watchlist_field = SnapshotField(
+                    name="watchlist_size",
+                    value="unavailable: watchlist failed to load",
+                )
+            return ComponentSnapshot(
+                component_id=component_id,
+                status=item.status,
+                title=item.label,
+                fields=[
+                    *fields,
+                    watchlist_field,
+                    SnapshotField(name="screening_mode", value="deterministic"),
+                ],
             )
         if component_id in {ComponentId.LOBSTER_TRAP, ComponentId.LITELLM}:
             return ComponentSnapshot(
@@ -648,7 +712,7 @@ class DemoControlService:
             _component(ComponentId.BANK_BETA_A3, "Bank Beta A3", SnapshotStatus.LIVE, "P8a complete."),
             _component(ComponentId.BANK_GAMMA_A3, "Bank Gamma A3", SnapshotStatus.LIVE, "P8a complete."),
             _component(ComponentId.P7, "P7 stats primitives", SnapshotStatus.LIVE, db_status),
-            _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.NOT_BUILT, "Available after P10.", "P10"),
+            _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."),
             _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.NOT_BUILT, "Available after P11.", "P11"),
             _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.NOT_BUILT, "Available after P12.", "P12"),
             _component(ComponentId.F5, "F5 auditor", SnapshotStatus.NOT_BUILT, "Available after P13.", "P13"),
