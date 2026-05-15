@@ -245,6 +245,7 @@ class StubBankStatsPrimitives:
         return PrimitiveResult(
             value=len(name_hashes),
             records=[
+                # Entity presence is an exact P7 primitive; A3 invokes it with rho=0.
                 _primitive_record(
                     field_name="entity_count",
                     primitive_name="stub_count_entities_by_name_hash",
