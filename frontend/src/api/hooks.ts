@@ -35,6 +35,14 @@ export function useSession(sessionId: string | null) {
 }
 
 export function useTimeline(sessionId: string | null) {
+  // Intentionally calls ``api.events`` (the ``/events`` endpoint) rather
+  // than ``api.timeline`` (``/timeline``). The two endpoints share
+  // implementation today but are deliberately distinct surfaces (see
+  // ``backend/ui/api.py`` near the route definitions): ``/timeline``
+  // is the stable paged-history view; ``/events`` is the streaming
+  // surface that P15 will switch from polling to SSE. Wiring the live
+  // poller to ``/events`` now means the SSE migration is a one-file
+  // hook swap with no route or component changes.
   return useQuery({
     queryKey: qk.timeline(sessionId),
     queryFn: () => api.events(sessionId ?? ""),

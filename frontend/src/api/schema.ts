@@ -242,8 +242,7 @@ export interface components {
             payload_text?: string | null;
             /** @default valid_but_malicious */
             attacker_profile: components["schemas"]["AttackerProfile"];
-            /** Target Instance Id */
-            target_instance_id?: string | null;
+            target_instance_id?: components["schemas"]["TrustDomainId"] | null;
         };
         /**
          * ComponentInteractionResult
@@ -270,8 +269,7 @@ export interface components {
             interaction_id?: string;
             interaction_kind: components["schemas"]["ComponentInteractionKind"];
             target_component: components["schemas"]["ComponentId"];
-            /** Target Instance Id */
-            target_instance_id?: string | null;
+            target_instance_id?: components["schemas"]["TrustDomainId"] | null;
             attacker_profile: components["schemas"]["AttackerProfile"];
             /** Accepted */
             accepted: boolean;
@@ -409,8 +407,7 @@ export interface components {
             attacker_profile: components["schemas"]["AttackerProfile"];
             /** Payload Text */
             payload_text?: string | null;
-            /** Target Instance Id */
-            target_instance_id?: string | null;
+            target_instance_id?: components["schemas"]["TrustDomainId"] | null;
         };
         /**
          * ProbeResult
@@ -653,6 +650,24 @@ export interface components {
             status: components["schemas"]["SnapshotStatus"];
             blocked_by?: components["schemas"]["SecurityLayer"] | null;
         };
+        /**
+         * TrustDomainId
+         * @description Canonical trust-domain identifiers shared across the API boundary.
+         *
+         *     Using a ``StrEnum`` (over an ``AfterValidator`` on ``str``) makes the
+         *     allowed values part of the OpenAPI schema as an enum, which gives the
+         *     generated frontend client a discriminated string union instead of a
+         *     plain ``string``. That removes the duplicated allow-list previously
+         *     living in both ``backend/ui/snapshots.py`` (server-side validator) and
+         *     ``frontend/src/domain/instances.ts`` (registry), and turns a
+         *     cross-boundary drift class into a compile error.
+         *
+         *     Membership must continue to mirror the frontend's ``TRUST_INSTANCES``
+         *     registry. The set is small and rarely changes; adding a new domain is
+         *     a coordinated two-side change (this enum + the registry).
+         * @enum {string}
+         */
+        TrustDomainId: "investigator" | "federation" | "bank_alpha" | "bank_beta" | "bank_gamma";
         /** ValidationError */
         ValidationError: {
             /** Location */

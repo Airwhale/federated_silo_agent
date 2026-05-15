@@ -21,12 +21,23 @@ export const DEFAULT_SESSION_CREATE: SessionCreateRequest = {
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
+    // Merge headers via the ``Headers`` constructor, which handles every
+    // ``HeadersInit`` shape (plain object, ``Headers`` instance,
+    // ``string[][]``). Spreading ``customHeaders`` into an object literal
+    // would silently drop entries for the latter two shapes; this
+    // utility is the single entry point for every API call, so a
+    // headers-form regression would be invisible until a future caller
+    // started passing a ``Headers`` instance. ``Headers.set`` after
+    // construction only fills ``Content-Type`` when the caller did not
+    // already specify one, so explicit overrides still win.
+    const { headers: customHeaders, ...restInit } = init ?? {};
+    const finalHeaders = new Headers(customHeaders);
+    if (!finalHeaders.has("Content-Type")) {
+      finalHeaders.set("Content-Type", "application/json");
+    }
     const response = await fetch(`${API_BASE}${path}`, {
-      headers: {
-        "Content-Type": "application/json",
-        ...(init?.headers ?? {}),
-      },
-      ...init,
+      ...restInit,
+      headers: finalHeaders,
     });
     const text = await response.text();
     const body = text ? JSON.parse(text) : null;

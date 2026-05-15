@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { DEFAULT_SESSION_CREATE } from "@/api/client";
-import { describeError } from "@/api/errors";
+import { ApiError, describeError } from "@/api/errors";
 import { useCreateSession, useSession } from "@/api/hooks";
 import { AppShell } from "@/components/AppShell";
 import { InspectorDrawer } from "@/components/InspectorDrawer";
@@ -59,7 +59,18 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (sessionId || createSession.isPending || createSession.data) return;
+    // Only attempt to create a session when the mutation is in its
+    // initial ``idle`` state. The previous guard
+    // (``!isPending && !data``) let the effect re-fire after a failed
+    // mutation: the mutation object is a fresh reference once
+    // ``error`` is set, the dependency array detects that, and without
+    // ``data`` to short-circuit the guard the effect calls
+    // ``mutate`` again, looping indefinitely when the backend is down
+    // on first load. ``status === "idle"`` is true exactly once before
+    // any call, so we attempt at most one session creation per page
+    // load and the user sees ``createSession.error`` rather than a
+    // network-tab fire-hose.
+    if (sessionId || createSession.status !== "idle") return;
     createSession.mutate(
       DEFAULT_SESSION_CREATE,
       {
@@ -75,14 +86,35 @@ export function App() {
     );
   }, [createSession, sessionId]);
 
+  // Recover from a stale ``sessionId`` in localStorage. If the server was
+  // restarted, the in-memory session table was cleared and the stored UUID
+  // now 404s. Without this effect ``sessionId`` stays truthy, the
+  // create-session effect above stays gated off, and the UI is stuck on a
+  // dead session. Detect the 404 from ``useSession`` and clear the stored
+  // ID, which lets the create-session effect run on the next render.
+  useEffect(() => {
+    if (session.error instanceof ApiError && session.error.status === 404) {
+      try {
+        window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      } catch {
+        // localStorage unavailable; state clear below is enough.
+      }
+      setSessionId(null);
+    }
+  }, [session.error]);
+
   const activeSession = useMemo(() => session.data ?? createSession.data ?? null, [
     createSession.data,
     session.data,
   ]);
 
   const changeTab = (tab: AppTab) => {
+    // Setting ``window.location.hash`` fires a synchronous ``hashchange``
+    // event that the listener above picks up and dispatches
+    // ``setActiveTab``. Calling ``setActiveTab`` here as well would
+    // schedule a redundant render; the URL hash is the single source of
+    // truth for the active tab and the listener is the sole writer.
     window.location.hash = `/${tab}`;
-    setActiveTab(tab);
   };
 
   const setStoredSessionId = (nextSessionId: string | null) => {

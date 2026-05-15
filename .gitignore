@@ -19,11 +19,8 @@ venv/
 logs/
 *.log
 
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/*.tsbuildinfo
+# Frontend ignores live in ``frontend/.gitignore`` (Vite scaffolding)
+# so directory-local concerns stay co-located.
 
 # OS
 .DS_Store

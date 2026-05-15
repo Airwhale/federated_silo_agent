@@ -18,10 +18,55 @@ const initialFilters: TimelineFilters = {
   text: "",
 };
 
-function instanceForComponent(componentId: ComponentId): TrustDomain | undefined {
-  return TRUST_INSTANCES.find((instance) =>
-    instance.mechanisms.some((mechanism) => mechanism.componentId === componentId),
-  )?.id;
+// Pre-computed component -> set-of-trust-domains index. Built once at
+// module load so the per-event filter in the timeline (which fires on
+// every re-render and every 2-second poll refresh) does an O(1) Map
+// lookup instead of O(instances * mechanisms) of nested ``find``/``some``.
+//
+// Several mechanisms (``signing``, ``envelope``, ``replay``,
+// ``lobster_trap``, ``litellm``, ``route_approval``) are shared across
+// multiple trust domains in ``TRUST_INSTANCES``, so the index has to be
+// a Set rather than a single TrustDomain. Using a plain ``Map<C, TD>``
+// last-write-wins would silently mis-attribute every shared component
+// to whichever domain appears last (today: ``bank_gamma``), breaking
+// both filter and navigation for those rows. Backend will start
+// emitting an instance-specific ``target_instance_id`` on each timeline
+// event in P15; until then the UI treats shared components as belonging
+// to all of their domains for filter purposes and picks an arbitrary
+// representative for navigation (first match, matching the previous
+// ``find``-based behavior).
+const componentToInstances: ReadonlyMap<ComponentId, ReadonlySet<TrustDomain>> = (() => {
+  const map = new Map<ComponentId, Set<TrustDomain>>();
+  for (const instance of TRUST_INSTANCES) {
+    for (const mechanism of instance.mechanisms) {
+      const existing = map.get(mechanism.componentId);
+      if (existing) {
+        existing.add(instance.id);
+      } else {
+        map.set(mechanism.componentId, new Set([instance.id]));
+      }
+    }
+  }
+  return map;
+})();
+
+function eventMatchesInstanceFilter(
+  componentId: ComponentId,
+  filterDomain: TrustDomain | "all",
+): boolean {
+  if (filterDomain === "all") return true;
+  return componentToInstances.get(componentId)?.has(filterDomain) ?? false;
+}
+
+function representativeInstance(componentId: ComponentId): TrustDomain | undefined {
+  // Returns the first domain that owns the component (insertion order),
+  // matching the previous ``TRUST_INSTANCES.find(...)`` semantics for
+  // event-row click navigation. The drawer renders the same singleton
+  // data for any of the domains a shared component belongs to, so the
+  // "first" choice is a UX rather than correctness concern.
+  const set = componentToInstances.get(componentId);
+  if (!set) return undefined;
+  return set.values().next().value;
 }
 
 export function Timeline({ sessionId, onSelect }: Props) {
@@ -31,9 +76,8 @@ export function Timeline({ sessionId, onSelect }: Props) {
   const events = useMemo(() => {
     const text = filters.text.trim().toLowerCase();
     return (timeline.data ?? []).filter((event) => {
-      const instanceId = instanceForComponent(event.component_id);
       return (
-        (filters.instanceId === "all" || filters.instanceId === instanceId) &&
+        eventMatchesInstanceFilter(event.component_id, filters.instanceId) &&
         (filters.componentId === "all" || filters.componentId === event.component_id) &&
         (filters.status === "all" || filters.status === event.status) &&
         (filters.layer === "all" || filters.layer === event.blocked_by) &&
@@ -59,7 +103,7 @@ export function Timeline({ sessionId, onSelect }: Props) {
           <TimelineEventRow
             key={event.event_id}
             event={event}
-            onSelect={() => onSelect(event.component_id, instanceForComponent(event.component_id))}
+            onSelect={() => onSelect(event.component_id, representativeInstance(event.component_id))}
           />
         ))}
         {events.length === 0 ? (

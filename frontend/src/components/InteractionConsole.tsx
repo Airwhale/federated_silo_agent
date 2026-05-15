@@ -17,8 +17,22 @@ const interactionKinds: ComponentInteractionKind[] = [
 export function InteractionConsole() {
   const { sessionId } = useSessionContext();
   const [instanceId, setInstanceId] = useState<TrustDomain>("federation");
-  const instance = TRUST_INSTANCES.find((item) => item.id === instanceId) ?? TRUST_INSTANCES[1];
-  const [componentId, setComponentId] = useState<ComponentId>(instance.mechanisms[0].componentId);
+  // Fallback to ``TRUST_INSTANCES[0]`` for consistency with the
+  // ``onChange`` handler below and with ``ProbeForm`` / other instance
+  // selectors. The default state is ``"federation"`` and ``find`` will
+  // hit; this branch only runs if the registry ever loses the federation
+  // entry. Keeping all fallbacks aligned avoids surprising UX drift.
+  const instance = TRUST_INSTANCES.find((item) => item.id === instanceId) ?? TRUST_INSTANCES[0];
+  // Fall back to the first known instance's first mechanism if the chosen
+  // instance somehow has none. The hardcoded ``TRUST_INSTANCES`` registry
+  // guarantees at least one mechanism per instance today, but the dynamic
+  // ``setComponentId`` call inside the instance ``onChange`` below has to
+  // handle the empty case defensively, so we keep the initializer aligned
+  // with that contract rather than crashing if the registry ever drifts.
+  const [componentId, setComponentId] = useState<ComponentId>(
+    instance.mechanisms[0]?.componentId ??
+      TRUST_INSTANCES[0].mechanisms[0].componentId,
+  );
   const [interactionKind, setInteractionKind] =
     useState<ComponentInteractionKind>("inspect");
   const [payloadText, setPayloadText] = useState("");
@@ -56,7 +70,14 @@ export function InteractionConsole() {
             const next = event.target.value as TrustDomain;
             const nextInstance = TRUST_INSTANCES.find((item) => item.id === next) ?? TRUST_INSTANCES[0];
             setInstanceId(next);
-            setComponentId(nextInstance.mechanisms[0].componentId);
+            // Guard against an instance with no mechanisms: ``[0]`` would
+            // be ``undefined`` and the property access would throw a
+            // TypeError at runtime. The registry is static today, but
+            // the indirection keeps the component robust to drift.
+            const firstMechanism = nextInstance.mechanisms[0];
+            if (firstMechanism) {
+              setComponentId(firstMechanism.componentId);
+            }
           }}
           className="rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm"
         >

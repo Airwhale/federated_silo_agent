@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from backend.security.replay import ReplayCacheSnapshot
 from shared.enums import BankId, RouteKind
 
@@ -25,30 +25,33 @@ ProbePayloadText = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
 ]
 
-# Allowed values for ``target_instance_id`` on probe and interaction
-# requests. Must mirror the frontend's ``TRUST_INSTANCES`` registry. The
-# character-class constraint catches raw garbage; this set catches
-# semantically wrong inputs (e.g. a ``ComponentId`` value, a random
-# string, or an injected payload that happens to be alphanumeric).
-KNOWN_TRUST_DOMAIN_IDS: frozenset[str] = frozenset(
-    {"investigator", "federation", "bank_alpha", "bank_beta", "bank_gamma"}
-)
+class TrustDomainId(StrEnum):
+    """Canonical trust-domain identifiers shared across the API boundary.
+
+    Using a ``StrEnum`` (over an ``AfterValidator`` on ``str``) makes the
+    allowed values part of the OpenAPI schema as an enum, which gives the
+    generated frontend client a discriminated string union instead of a
+    plain ``string``. That removes the duplicated allow-list previously
+    living in both ``backend/ui/snapshots.py`` (server-side validator) and
+    ``frontend/src/domain/instances.ts`` (registry), and turns a
+    cross-boundary drift class into a compile error.
+
+    Membership must continue to mirror the frontend's ``TRUST_INSTANCES``
+    registry. The set is small and rarely changes; adding a new domain is
+    a coordinated two-side change (this enum + the registry).
+    """
+
+    INVESTIGATOR = "investigator"
+    FEDERATION = "federation"
+    BANK_ALPHA = "bank_alpha"
+    BANK_BETA = "bank_beta"
+    BANK_GAMMA = "bank_gamma"
 
 
-def _validate_known_trust_domain(value: str) -> str:
-    if value not in KNOWN_TRUST_DOMAIN_IDS:
-        raise ValueError(
-            f"target_instance_id {value!r} is not a known trust domain "
-            f"(expected one of: {sorted(KNOWN_TRUST_DOMAIN_IDS)})"
-        )
-    return value
-
-
-InstanceIdText = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$"),
-    AfterValidator(_validate_known_trust_domain),
-]
+# Backwards-compatible alias so legacy call sites and documentation that
+# referenced ``KNOWN_TRUST_DOMAIN_IDS`` keep working. New code should
+# prefer ``TrustDomainId`` directly.
+KNOWN_TRUST_DOMAIN_IDS: frozenset[str] = frozenset(d.value for d in TrustDomainId)
 
 
 def utc_now() -> datetime:
@@ -310,7 +313,7 @@ class ProbeRequest(UiModel):
     target_component: ComponentId
     attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
     payload_text: ProbePayloadText | None = None
-    target_instance_id: InstanceIdText | None = None
+    target_instance_id: TrustDomainId | None = None
 
 
 class ComponentInteractionRequest(UiModel):
@@ -319,7 +322,7 @@ class ComponentInteractionRequest(UiModel):
     interaction_kind: ComponentInteractionKind
     payload_text: ProbePayloadText | None = None
     attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
-    target_instance_id: InstanceIdText | None = None
+    target_instance_id: TrustDomainId | None = None
 
 
 class HealthSnapshot(UiModel):
@@ -372,7 +375,7 @@ class ComponentInteractionResult(UiModel):
     interaction_id: UUID = Field(default_factory=uuid4)
     interaction_kind: ComponentInteractionKind
     target_component: ComponentId
-    target_instance_id: str | None = None
+    target_instance_id: TrustDomainId | None = None
     attacker_profile: AttackerProfile
     accepted: bool
     executed: bool

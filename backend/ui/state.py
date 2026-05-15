@@ -413,11 +413,11 @@ class DemoControlService:
         component_id: ComponentId,
         request: ComponentInteractionRequest,
     ) -> ComponentInteractionResult:
-        # ``target_instance_id`` is already validated against
-        # ``KNOWN_TRUST_DOMAIN_IDS`` by the Pydantic AfterValidator on
-        # ``InstanceIdText`` (returns 422 on unknown values), so this
-        # handler can assume any non-None value is one of the five
-        # canonical trust domains.
+        # ``target_instance_id`` is typed as ``TrustDomainId`` (a
+        # ``StrEnum``) on the request models, so FastAPI / Pydantic
+        # automatically returns 422 for any value outside the canonical
+        # five trust domains. This handler can assume any non-None value
+        # is a valid ``TrustDomainId`` member.
         # Resolve session *outside* ``session.lock``. ``self._session(...)``
         # acquires ``self._sessions_lock``; doing so while holding
         # ``session.lock`` would invert the lock order against

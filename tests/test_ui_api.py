@@ -320,9 +320,11 @@ def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
 
 
 def test_interaction_rejects_unknown_target_instance_id() -> None:
-    # InstanceIdText AfterValidator must reject any string outside the
-    # canonical five trust domains, including character-class-valid
-    # but semantically invalid values like a ComponentId.
+    # ``target_instance_id`` is typed as ``TrustDomainId`` (StrEnum) on
+    # the request schema, so FastAPI/Pydantic auto-emits a 422 with an
+    # ``enum``-type error for any value outside the canonical five
+    # trust domains -- including character-class-valid but semantically
+    # invalid values like a ComponentId.
     test_client = client()
     session_id = create_session(test_client)
 
@@ -333,7 +335,11 @@ def test_interaction_rejects_unknown_target_instance_id() -> None:
         )
         assert response.status_code == 422, f"unexpected pass for target_instance_id={bad!r}"
         detail = response.json()["detail"]
-        assert any("not a known trust domain" in entry["msg"] for entry in detail)
+        assert any(
+            entry.get("type") == "enum"
+            and entry.get("loc", [])[-1] == "target_instance_id"
+            for entry in detail
+        ), f"expected enum-type validation error, got: {detail}"
 
 
 def test_concurrent_create_session_and_interaction_does_not_deadlock() -> None:
