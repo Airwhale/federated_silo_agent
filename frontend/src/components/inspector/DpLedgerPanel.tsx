@@ -17,7 +17,23 @@ export function DpLedgerPanel({ snapshot }: Props) {
       ) : (
         <ul className="flex flex-col gap-1.5">
           {entries.map((entry) => {
-            const pct = Math.min(100, Math.max(0, (entry.rho_spent / entry.rho_max) * 100));
+            // Guard against ``rho_max=0``: would otherwise produce
+            // ``Infinity`` (when ``rho_spent > 0``) or ``NaN`` (when
+            // ``rho_spent = 0``), and ``style.width: NaN%`` is invalid
+            // CSS that breaks the bar render entirely. Both probes and
+            // future P15 ledger writes can in principle emit a
+            // zero-cap row (e.g. a requester with no allocated
+            // budget); the bar reads as "0% filled" in that case,
+            // which is the truthful interpretation.
+            const rawPct = entry.rho_max > 0 ? (entry.rho_spent / entry.rho_max) * 100 : 0;
+            // ``Number.isFinite`` guard catches the edge cases the
+            // division check above doesn't: an upstream snapshot that
+            // somehow carried ``Infinity`` or ``NaN`` in ``rho_spent``
+            // (Pydantic's ``NonNegativeFloat`` rejects those server-
+            // side, but defending in the renderer keeps an invalid
+            // ``style.width: NaN%`` from silently breaking the bar
+            // if the contract is ever loosened).
+            const pct = Math.min(100, Math.max(0, Number.isFinite(rawPct) ? rawPct : 0));
             return (
               <li
                 key={`${entry.requester_key}-${entry.responding_bank_id}`}

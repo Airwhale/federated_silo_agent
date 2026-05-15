@@ -10,6 +10,7 @@ import type {
   ProviderHealthSnapshot,
   SnapshotStatus,
 } from "@/api/types";
+import { FieldLabel } from "@/components/forms/FieldLabel";
 import { KeyValueGrid, type KeyValueRow } from "@/components/inspector/KeyValueGrid";
 import { ModelRoutePanel } from "@/components/inspector/ModelRoutePanel";
 import { useSessionContext } from "@/components/SessionContext";
@@ -601,11 +602,3 @@ function RouteStatePanel({
   );
 }
 
-function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-0.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
-      {children}
-    </label>
-  );
-}

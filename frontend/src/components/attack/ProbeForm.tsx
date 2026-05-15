@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { describeError } from "@/api/errors";
 import { useProbe } from "@/api/hooks";
 import type { AttackerProfile, ComponentId, ProbeResult } from "@/api/types";
+import { FieldLabel } from "@/components/forms/FieldLabel";
 import { useSessionContext } from "@/components/SessionContext";
 import { StatusPill } from "@/components/StatusPill";
 import { TRUST_INSTANCES, componentLabel, type TrustDomain } from "@/domain/instances";
@@ -163,11 +164,3 @@ export function ProbeForm({ config }: Props) {
   );
 }
 
-function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-0.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-500">{label}</span>
-      {children}
-    </label>
-  );
-}
