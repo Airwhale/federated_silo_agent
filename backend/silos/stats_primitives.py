@@ -633,8 +633,8 @@ class BankStatsPrimitives:
                 t.counterparty_account_id_hashed,
                 t.amount
             FROM transactions t
-            WHERE timestamp >= ?
-              AND timestamp < ?
+            WHERE t.timestamp >= ?
+              AND t.timestamp < ?
             ORDER BY t.transaction_id
             LIMIT ?
         """
