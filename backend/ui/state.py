@@ -21,11 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.a3_states import A3TurnInput
 from backend.agents.f3_sanctions import load_watchlist
+from backend.orchestrator import Orchestrator, OrchestratorPrincipals
+from backend.orchestrator.runtime import SessionOrchestratorState, TerminalCode
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
 from backend.security import (
     PrincipalNotAllowed,
-    PrincipalAllowlist,
-    PrincipalAllowlistEntry,
     ReplayCache,
     ReplayCacheSnapshot,
     ReplayDetected,
@@ -34,18 +34,25 @@ from backend.security import (
 )
 from backend.security.signing import (
     approved_body_hash,
-    generate_key_pair,
     sign_message,
     sign_model_signature,
 )
 from backend.silos.budget import PrivacyBudgetLedger, RequesterKey
 from backend.silos.local_reader import bank_db_path
-from shared.enums import AgentRole, BankId, MessageType, QueryShape, RouteKind, TypologyCode
+from shared.enums import (
+    AgentRole,
+    BankId,
+    QueryShape,
+    RouteKind,
+    TypologyCode,
+)
 from shared.messages import (
     EntityPresencePayload,
+    LocalSiloContributionRequest,
     PurposeDeclaration,
     RouteApproval,
     Sec314bQuery,
+    Sec314bResponse,
 )
 
 from backend.ui.snapshots import (
@@ -136,6 +143,7 @@ class DemoSessionRuntime:
             entries=[],
             detail="No DP budget has been spent in this session yet.",
         )
+        self.orchestrator_state: SessionOrchestratorState | None = None
         self.lock = threading.RLock()
 
     def append_event(self, event: TimelineEventSnapshot) -> TimelineEventSnapshot:
@@ -159,6 +167,7 @@ class DemoSessionRuntime:
 
 
 MAX_ACTIVE_SESSIONS = 50
+_MAX_ORCHESTRATOR_TURNS = 50
 
 # Module-level logger for server-side diagnostics that should not be exposed
 # to the UI. Uses ``logging.getLogger(__name__)`` so deployments can route or
@@ -188,6 +197,20 @@ def _infra_root() -> Path:
 # surfacing as a 500 on what should be a refusal path.
 _DETAIL_MAX_LEN = 2048
 _DETAIL_ELLIPSIS = " …[truncated]"
+
+
+_LIVE_AGENT_COMPONENTS = {
+    # This is intentionally an explicit UI placement list, not generated
+    # from AgentRegistry. F2/F4/F5/F6 may be live as backend components but
+    # P15 still stops before scheduling them in the live orchestrator path.
+    ComponentId.A1,
+    ComponentId.A2,
+    ComponentId.F1,
+    ComponentId.F3,
+    ComponentId.BANK_ALPHA_A3,
+    ComponentId.BANK_BETA_A3,
+    ComponentId.BANK_GAMMA_A3,
+}
 
 
 def _truncate_detail(text: str, *, limit: int = _DETAIL_MAX_LEN) -> str:
@@ -226,8 +249,12 @@ class DemoControlService:
             raise ValueError(
                 f"MAX_ACTIVE_SESSIONS must be >= 1, got {MAX_ACTIVE_SESSIONS}"
             )
-        self._principals = _build_demo_principals()
-        self._allowlist = PrincipalAllowlist(_allowlist_entries(self._principals))
+        self._orchestrator_principals = OrchestratorPrincipals.build()
+        self._principals = _demo_principals_from_orchestrator(
+            self._orchestrator_principals
+        )
+        self._allowlist = self._orchestrator_principals.allowlist
+        self._orchestrator = Orchestrator(principals=self._orchestrator_principals)
         # Python dicts preserve insertion order since 3.7, which gives us
         # FIFO eviction for free without pulling in collections.OrderedDict.
         self._sessions: dict[UUID, DemoSessionRuntime] = {}
@@ -261,33 +288,31 @@ class DemoControlService:
     def step_session(self, session_id: UUID) -> SessionSnapshot:
         session = self._session(session_id)
         with session.lock:
-            session.phase = "p9a_placeholder_step"
-            session.append_event(
-                TimelineEventSnapshot(
-                    component_id=ComponentId.F1,
-                    title="Control-plane step recorded",
-                    detail=(
-                        "P9a does not run the full message bus; P15 will replace this "
-                        "placeholder with orchestrator-driven transitions."
-                    ),
-                    status=SnapshotStatus.PENDING,
-                )
-            )
+            self._ensure_orchestrator_state(session)
+            self._run_one_orchestrator_turn(session)
         return session.to_snapshot(self.component_readiness())
 
     def run_until_idle(self, session_id: UUID) -> SessionSnapshot:
         session = self._session(session_id)
         with session.lock:
-            session.phase = "p9a_idle"
-            session.append_event(
-                TimelineEventSnapshot(
-                    component_id=ComponentId.AUDIT_CHAIN,
-                    title="No live orchestrator yet",
-                    detail="P15 owns run-until-idle semantics; P9a reports typed placeholders.",
-                    status=SnapshotStatus.NOT_BUILT,
-                    blocked_by=SecurityLayer.NOT_BUILT,
+            self._ensure_orchestrator_state(session)
+            for _ in range(_MAX_ORCHESTRATOR_TURNS):
+                if not self._run_one_orchestrator_turn(session):
+                    break
+            else:
+                session.phase = "turn_cap_reached"
+                session.append_event(
+                    TimelineEventSnapshot(
+                        component_id=ComponentId.AUDIT_CHAIN,
+                        title="Orchestrator turn cap reached",
+                        detail=(
+                            f"Run stopped after {_MAX_ORCHESTRATOR_TURNS} turns "
+                            "to avoid an infinite loop."
+                        ),
+                        status=SnapshotStatus.ERROR,
+                        blocked_by=SecurityLayer.INTERNAL_ERROR,
+                    )
                 )
-            )
         return session.to_snapshot(self.component_readiness())
 
     def timeline(self, session_id: UUID) -> list[TimelineEventSnapshot]:
@@ -507,20 +532,24 @@ class DemoControlService:
                 provider_health=self.provider_health(),
             )
         if component_id == ComponentId.AUDIT_CHAIN:
+            with session.lock:
+                audit_chain = _audit_chain_snapshot(session.orchestrator_state)
             return ComponentSnapshot(
                 component_id=component_id,
-                status=item.status,
+                status=audit_chain.status,
                 title=item.label,
                 fields=fields,
-                audit_chain=AuditChainSnapshot(
-                    status=item.status,
-                    event_count=0,
-                    detail=(
-                        "Hash-chain persistence lands with P13/P15; P9a timeline "
-                        "events are not counted as audit-chain events."
-                    ),
-                ),
+                audit_chain=audit_chain,
             )
+        if component_id in _LIVE_AGENT_COMPONENTS:
+            with session.lock:
+                fields = [
+                    *fields,
+                    *_orchestrator_component_fields(
+                        session.orchestrator_state,
+                        component_id,
+                    ),
+                ]
         return ComponentSnapshot(
             component_id=component_id,
             status=item.status,
@@ -780,8 +809,61 @@ class DemoControlService:
             _component(ComponentId.REPLAY, "Replay cache", SnapshotStatus.LIVE, "In-memory replay cache is live."),
             _component(ComponentId.ROUTE_APPROVAL, "Route approvals", SnapshotStatus.LIVE, "F1/A3 route-approval binding is live."),
             _component(ComponentId.DP_LEDGER, "DP ledger", SnapshotStatus.LIVE, "P7 rho ledger is live."),
-            _component(ComponentId.AUDIT_CHAIN, "Audit chain", SnapshotStatus.NOT_BUILT, "Hash-chain persistence lands P13/P15.", "P13/P15"),
+            _component(ComponentId.AUDIT_CHAIN, "Audit chain", SnapshotStatus.LIVE, "P15 in-memory audit hash chain is live."),
         ]
+
+    def _ensure_orchestrator_state(self, session: DemoSessionRuntime) -> SessionOrchestratorState:
+        if session.orchestrator_state is None:
+            session.orchestrator_state = self._orchestrator.bootstrap(
+                session_id=session.session_id,
+                mode=session.mode.value,
+            )
+            session.phase = "orchestrator_ready"
+            session.append_event(
+                TimelineEventSnapshot(
+                    component_id=ComponentId.AUDIT_CHAIN,
+                    title="P15 orchestrator initialized",
+                    detail="Local live agent registry and audit chain are ready.",
+                    status=SnapshotStatus.LIVE,
+                )
+            )
+        return session.orchestrator_state
+
+    def _run_one_orchestrator_turn(self, session: DemoSessionRuntime) -> bool:
+        state = self._ensure_orchestrator_state(session)
+        turn = self._orchestrator.next_turn(state)
+        if turn is None:
+            is_f4_pending = state.terminal_code == TerminalCode.F4_PENDING
+            session.phase = state.terminal_reason or "idle"
+            session.append_event(
+                TimelineEventSnapshot(
+                    component_id=ComponentId.AUDIT_CHAIN,
+                    title="Orchestrator idle",
+                    detail=state.terminal_reason or "No scheduled live turn remains.",
+                    status=SnapshotStatus.PENDING
+                    if is_f4_pending
+                    else SnapshotStatus.LIVE,
+                    blocked_by=SecurityLayer.NOT_BUILT if is_f4_pending else None,
+                )
+            )
+            return False
+
+        detail = self._orchestrator.run_turn(state, turn)
+        is_f4_pending = state.terminal_code == TerminalCode.F4_PENDING
+        session.phase = turn.kind
+        _sync_security_snapshots(session, state)
+        session.append_event(
+            TimelineEventSnapshot(
+                component_id=_turn_component_id(turn.agent_id),
+                title=f"Live turn: {turn.agent_id}",
+                detail=detail,
+                status=SnapshotStatus.PENDING
+                if is_f4_pending
+                else SnapshotStatus.LIVE,
+                blocked_by=SecurityLayer.NOT_BUILT if is_f4_pending else None,
+            )
+        )
+        return True
 
     def _unsigned_message_probe(
         self,
@@ -1101,86 +1183,20 @@ class DemoControlService:
                 raise KeyError(f"unknown session_id: {session_id}") from exc
 
 
-def _build_demo_principals() -> dict[str, DemoPrincipal]:
-    specs = [
-        ("bank_alpha.A2", AgentRole.A2, BankId.BANK_ALPHA),
-        ("bank_beta.A3", AgentRole.A3, BankId.BANK_BETA),
-        ("federation.F1", AgentRole.F1, BankId.FEDERATION),
-        ("bank_alpha.F6", AgentRole.F6, BankId.BANK_ALPHA),
-        ("bank_beta.F6", AgentRole.F6, BankId.BANK_BETA),
-        ("bank_gamma.F6", AgentRole.F6, BankId.BANK_GAMMA),
-        ("federation.F6", AgentRole.F6, BankId.FEDERATION),
-    ]
-    principals: dict[str, DemoPrincipal] = {}
-    for agent_id, role, bank_id in specs:
-        pair = generate_key_pair(f"{agent_id}.demo-key")
-        principals[agent_id] = DemoPrincipal(
-            agent_id=agent_id,
-            role=role,
-            bank_id=bank_id,
-            signing_key_id=pair.signing_key_id,
-            private_key=pair.private_key,
-            public_key=pair.public_key,
-        )
-    return principals
-
-
-def _allowlist_entries(principals: dict[str, DemoPrincipal]) -> list[PrincipalAllowlistEntry]:
-    alpha_a2 = principals["bank_alpha.A2"]
-    beta_a3 = principals["bank_beta.A3"]
-    f1 = principals["federation.F1"]
-    entries = [
-        PrincipalAllowlistEntry(
-            agent_id=alpha_a2.agent_id,
-            role=alpha_a2.role,
-            bank_id=alpha_a2.bank_id,
-            signing_key_id=alpha_a2.signing_key_id,
-            public_key=alpha_a2.public_key,
-            allowed_message_types=[MessageType.SEC314B_QUERY.value],
-            allowed_recipients=["federation.F1"],
-        ),
-        PrincipalAllowlistEntry(
-            agent_id=beta_a3.agent_id,
-            role=beta_a3.role,
-            bank_id=beta_a3.bank_id,
-            signing_key_id=beta_a3.signing_key_id,
-            public_key=beta_a3.public_key,
-            allowed_message_types=[MessageType.SEC314B_RESPONSE.value],
-            allowed_recipients=["federation.F1"],
-        ),
-        PrincipalAllowlistEntry(
-            agent_id=f1.agent_id,
-            role=f1.role,
-            bank_id=f1.bank_id,
-            signing_key_id=f1.signing_key_id,
-            public_key=f1.public_key,
-            allowed_message_types=[
-                MessageType.SEC314B_QUERY.value,
-                MessageType.LOCAL_SILO_CONTRIBUTION_REQUEST.value,
-                # F1 emits the aggregate Sec314bResponse back to the requester A2.
-                MessageType.SEC314B_RESPONSE.value,
-            ],
-            allowed_recipients=["*"],
-            allowed_routes=[RouteKind.PEER_314B, RouteKind.LOCAL_CONTRIBUTION],
-        ),
-    ]
-    entries.extend(
-        PrincipalAllowlistEntry(
+def _demo_principals_from_orchestrator(
+    principals: OrchestratorPrincipals,
+) -> dict[str, DemoPrincipal]:
+    return {
+        agent_id: DemoPrincipal(
             agent_id=principal.agent_id,
             role=principal.role,
             bank_id=principal.bank_id,
             signing_key_id=principal.signing_key_id,
+            private_key=principal.private_key,
             public_key=principal.public_key,
-            allowed_message_types=[
-                MessageType.POLICY_EVALUATION_RESULT.value,
-                MessageType.AUDIT_EVENT.value,
-            ],
-            allowed_recipients=["*"],
         )
-        for principal in principals.values()
-        if principal.role == AgentRole.F6
-    )
-    return entries
+        for agent_id, principal in principals.principals.items()
+    }
 
 
 def _base_a2_query(
@@ -1238,6 +1254,265 @@ def _database_detail() -> str:
     return "P7 is live and all three demo bank DBs are present."
 
 
+def _audit_chain_snapshot(
+    state: SessionOrchestratorState | None,
+) -> AuditChainSnapshot:
+    if state is None:
+        return AuditChainSnapshot(
+            status=SnapshotStatus.PENDING,
+            event_count=0,
+            detail="P15 orchestrator has not initialized for this session yet.",
+        )
+    return AuditChainSnapshot(
+        status=SnapshotStatus.LIVE,
+        event_count=state.audit.event_count,
+        latest_event_hash=state.audit.latest_hash,
+        detail=f"In-memory audit hash chain contains {state.audit.event_count} event(s).",
+    )
+
+
+def _orchestrator_component_fields(
+    state: SessionOrchestratorState | None,
+    component_id: ComponentId,
+) -> list[SnapshotField]:
+    if state is None:
+        return [SnapshotField(name="live_turn_state", value="not_started")]
+
+    fields = [
+        SnapshotField(
+            name="live_turn_state",
+            value=state.terminal_reason or "running",
+        ),
+        SnapshotField(name="turn_count", value=str(state.turn_count)),
+    ]
+    if component_id == ComponentId.A1:
+        fields.append(
+            SnapshotField(
+                name="latest_alert_id",
+                value=str(state.latest_alert.alert_id) if state.latest_alert else "none",
+            )
+        )
+    elif component_id == ComponentId.A2:
+        fields.extend(
+            [
+                SnapshotField(
+                    name="query_id",
+                    value=(
+                        str(state.original_query.query_id)
+                        if state.original_query
+                        else "none"
+                    ),
+                ),
+                SnapshotField(
+                    name="final_artifact",
+                    value=_a2_artifact_state(state),
+                ),
+            ]
+        )
+    elif component_id == ComponentId.F1:
+        fields.extend(
+            [
+                SnapshotField(
+                    name="routed_requests",
+                    value=str(len(state.routed_requests)),
+                ),
+                SnapshotField(
+                    name="aggregate_fields",
+                    value=(
+                        str(len(state.aggregate_response.fields))
+                        if state.aggregate_response
+                        else "0"
+                    ),
+                ),
+            ]
+        )
+    elif component_id == ComponentId.F3:
+        fields.append(
+            SnapshotField(
+                name="sanctions_response",
+                value=(
+                    str(state.sanctions_response.message_id)
+                    if state.sanctions_response
+                    else "none"
+                ),
+            )
+        )
+    elif component_id in {
+        ComponentId.BANK_ALPHA_A3,
+        ComponentId.BANK_BETA_A3,
+        ComponentId.BANK_GAMMA_A3,
+    }:
+        bank_id = _a3_component_bank(component_id)
+        response = next(
+            (
+                item
+                for item in state.a3_responses
+                if item.responding_bank_id == bank_id
+            ),
+            None,
+        )
+        fields.extend(
+            [
+                SnapshotField(name="bank_id", value=bank_id.value),
+                SnapshotField(
+                    name="response_status",
+                    value=(
+                        response.refusal_reason
+                        if response and response.refusal_reason
+                        else "ok"
+                        if response
+                        else "not_run"
+                    ),
+                ),
+            ]
+        )
+    return fields
+
+
+def _a2_artifact_state(state: SessionOrchestratorState) -> str:
+    if state.sar_contribution is not None:
+        return f"sar_contribution:{state.sar_contribution.message_id}"
+    if state.dismissal is not None:
+        return f"dismissal:{state.dismissal.message_id}"
+    return "none"
+
+
+def _a3_component_bank(component_id: ComponentId) -> BankId:
+    mapping = {
+        ComponentId.BANK_ALPHA_A3: BankId.BANK_ALPHA,
+        ComponentId.BANK_BETA_A3: BankId.BANK_BETA,
+        ComponentId.BANK_GAMMA_A3: BankId.BANK_GAMMA,
+    }
+    return mapping[component_id]
+
+
+def _sync_security_snapshots(
+    session: DemoSessionRuntime,
+    state: SessionOrchestratorState,
+) -> None:
+    message = _latest_signed_message(state)
+    if message is not None:
+        session.latest_envelope = _envelope_snapshot(
+            message,
+            status=SnapshotStatus.LIVE,
+            signature_status="valid" if message.signature else "missing",
+            freshness_status=_message_freshness_status(message),
+            detail="Latest orchestrator message is visible after a live turn.",
+        )
+
+    route_request = _latest_routed_request(state)
+    if route_request is not None and route_request.route_approval is not None:
+        approval = route_request.route_approval
+        computed_hash = approved_body_hash(route_request)
+        session.latest_route = RouteApprovalSnapshot(
+            status=(
+                SnapshotStatus.LIVE
+                if approval.approved_query_body_hash == computed_hash
+                else SnapshotStatus.BLOCKED
+            ),
+            query_id=approval.query_id,
+            route_kind=approval.route_kind,
+            approved_query_body_hash=approval.approved_query_body_hash,
+            computed_query_body_hash=computed_hash,
+            requester_bank_id=approval.requesting_bank_id,
+            responder_bank_id=approval.responding_bank_id,
+            binding_status=(
+                "matched"
+                if approval.approved_query_body_hash == computed_hash
+                else "mismatched"
+            ),
+            detail="Latest F1 route approval binding has been checked.",
+        )
+
+    entries = _dp_ledger_entries(state)
+    if entries:
+        session.dp_ledger = DpLedgerSnapshot(
+            status=SnapshotStatus.LIVE,
+            entries=entries,
+            detail="A3 provenance records from the live run are reflected as rho spend.",
+        )
+
+
+def _latest_signed_message(
+    state: SessionOrchestratorState,
+) -> Sec314bQuery | LocalSiloContributionRequest | Sec314bResponse | None:
+    if state.aggregate_response is not None:
+        return state.aggregate_response
+    if state.a3_responses:
+        return state.a3_responses[-1]
+    route_request = _latest_routed_request(state)
+    if isinstance(route_request, (Sec314bQuery, LocalSiloContributionRequest)):
+        return route_request
+    if state.original_query is not None:
+        return state.original_query
+    return None
+
+
+def _latest_routed_request(
+    state: SessionOrchestratorState,
+) -> Sec314bQuery | LocalSiloContributionRequest | None:
+    if not state.routed_requests:
+        return None
+    return state.routed_requests[-1]
+
+
+def _message_freshness_status(
+    message: Sec314bQuery | LocalSiloContributionRequest | Sec314bResponse,
+) -> Literal["fresh", "expired", "not_checked"]:
+    if message.expires_at is None:
+        return "not_checked"
+    return "fresh" if message.expires_at > utc_now() else "expired"
+
+
+def _dp_ledger_entries(state: SessionOrchestratorState) -> list[DpLedgerEntrySnapshot]:
+    if state.original_query is None:
+        return []
+    entries: list[DpLedgerEntrySnapshot] = []
+    # P7 budgets are scoped per RequesterKey, including responding_bank_id.
+    cumulative_spend_by_requester_key: dict[str, float] = {}
+    for response in state.a3_responses:
+        rho_spent = sum(record.rho_debited for record in response.provenance)
+        if rho_spent <= 0:
+            continue
+        requester = RequesterKey(
+            requesting_investigator_id=state.original_query.requesting_investigator_id,
+            requesting_bank_id=state.original_query.requesting_bank_id,
+            responding_bank_id=response.responding_bank_id,
+        )
+        current_total_spend = (
+            cumulative_spend_by_requester_key.get(requester.stable_key, 0.0)
+            + rho_spent
+        )
+        cumulative_spend_by_requester_key[requester.stable_key] = current_total_spend
+        entries.append(
+            DpLedgerEntrySnapshot(
+                requester_key=_redacted_requester_key(requester),
+                responding_bank_id=response.responding_bank_id,
+                rho_spent=rho_spent,
+                rho_remaining=max(1.0 - current_total_spend, 0.0),
+                rho_max=1.0,
+            )
+        )
+    return entries
+
+
+def _turn_component_id(agent_id: str) -> ComponentId:
+    if agent_id.endswith(".A1"):
+        return ComponentId.A1
+    if agent_id.endswith(".A2"):
+        return ComponentId.A2
+    if agent_id == "federation.F1":
+        return ComponentId.F1
+    if agent_id == "federation.F3":
+        return ComponentId.F3
+    mapping = {
+        "bank_alpha.A3": ComponentId.BANK_ALPHA_A3,
+        "bank_beta.A3": ComponentId.BANK_BETA_A3,
+        "bank_gamma.A3": ComponentId.BANK_GAMMA_A3,
+    }
+    return mapping.get(agent_id, ComponentId.AUDIT_CHAIN)
+
+
 def _redacted_requester_key(requester: RequesterKey) -> str:
     digest = hashlib.sha256(requester.stable_key.encode("utf-8")).hexdigest()[:16]
     return f"requester:{digest}"
@@ -1275,7 +1550,7 @@ def _interaction_placeholder_reason(
 
 
 def _envelope_snapshot(
-    message: Sec314bQuery,
+    message: Sec314bQuery | LocalSiloContributionRequest | Sec314bResponse,
     *,
     status: SnapshotStatus,
     signature_status: Literal["valid", "invalid", "missing", "not_checked"],

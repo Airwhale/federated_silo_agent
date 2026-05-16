@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (to be marked Accepted when P15 implementation begins).
+Accepted.
 
 Related: `plan.md` §P15, `AGENT_NOTES.md` workstream P15, ADR 0001.
 
