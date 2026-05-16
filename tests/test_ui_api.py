@@ -355,10 +355,10 @@ def test_not_built_component_interaction_returns_available_after() -> None:
     session_id = create_session(test_client)
 
     response = test_client.post(
-        f"/sessions/{session_id}/components/F4/interactions",
+        f"/sessions/{session_id}/components/F5/interactions",
         json={
             "interaction_kind": "prompt",
-            "payload_text": "Draft a SAR narrative for this case.",
+            "payload_text": "Review the audit trail for this case.",
             "target_instance_id": "federation",
         },
     )
@@ -368,8 +368,8 @@ def test_not_built_component_interaction_returns_available_after() -> None:
     assert body["accepted"] is False
     assert body["status"] == "not_built"
     assert body["blocked_by"] == "not_built"
-    assert body["available_after"] == "P12"
-    assert "P12" in body["reason"]
+    assert body["available_after"] == "P13"
+    assert "P13" in body["reason"]
 
 
 def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:

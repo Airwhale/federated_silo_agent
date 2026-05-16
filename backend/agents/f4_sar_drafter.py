@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, TypeVar
@@ -383,11 +383,9 @@ def contributor_attributions(
     attributions: list[ContributorAttribution] = []
     for bank_id, bank_contributions in by_bank.items():
         evidence_ids = unique_values(
-            [
-                evidence.evidence_id
-                for contribution in bank_contributions
-                for evidence in contribution.contributed_evidence
-            ]
+            evidence.evidence_id
+            for contribution in bank_contributions
+            for evidence in contribution.contributed_evidence
         )
         attributions.append(
             ContributorAttribution(
@@ -481,11 +479,12 @@ def combined_investigator_ids(contributions: list[SARContribution]) -> str:
 def entity_hashes_for_contributions(
     contributions: list[SARContribution],
 ) -> list[CrossBankHashToken]:
-    hashes: list[CrossBankHashToken] = []
-    for contribution in contributions:
-        for evidence in contribution.contributed_evidence:
-            hashes.extend(evidence.entity_hashes)
-    return unique_values(hashes)
+    return unique_values(
+        hash_value
+        for contribution in contributions
+        for evidence in contribution.contributed_evidence
+        for hash_value in evidence.entity_hashes
+    )
 
 
 def has_sanctions_or_pep_evidence(request: SARAssemblyRequest) -> bool:
@@ -515,14 +514,15 @@ def sanctions_hits(request: SARAssemblyRequest) -> list[F4SanctionsHit]:
 def aggregate_related_query_ids(request: SARAssemblyRequest) -> list[UUID]:
     """Return query IDs from assembly and contributions in stable order."""
     return unique_values(
-        [
-            *request.related_query_ids,
+        query_id
+        for query_ids in (
+            request.related_query_ids,
             *(
-                query_id
+                contribution.related_query_ids
                 for contribution in request.contributions
-                for query_id in contribution.related_query_ids
             ),
-        ]
+        )
+        for query_id in query_ids
     )
 
 
@@ -602,7 +602,7 @@ def contains_exact_token(text: str, token: str) -> bool:
     return re.search(pattern, text) is not None
 
 
-def unique_values(values: list[ValueT]) -> list[ValueT]:
+def unique_values(values: Iterable[ValueT]) -> list[ValueT]:
     """Deduplicate hashable values while preserving input order."""
     return list(dict.fromkeys(values))
 
