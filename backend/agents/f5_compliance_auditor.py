@@ -137,7 +137,10 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         """Return deterministic compliance findings for the supplied audit window."""
         request = self._validate_input(input_data)
         audit_events = _sort_events(request.audit_events)
-        dismissals = sorted(request.dismissals, key=lambda dismissal: dismissal.message_id)
+        dismissals = sorted(
+            request.dismissals,
+            key=lambda dismissal: (dismissal.created_at, dismissal.message_id),
+        )
 
         findings = [
             *self._rate_limit_findings(audit_events),
@@ -150,9 +153,6 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         # P13 treats every generated F5 finding as review-worthy. If later
         # informational findings are added, this should inspect kind/severity.
         human_review_required = bool(findings)
-        other_findings = [
-            finding for finding in findings if finding.kind != RATE_LIMIT_FINDING
-        ]
 
         result = AuditReviewResult(
             sender_agent_id=self.agent_id,
@@ -174,7 +174,7 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                 detail="One actor exceeded the configured query rate limit.",
                 model_name="deterministic_f5",
             )
-        if other_findings:
+        if any(finding.kind != RATE_LIMIT_FINDING for finding in findings):
             self._emit(
                 kind=AuditEventKind.HUMAN_REVIEW,
                 phase="review",
@@ -203,11 +203,14 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
         findings: list[ComplianceFinding] = []
         for actor_id in sorted(events_by_actor):
             actor_events = events_by_actor[actor_id]
-            sorted_events = sorted(actor_events, key=lambda event: event.created_at)
             window: deque[AuditEvent] = deque()
             in_violation = False
+            # Keep the full sustained burst, not only the final sliding
+            # window. Every retained event participated in at least one
+            # violating window, so compliance reviewers see the whole burst
+            # while the finding text below stays precise about the trigger.
             burst_events: dict[UUID, AuditEvent] = {}
-            for event in sorted_events:
+            for event in actor_events:
                 while (
                     window
                     and (event.created_at - window[0].created_at).total_seconds()
@@ -252,8 +255,9 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             kind=RATE_LIMIT_FINDING,
             severity=PolicySeverity.HIGH,
             detail=(
-                f"{actor_id} exceeded {self.config.max_queries} query messages "
-                f"inside {self.config.window_seconds} seconds."
+                f"{actor_id} had a sustained rate-limit burst: one or more "
+                f"{self.config.window_seconds}-second windows exceeded "
+                f"{self.config.max_queries} query messages."
             ),
             related_event_ids=[event.event_id for event in violating_events],
         )
