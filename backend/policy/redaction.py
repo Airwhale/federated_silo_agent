@@ -82,12 +82,15 @@ def _resolve_terms_path(path: Path) -> Path:
 def _compile_customer_name_pattern(names: list[str]) -> re.Pattern[str]:
     escaped_names = sorted((re.escape(name) for name in names), key=len, reverse=True)
     known_name_pattern = rf"(?i:{'|'.join(escaped_names)})"
-    organization_word_pattern = r"(?:[A-Z][A-Za-z0-9&.,'-]*|[A-Z]{2,})"
+    organization_word_pattern = (
+        r"(?!(?:The|CEO|CFO|COO|CTO|President|Director|Officer|Manager)\b)"
+        r"(?:[A-Z][A-Za-z0-9&.,'-]*|[A-Z]{2,})"
+    )
     connector_word_pattern = r"(?i:of|and|for)"
     subsequent_word_pattern = rf"(?:{organization_word_pattern}|{connector_word_pattern})"
     organization_suffix_pattern = (
-        rf"{organization_word_pattern}(?:\s+{subsequent_word_pattern}){{0,3}}\s+"
-        r"(?i:LLC|Inc|Ltd|Co|Group|Holdings|Trading|Logistics|"
+        rf"{organization_word_pattern}(?:\s+{subsequent_word_pattern}){{0,5}}\s+"
+        r"(?i:LLC|Inc|Ltd|Co|Corp|Corporation|Group|Holdings|Trading|Logistics|"
         r"Consulting|Ventures|Investments|Capital|Partners)\b"
     )
     return re.compile(

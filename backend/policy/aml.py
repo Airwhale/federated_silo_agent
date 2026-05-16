@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from threading import Lock
@@ -160,27 +160,32 @@ class RateLimitTracker:
     def __init__(self, *, threshold: int, window: timedelta) -> None:
         self.threshold = threshold
         self.window = window
-        self._events: dict[str, deque[datetime]] = defaultdict(deque)
+        self._events: dict[str, deque[datetime]] = {}
         self._lock = Lock()
 
-    def _pruned_entries(self, requester_id: str, *, now: datetime) -> deque[datetime]:
-        entries = self._events[requester_id]
+    def _prune_expired_locked(self, *, now: datetime) -> None:
         cutoff = now - self.window
-        while entries and entries[0] <= cutoff:
-            entries.popleft()
-        return entries
+        for requester_id, entries in list(self._events.items()):
+            while entries and entries[0] <= cutoff:
+                entries.popleft()
+            if not entries:
+                del self._events[requester_id]
 
-    def record(self, requester_id: str, *, now: datetime) -> int:
-        now = _normalize_now(now)
+    def record(self, requester_id: str, *, now: datetime | None = None) -> int:
+        now_value = _normalize_now(now)
         with self._lock:
-            entries = self._pruned_entries(requester_id, now=now)
-            entries.append(now)
+            self._prune_expired_locked(now=now_value)
+            entries = self._events.setdefault(requester_id, deque())
+            entries.append(now_value)
             return len(entries)
 
     def prune_and_count(self, requester_id: str, *, now: datetime | None = None) -> int:
         now_value = _normalize_now(now)
         with self._lock:
-            entries = self._pruned_entries(requester_id, now=now_value)
+            self._prune_expired_locked(now=now_value)
+            entries = self._events.get(requester_id)
+            if entries is None:
+                return 0
             return len(entries)
 
 
@@ -241,7 +246,12 @@ class AmlPolicyEvaluator:
         now: datetime | None = None,
     ) -> AmlPolicyEvaluation:
         """Evaluate pre-boundary content that may still need redaction."""
-        request = PolicyEvaluationRequest.model_construct(
+        raw_text = _PolicyText(
+            content_summary=raw_content.content_summary,
+            declared_purpose=raw_content.declared_purpose,
+        )
+        sanitized_text, redacted_fields = self._redact_policy_text(raw_text)
+        request = PolicyEvaluationRequest(
             sender_agent_id=request_sender_agent_id,
             sender_role=request_sender_role,
             sender_bank_id=request_sender_bank_id,
@@ -252,20 +262,18 @@ class AmlPolicyEvaluator:
             evaluated_sender_bank_id=raw_content.evaluated_sender_bank_id,
             content_channel=raw_content.content_channel,
             content_hash=raw_content.content_hash,
-            content_summary=raw_content.content_summary,
-            declared_purpose=raw_content.declared_purpose,
-        )
-        text = _PolicyText(
-            content_summary=raw_content.content_summary,
-            declared_purpose=raw_content.declared_purpose,
+            content_summary=sanitized_text.content_summary,
+            declared_purpose=sanitized_text.declared_purpose,
         )
         return self._evaluate_text_and_message(
             request=request,
-            text=text,
+            text=raw_text,
             evaluated_message=None,
             principal_allowlist=None,
             replay_cache=None,
             now=_normalize_now(now),
+            sanitized_text=sanitized_text,
+            redacted_fields=redacted_fields,
         )
 
     def normalize_lobstertrap_audit(
@@ -306,9 +314,12 @@ class AmlPolicyEvaluator:
         principal_allowlist: PrincipalAllowlist | None,
         replay_cache: ReplayCache | None,
         now: datetime,
+        sanitized_text: _PolicyText | None = None,
+        redacted_fields: list[str] | None = None,
     ) -> AmlPolicyEvaluation:
         block_hits = self._blocking_hits(request, text)
-        sanitized_text, redacted_fields = self._redact_policy_text(text)
+        if sanitized_text is None or redacted_fields is None:
+            sanitized_text, redacted_fields = self._redact_policy_text(text)
         audit_events: list[AuditEvent] = []
 
         if evaluated_message is not None:
@@ -358,10 +369,13 @@ class AmlPolicyEvaluator:
         if redaction_hit is not None:
             audit_events.append(self._constraint_event(redaction_hit, blocked=False))
 
-        rate_hit = self._rate_limit_hit(evaluated_message, now=now)
-        if rate_hit is not None:
+        rate_hit_info = self._rate_limit_hit(evaluated_message, now=now)
+        if rate_hit_info is not None:
+            rate_hit, rate_count = rate_hit_info
             rate_limited_message = cast(Sec314bQuery, evaluated_message)
-            audit_events.append(self._rate_limit_event(rate_limited_message, now=now))
+            audit_events.append(
+                self._rate_limit_event(rate_limited_message, count=rate_count)
+            )
             # Shared PolicyEvaluationResult cannot combine REDACT fields with ESCALATE.
             return self._evaluation(
                 request=request,
@@ -457,7 +471,7 @@ class AmlPolicyEvaluator:
         ):
             hits.append(
                 _rule_hit(
-                    rule_id="F6-B3-ROLE-ROUTE",
+                    rule_id="F6-B3-SENDER-CONSTRAINT",
                     detail="A1 may only emit local alert messages.",
                     severity=PolicySeverity.HIGH,
                 )
@@ -614,7 +628,7 @@ class AmlPolicyEvaluator:
         message: AgentMessage | None,
         *,
         now: datetime,
-    ) -> PolicyRuleHit | None:
+    ) -> tuple[PolicyRuleHit, int] | None:
         if not isinstance(message, Sec314bQuery):
             return None
         if message.sender_role != AgentRole.A2:
@@ -622,21 +636,21 @@ class AmlPolicyEvaluator:
         count = self.rate_limiter.record(message.requesting_investigator_id, now=now)
         if count <= self.config.sec314b_rate_limit_threshold:
             return None
-        return PolicyRuleHit(
+        hit = PolicyRuleHit(
             rule_id="F6-RATE-LIMIT-ADVISORY",
             decision=PolicyDecision.ESCALATE,
             severity=PolicySeverity.MEDIUM,
             detail="Investigator exceeded the F6 hourly Section 314(b) advisory threshold.",
         )
+        return hit, count
 
     def _rate_limit_event(
         self,
         message: Sec314bQuery,
         *,
-        now: datetime,
+        count: int,
     ) -> AuditEvent:
         requester_id = message.requesting_investigator_id
-        count = self.rate_limiter.prune_and_count(requester_id, now=now)
         return self._audit_event(
             kind=AuditEventKind.RATE_LIMIT,
             actor_agent_id=self.config.policy_agent_id,
@@ -745,7 +759,7 @@ def _rule_hit(
 
 def _route_violation(detail: str) -> PolicyRuleHit:
     return _rule_hit(
-        rule_id="F6-B3-ROLE-ROUTE",
+        rule_id="F6-B4-MESSAGE-ROUTE",
         detail=detail,
         severity=PolicySeverity.HIGH,
     )

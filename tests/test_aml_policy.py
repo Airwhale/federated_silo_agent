@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from backend.policy import AmlPolicyConfig, AmlPolicyEvaluator, RawPolicyContent
+from backend.policy import (
+    AmlPolicyConfig,
+    AmlPolicyEvaluator,
+    RateLimitTracker,
+    RawPolicyContent,
+)
 from backend.security import (
     PrincipalAllowlist,
     PrincipalAllowlistEntry,
@@ -289,6 +294,7 @@ def test_raw_customer_name_is_redacted_and_not_leaked_to_output_or_audit() -> No
     )
     serialized = outcome.model_dump_json()
     assert "Acme Holdings" not in serialized
+    assert outcome.result.in_reply_to is not None
     assert outcome.audit_events[0].payload.blocked is False
 
 
@@ -373,6 +379,27 @@ def test_generic_org_redaction_allows_for_connector() -> None:
     assert outcome.result.decision == PolicyDecision.REDACT
     assert outcome.sanitized_content_summary == (
         "[REDACTED_NAME] matched the hash-only typology."
+    )
+
+
+def test_generic_org_redaction_covers_longer_organization_names() -> None:
+    raw = RawPolicyContent(
+        evaluated_message_type=MessageType.SEC314B_QUERY,
+        evaluated_sender_agent_id="bank_alpha.A2",
+        evaluated_sender_role=AgentRole.A2,
+        evaluated_sender_bank_id=BankId.BANK_ALPHA,
+        content_channel=PolicyContentChannel.STRUCTURED_MESSAGE,
+        content_summary=(
+            "The Bank of New York Mellon Corporation matched the hash-only typology."
+        ),
+        declared_purpose="Investigate suspected structuring activity.",
+    )
+
+    outcome = evaluator().evaluate_raw_content(raw)
+
+    assert outcome.result.decision == PolicyDecision.REDACT
+    assert outcome.sanitized_content_summary == (
+        "The [REDACTED_NAME] matched the hash-only typology."
     )
 
 
@@ -468,7 +495,7 @@ def test_role_route_violation_blocks_a1_cross_bank_query() -> None:
     )
 
     assert outcome.result.decision == PolicyDecision.BLOCK
-    assert outcome.result.rule_hits[0].rule_id == "F6-B3-ROLE-ROUTE"
+    assert outcome.result.rule_hits[0].rule_id == "F6-B3-SENDER-CONSTRAINT"
 
 
 def test_peer_query_addressed_to_a2_is_denied_but_a3_route_passes() -> None:
@@ -494,7 +521,7 @@ def test_peer_query_addressed_to_a2_is_denied_but_a3_route_passes() -> None:
     )
 
     assert denied.result.decision == PolicyDecision.BLOCK
-    assert denied.result.rule_hits[0].rule_id == "F6-B3-ROLE-ROUTE"
+    assert denied.result.rule_hits[0].rule_id == "F6-B4-MESSAGE-ROUTE"
     assert allowed.result.decision == PolicyDecision.ALLOW
 
 
@@ -729,6 +756,19 @@ def test_rate_limit_uses_configurable_p14_hourly_threshold() -> None:
     assert advisory.audit_events[0].kind == AuditEventKind.RATE_LIMIT
     assert advisory.audit_events[0].payload.count == 3
     assert advisory.audit_events[0].payload.limit == 2
+
+
+def test_rate_limit_tracker_prunes_inactive_requester_keys() -> None:
+    tracker = RateLimitTracker(threshold=1, window=timedelta(seconds=10))
+    start = datetime(2026, 5, 15, tzinfo=UTC)
+
+    assert tracker.record("default-clock") == 1
+    assert tracker.record("investigator-a", now=start) == 1
+    assert tracker.record("investigator-b", now=start + timedelta(seconds=11)) == 1
+
+    assert tracker.prune_and_count("investigator-a", now=start + timedelta(seconds=11)) == 0
+    assert "investigator-a" not in tracker._events
+    assert "investigator-b" in tracker._events
 
 
 def test_rate_limit_advisory_still_runs_when_content_is_redacted() -> None:
