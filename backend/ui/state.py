@@ -325,7 +325,14 @@ class DemoControlService:
         }
         item = readiness[component_id]
         fields = [
-            SnapshotField(name="available_after", value=item.available_after or "now"),
+            SnapshotField(
+                name=(
+                    "available_after"
+                    if item.status == SnapshotStatus.NOT_BUILT
+                    else "availability"
+                ),
+                value=item.available_after or "live now",
+            ),
             SnapshotField(name="detail", value=item.detail),
         ]
         if component_id == ComponentId.SIGNING:

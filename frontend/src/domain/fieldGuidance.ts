@@ -9,6 +9,9 @@ const GENERIC_FIELD_GUIDANCE: Record<string, FieldGuidance> = {
   available_after: {
     help: "Possible values: now, a milestone like P12, or a later phase. Correct when it matches the component status. Dangerous if an unbuilt component claims it is available now.",
   },
+  availability: {
+    help: "Possible values: live now, pending, or simulated. Correct for F5 is live now, meaning the component exists and can be inspected. Dangerous if this says live while the behavior is still only a placeholder.",
+  },
   detail: {
     help: "Human-readable state detail. Correct when it explains the current status. Dangerous if it claims a live protection exists when the status is pending or not_built.",
   },
@@ -135,16 +138,11 @@ const COMPONENT_FIELD_GUIDANCE: Partial<Record<ComponentId, Record<string, Field
       dangerousWhen: (value) => Number(value) === 0,
     },
   },
-  F4: {
-    available_after: {
-      help: "Expected value before P12 is P12. Dangerous if the drawer claims SAR drafting is live before the branch is merged.",
-      dangerousWhen: (value) => String(value).toLowerCase() === "now",
-    },
-  },
+  F4: {},
   F5: {
-    available_after: {
-      help: "Expected value before P13 is P13. Dangerous if the drawer claims durable audit checks are live before they are built.",
-      dangerousWhen: (value) => String(value).toLowerCase() === "now",
+    availability: {
+      help: "Correct value is live now. F5 is built as a deterministic, read-only auditor; dangerous would be pending or not_built after P13 is merged.",
+      dangerousWhen: (value) => String(value).toLowerCase() !== "live now",
     },
   },
   lobster_trap: {

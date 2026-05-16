@@ -144,6 +144,7 @@ def test_f5_component_snapshot_surfaces_audit_mode() -> None:
     body = response.json()
     assert body["status"] == "live"
     fields = {field["name"]: field["value"] for field in body["fields"]}
+    assert fields["availability"] == "live now"
     assert fields["audit_mode"] == "deterministic"
     assert fields["execution_boundary"] == "read_only"
     assert fields["input_boundary"] == "signed AuditReviewRequest"
