@@ -482,9 +482,9 @@ Next agent:
 
 ### P14 - F6 Policy Adapter And Lobster Trap Overlay
 
-Owner:
-Branch:
-Status: not_started
+Owner: Codex
+Branch: codex/p14-f6-policy
+Status: ready_for_review
 Mode: mostly deterministic (rule evaluation); LLM only for explicit adjudication rules where the rule itself names a model
 Fixtures: prompt-injection payloads, customer-name-leakage attempts, private-data-extraction probes, route-metadata violations. Pre-existing `tests/test_p0_cases.py` payloads cover P0 / smoke; P14 adds AML-specific fixtures under `tests/test_aml_policy.py`.
 Per-domain instantiation: F6 instances are registered in `_build_demo_principals()` in `backend/ui/state.py` — each trust domain gets its own signing key pair. The orchestrator (P15) routes `PolicyEvaluationRequest` to the per-domain F6 by `(role=F6, trust_domain=<sender's domain>)` lookup; see `docs/architecture/0002-orchestrator-design.md` for the AgentRegistry shape.
@@ -525,6 +525,56 @@ Acceptance:
   output or audit records.
 
 Notes:
+
+### 2026-05-15 - Codex - codex/p14-f6-policy
+Status: ready_for_review
+Touched files:
+- `backend/policy/__init__.py`
+- `backend/policy/aml.py`
+- `backend/policy/redaction.py`
+- `backend/policy/dictionaries/aml_terms.json`
+- `backend/ui/state.py`
+- `tests/test_aml_policy.py`
+- `tests/test_ui_api.py`
+- `AGENT_NOTES.md`
+
+What changed:
+- Added deterministic `AmlPolicyEvaluator` for F6 policy decisions.
+- Added pre-boundary raw-content scanning for redaction cases that shared
+  message validators intentionally reject later.
+- Added route, purpose, signature, replay, route-binding, prompt-injection,
+  private-data, redaction, rate-limit advisory, and LT-normalization tests.
+- Registered per-domain F6 demo principals for P15 signing and allowlist wiring.
+
+Assumptions:
+- F6 rate-limit advisory uses the P14 threshold: more than 20 Section 314(b)
+  queries per investigator per hour. Tests also cover a configurable lower
+  threshold.
+- LT overlay YAML and smoke wiring remain optional integration artifacts. This
+  branch does not depend on local LT tooling.
+- Combined redaction plus rate-limit advisory preserves the sanitized output
+  and redaction audit event, while the shared `PolicyEvaluationResult` carries
+  the stronger rate-limit rule hit.
+- Repeated code-assist suggestions to include redaction hits/counts in
+  non-`REDACT` `PolicyEvaluationResult` messages were declined. The shared
+  result contract rejects redacted counts on `BLOCK` and `ESCALATE`; the
+  adapter wrapper exposes `redacted_fields` for those combined cases.
+- Generic organization redaction is intentionally conservative about
+  capitalization to reduce false-positive sentence redactions.
+- Shared contracts were not changed.
+
+Blockers:
+- None.
+
+Checks:
+- `uv run pytest tests/test_aml_policy.py tests/test_messages.py -q`
+- `uv run pytest tests/test_ui_api.py -q`
+- `uv run ruff check backend/policy tests/test_aml_policy.py`
+- `uv run pytest -q` after regenerating canonical `data/silos/*.db`
+
+Next agent:
+- P15 can wrap `AmlPolicyEvaluator.evaluate()` in per-domain F6 actor
+  instances and pass the same allowlist/replay cache used at runtime.
 
 ### P15 - Orchestrator, Message Bus, And Live API Adapters
 

@@ -325,7 +325,14 @@ class DemoControlService:
         }
         item = readiness[component_id]
         fields = [
-            SnapshotField(name="available_after", value=item.available_after or "now"),
+            SnapshotField(
+                name=(
+                    "available_after"
+                    if item.status == SnapshotStatus.NOT_BUILT
+                    else "availability"
+                ),
+                value=item.available_after or "live now",
+            ),
             SnapshotField(name="detail", value=item.detail),
         ]
         if component_id == ComponentId.SIGNING:
@@ -465,6 +472,29 @@ class DemoControlService:
                     SnapshotField(
                         name="missing_input_behavior",
                         value="typed SARContributionRequest",
+                    ),
+                ],
+            )
+        elif component_id == ComponentId.F5:
+            return ComponentSnapshot(
+                component_id=component_id,
+                status=item.status,
+                title=item.label,
+                fields=[
+                    *fields,
+                    SnapshotField(name="audit_mode", value="deterministic"),
+                    SnapshotField(name="execution_boundary", value="read_only"),
+                    SnapshotField(
+                        name="finding_domains",
+                        value="rate_limit,budget,lt_verdict,route_purpose,dismissals",
+                    ),
+                    SnapshotField(
+                        name="input_boundary",
+                        value="signed AuditReviewRequest",
+                    ),
+                    SnapshotField(
+                        name="output_boundary",
+                        value="AuditReviewResult with linked finding event ids",
                     ),
                 ],
             )
@@ -742,7 +772,7 @@ class DemoControlService:
             _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."),
             _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.LIVE, "P11 complete."),
             _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.LIVE, "P12 complete."),
-            _component(ComponentId.F5, "F5 auditor", SnapshotStatus.NOT_BUILT, "Available after P13.", "P13"),
+            _component(ComponentId.F5, "F5 auditor", SnapshotStatus.LIVE, "P13 complete."),
             _component(ComponentId.LOBSTER_TRAP, "Lobster Trap", SnapshotStatus.PENDING, "P0 scaffolded; API verdict adapter lands P14."),
             _component(ComponentId.LITELLM, "LiteLLM", SnapshotStatus.PENDING, "P0 scaffolded; provider health adapter lands P14/P15."),
             _component(ComponentId.SIGNING, "Signing", SnapshotStatus.LIVE, "Ed25519 envelope helpers are live."),
@@ -1076,6 +1106,10 @@ def _build_demo_principals() -> dict[str, DemoPrincipal]:
         ("bank_alpha.A2", AgentRole.A2, BankId.BANK_ALPHA),
         ("bank_beta.A3", AgentRole.A3, BankId.BANK_BETA),
         ("federation.F1", AgentRole.F1, BankId.FEDERATION),
+        ("bank_alpha.F6", AgentRole.F6, BankId.BANK_ALPHA),
+        ("bank_beta.F6", AgentRole.F6, BankId.BANK_BETA),
+        ("bank_gamma.F6", AgentRole.F6, BankId.BANK_GAMMA),
+        ("federation.F6", AgentRole.F6, BankId.FEDERATION),
     ]
     principals: dict[str, DemoPrincipal] = {}
     for agent_id, role, bank_id in specs:
@@ -1095,7 +1129,7 @@ def _allowlist_entries(principals: dict[str, DemoPrincipal]) -> list[PrincipalAl
     alpha_a2 = principals["bank_alpha.A2"]
     beta_a3 = principals["bank_beta.A3"]
     f1 = principals["federation.F1"]
-    return [
+    entries = [
         PrincipalAllowlistEntry(
             agent_id=alpha_a2.agent_id,
             role=alpha_a2.role,
@@ -1130,6 +1164,23 @@ def _allowlist_entries(principals: dict[str, DemoPrincipal]) -> list[PrincipalAl
             allowed_routes=[RouteKind.PEER_314B, RouteKind.LOCAL_CONTRIBUTION],
         ),
     ]
+    entries.extend(
+        PrincipalAllowlistEntry(
+            agent_id=principal.agent_id,
+            role=principal.role,
+            bank_id=principal.bank_id,
+            signing_key_id=principal.signing_key_id,
+            public_key=principal.public_key,
+            allowed_message_types=[
+                MessageType.POLICY_EVALUATION_RESULT.value,
+                MessageType.AUDIT_EVENT.value,
+            ],
+            allowed_recipients=["*"],
+        )
+        for principal in principals.values()
+        if principal.role == AgentRole.F6
+    )
+    return entries
 
 
 def _base_a2_query(
