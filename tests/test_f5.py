@@ -258,6 +258,36 @@ def test_f5_reports_multiple_distinct_rate_limit_bursts() -> None:
     assert rate_findings[1].related_event_ids == [event.event_id for event in second_burst]
 
 
+def test_f5_rate_limit_findings_are_sorted_by_actor() -> None:
+    f5, _ = agent()
+    beta_burst = [
+        message_event(
+            source_agent_id="bank_beta.A2",
+            created_at=BASE_TIME + timedelta(seconds=offset * 5),
+        )
+        for offset in range(6)
+    ]
+    alpha_burst = [
+        message_event(
+            source_agent_id="bank_alpha.A2",
+            created_at=BASE_TIME + timedelta(seconds=offset * 5),
+        )
+        for offset in range(6)
+    ]
+
+    result = f5.run(
+        request([*beta_burst, *alpha_burst], review_scope=AuditReviewScope.RATE_LIMIT)
+    )
+
+    rate_findings = [
+        finding for finding in result.findings if finding.kind == RATE_LIMIT_FINDING
+    ]
+    assert [finding.detail.split()[0] for finding in rate_findings] == [
+        "bank_alpha.A2",
+        "bank_beta.A2",
+    ]
+
+
 def test_f5_budget_exhaustion_flags_budget_pressure() -> None:
     f5, _ = agent()
 
@@ -391,3 +421,25 @@ def test_f5_dismissal_word_threshold_is_configurable() -> None:
 
     assert result.human_review_required is True
     assert result.findings[0].kind == DISMISSAL_REVIEW_FINDING
+
+
+def test_f5_short_dismissal_with_evidence_is_not_vague() -> None:
+    f5, _ = agent()
+    evidence_id = uuid4()
+    dismissal = DismissalRationale(
+        sender_agent_id="bank_alpha.A2",
+        sender_role=AgentRole.A2,
+        sender_bank_id=BankId.BANK_ALPHA,
+        recipient_agent_id="federation.F5",
+        alert_id=uuid4(),
+        reason="reviewed",
+        evidence_considered=[evidence_id],
+    )
+
+    result = f5.run(
+        request([rho_debited_event(rho_remaining=5.0)], dismissals=[dismissal])
+    )
+
+    assert [
+        finding for finding in result.findings if finding.kind == DISMISSAL_REVIEW_FINDING
+    ] == []

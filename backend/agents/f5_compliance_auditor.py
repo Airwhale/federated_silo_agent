@@ -201,7 +201,8 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
             events_by_actor[event.payload.source_agent_id].append(event)
 
         findings: list[ComplianceFinding] = []
-        for actor_id, actor_events in events_by_actor.items():
+        for actor_id in sorted(events_by_actor):
+            actor_events = events_by_actor[actor_id]
             sorted_events = sorted(actor_events, key=lambda event: event.created_at)
             window: deque[AuditEvent] = deque()
             in_violation = False
