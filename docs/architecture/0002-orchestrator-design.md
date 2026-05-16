@@ -8,13 +8,29 @@ Related: `plan.md` §P15, `AGENT_NOTES.md` workstream P15, ADR 0001.
 
 ## Context
 
-P10–P14 build the federated AML agents (A1, A2, A3, F1, F2, F3, F4, F5) and the F6 policy actor in isolation. Each has focused tests against fixture inputs, but no agent is invoked from the live demo session today: `backend/ui/state.py::step_session` and `run_until_idle` are P9a placeholders that emit a "No live orchestrator yet" timeline event.
+P10-P14 build the federated AML agents (A1, A2, A3, F1, F2, F3, F4, F5) and the F6 policy actor in isolation. Each has focused tests against fixture inputs. PR #8 adds the first live demo session adapter: `backend/ui/state.py::step_session` and `run_until_idle` now invoke the P15 orchestrator instead of returning P9a placeholders.
 
-P15's job is to wire the built agents into a live session so a judge pressing the Step button in the console actually advances the demo through real cross-agent messages — security envelopes verified at each boundary, timeline and component snapshots updating from real runtime state.
+P15's job is to wire the built agents into a live session so a judge pressing the Step button in the console actually advances the demo through real cross-agent messages, with security envelopes verified at each boundary and timeline/component snapshots updating from real runtime state.
 
-This is the highest-risk workstream remaining. It is also the demo-correctness gate: nothing the judge clicks works end-to-end without it. AGENT_NOTES.md gives P15 only a paragraph, which is dramatically less than it needs. This ADR exists so the P15 implementer doesn't re-litigate the design while burning hackathon hours.
+This was the highest-risk workstream in the PR #8 integration wave. The implemented branch deliberately lands a bounded first adapter: A1, A2, F1, A3/P7, F3, F1 aggregation, and A2 synthesis are live; the run stops at the F4 handoff. P16/P17 own composing the already-built F2, F4, F5, and F6 workstreams into the final terminal demo flow.
 
 ## Decision
+
+### PR #8 implementation note
+
+The current implementation is a single-process, deterministic, per-session
+orchestrator in `backend/orchestrator/`. It does not yet implement the full
+conceptual state machine below. In PR #8:
+
+- `Step` and `run-until-idle` exercise live A1, A2, F1, A3, P7 primitives, F3,
+  F1 aggregation, and A2 synthesis.
+- the in-memory audit hash chain is live and exposed through UI snapshots.
+- F2, F4, F5, and F6 are implemented, tested, and visible as live components,
+  but are not scheduled by the current P15 turn machine.
+- `run-until-idle` stops at `F4 pending after A2 SAR contribution.`
+
+The design sections below remain the target shape for P16/P17 final-demo
+composition.
 
 ### Turn semantics
 
@@ -159,9 +175,11 @@ Land in this order so each commit is independently shippable:
 
 ## Acceptance criteria
 
-Restated from `plan.md` §P15:
+Restated from `plan.md` P15:
 
-- Canonical run proceeds through A1/A2/F1/A3/P7/F3/F2/F4/F5/F6.
+- Current PR #8 run proceeds through A1/A2/F1/A3/P7/F3/F1/A2 and stops at
+  the explicit F4 handoff.
+- P16/P17 final-demo composition should extend the run through F2/F4/F5/F6.
 - Each cross-boundary message verifies signature, freshness, replay, and route binding where applicable.
 - UI snapshots show live state, not placeholder state, for built components.
 - Probe traffic still enters through normal security and policy boundaries.

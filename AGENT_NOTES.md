@@ -125,7 +125,7 @@ uv run --project /path/to/local-gemini-code-review \
 
 Harness fork: <https://github.com/Airwhale/local-gemini-code-review>. The runbook at [`docs/llm-code-review-runbook.md`](https://github.com/Airwhale/local-gemini-code-review/blob/main/docs/llm-code-review-runbook.md) within the fork documents the iteration loop, accept / decline heuristics, the decline-comment contract, and known gotchas. Use the default Gemini path unless the agent has a clear reason to use a different configured provider/model.
 
-For whole-codebase review (e.g. before P15 lands, or for periodic audits):
+For whole-codebase review (for example before merging a large integration PR, or for periodic audits):
 
 ```bash
 uv run review.py --codebase --include 'backend/**/*.py'
@@ -133,7 +133,7 @@ uv run review.py --codebase --include 'backend/**/*.py'
 
 ### Branch / PR / merge process
 
-1. Branch off `short-contract` for P11-P15 parallel work, unless `plan.md` says a later base is required.
+1. Branch off the current integration base named in `plan.md`; the P11-P15 parallel branches have already merged into `short-contract` on PR #8.
 2. Implement; run focused tests + the frontend build if you touched anything frontend-adjacent.
 3. Commit and push the implementation branch; open a PR from that branch. Use `short-contract` as the PR base until it is merged into `main`; retarget to `main` only after `main` contains the P10a contracts.
 4. Run the local code-review harness. Fix accepted CRITICAL/HIGH/MEDIUM correctness, security, privacy, concurrency, schema, and test findings. Commit and push each accepted-fix round.
@@ -600,7 +600,7 @@ Do not touch without coordination:
 Notes:
 
 ### 2026-05-15 - Codex - codex/p15-orchestrator
-Status: in_progress
+Status: complete on PR #8
 Touched files:
 - `backend/orchestrator/`
 - `backend/orchestrator/audit.py`
@@ -616,20 +616,20 @@ What changed:
 - Marked ADR 0002 accepted for the implemented local orchestrator design.
 
 Assumptions:
-- F2, F4, F5, and F6 are not present in this branch yet, so P15 stops explicitly at the F4 pending state after A2 emits a SAR contribution.
+- F2, F4, F5, and F6 are now present on `short-contract`, but the P15 turn scheduler still stops explicitly at the F4 handoff after A2 emits a SAR contribution. P16/P17 should wire the built F2/F4/F5/F6 agents into the terminal canonical flow.
 - The canonical stub-mode path uses deterministic A1 input and stub A3 primitives so local API tests do not require generated silo databases.
 
 Blockers:
-- None for the built-component P15 path. Full canonical flow through F2, F4, F5, and F6 still depends on those workstreams landing.
+- None for the current P15 adapter path. Full canonical flow through F2, F4, F5, and F6 now depends on orchestration composition, not missing agent implementations.
 
 Next agent:
-- After F2/F4/F5/F6 merge, extend `backend/orchestrator/state_machine.py` and `backend/orchestrator/runtime.py` to schedule those real agents instead of terminating at F4 pending.
+- P16/P17 should extend `backend/orchestrator/state_machine.py` and `backend/orchestrator/runtime.py` or add a canonical-flow runner that schedules the real F2/F4/F5/F6 agents instead of terminating at F4 pending.
 
 ### P18 - Judge Console Polish
 
 Owner:
 Branch:
-Status: not_started
+Status: complete on PR #8
 
 Goal:
 - Polish the existing P9b console into the final judge-facing demo surface.
@@ -663,6 +663,7 @@ Acceptance:
 - Attack lab can target relevant nodes without privileged bypasses.
 
 Notes:
+- Implemented on `codex/p18-ui-polish` and merged into `short-contract`. The UI now has polished topology, inspector guidance, field hover help, sample inputs, LLM route graph, and all-probes-visible attack lab. Further UI work should be driven by P16/P17 final-flow behavior rather than more placeholder polishing.
 
 ## Shared Contract Change Log
 
