@@ -26,6 +26,7 @@ export function ReplayPanel({ snapshot }: Props) {
             <li
               key={`${entry.principal_id}-${entry.nonce_hash}`}
               className="px-2.5 py-1.5"
+              title="Replay entry. Correct state stores a redacted nonce hash with first-seen and expiry times. Dangerous state would expose raw nonces or accept the same nonce twice."
             >
               <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
                 <span className="font-medium text-slate-100">{entry.principal_id}</span>

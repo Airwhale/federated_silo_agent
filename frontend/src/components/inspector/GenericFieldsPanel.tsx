@@ -1,4 +1,5 @@
 import type { ComponentSnapshot } from "../../api/types";
+import { fieldGuidance } from "../../domain/fieldGuidance";
 import { InspectorSection } from "./InspectorSection";
 import { KeyValueGrid } from "./KeyValueGrid";
 
@@ -12,11 +13,18 @@ export function GenericFieldsPanel({ snapshot }: Props) {
   return (
     <InspectorSection title="Fields">
       <KeyValueGrid
-        rows={fields.map((field) => ({
-          label: field.name,
-          value: field.redacted ? "redacted" : field.value,
-          tone: field.redacted ? "muted" : "default",
-        }))}
+        guidanceComponentId={snapshot.component_id}
+        rows={fields.map((field) => {
+          const value = field.redacted ? "redacted" : field.value;
+          const guidance = fieldGuidance(snapshot.component_id, field.name, value);
+          return {
+            label: field.name,
+            value,
+            helpValue: value,
+            tone: guidance.dangerous ? "danger" : field.redacted ? "muted" : "default",
+            help: guidance.help,
+          };
+        })}
       />
     </InspectorSection>
   );

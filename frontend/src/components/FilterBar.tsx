@@ -1,5 +1,7 @@
+import { Shuffle } from "lucide-react";
 import type { ComponentId, SecurityLayer, SnapshotStatus } from "../api/types";
 import { TRUST_INSTANCES, type TrustDomain } from "../domain/instances";
+import { nextSample } from "../domain/sampleInputs";
 
 export type TimelineFilters = {
   instanceId: TrustDomain | "all";
@@ -39,6 +41,8 @@ const layers: Array<SecurityLayer | "all"> = [
 const components = Array.from(
   new Set(TRUST_INSTANCES.flatMap((item) => item.mechanisms.map((m) => m.componentId))),
 );
+
+const filterSamples = ["F2", "route", "blocked", "budget"];
 
 export function FilterBar({ filters, onChange }: Props) {
   return (
@@ -97,12 +101,23 @@ export function FilterBar({ filters, onChange }: Props) {
           </option>
         ))}
       </select>
-      <input
-        value={filters.text}
-        onChange={(event) => onChange({ ...filters, text: event.target.value })}
-        placeholder="Filter text"
-        className="rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm"
-      />
+      <div className="flex gap-1">
+        <input
+          value={filters.text}
+          onChange={(event) => onChange({ ...filters, text: event.target.value })}
+          placeholder="Try: F2, route, blocked"
+          className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-2 text-sm"
+        />
+        <button
+          type="button"
+          onClick={() => onChange({ ...filters, text: nextSample(filters.text, filterSamples) })}
+          className="inline-flex items-center rounded-md border border-slate-700 bg-slate-900 px-2 text-slate-300 hover:bg-slate-800 hover:text-slate-100"
+          title="Cycle sample filter text"
+          aria-label="Cycle sample filter text"
+        >
+          <Shuffle size={13} aria-hidden />
+        </button>
+      </div>
     </div>
   );
 }
