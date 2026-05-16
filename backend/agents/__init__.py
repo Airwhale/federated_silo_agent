@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from backend.agents.f1_coordinator import F1CoordinatorAgent
     from backend.agents.f3_sanctions import F3SanctionsAgent
     from backend.agents.f4_sar_drafter import F4SARDrafterAgent
+    from backend.agents.f5_compliance_auditor import F5ComplianceAuditorAgent
 
 _LAZY_EXPORTS = {
     "A2InvestigatorAgent": ("backend.agents.a2_investigator", "A2InvestigatorAgent"),
@@ -38,6 +39,10 @@ _LAZY_EXPORTS = {
     "F1CoordinatorAgent": ("backend.agents.f1_coordinator", "F1CoordinatorAgent"),
     "F3SanctionsAgent": ("backend.agents.f3_sanctions", "F3SanctionsAgent"),
     "F4SARDrafterAgent": ("backend.agents.f4_sar_drafter", "F4SARDrafterAgent"),
+    "F5ComplianceAuditorAgent": (
+        "backend.agents.f5_compliance_auditor",
+        "F5ComplianceAuditorAgent",
+    ),
 }
 
 __all__ = [
@@ -56,6 +61,7 @@ __all__ = [
     "F1CoordinatorAgent",
     "F3SanctionsAgent",
     "F4SARDrafterAgent",
+    "F5ComplianceAuditorAgent",
     "InMemoryAuditEmitter",
     "InvalidAgentInput",
     "LLMClient",

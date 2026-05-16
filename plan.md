@@ -320,8 +320,8 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 | F3-B2 | F3 | Exact `name_hash` equality with the S1-D PEP entity | Set `pep_relation=True` | P10 | `tests/test_f3.py` |
 | F4-B1 | F4 | Any contributor evidence references an SDN sanctions match or PEP relation | Set `sar_priority="high"` | P12 | `tests/test_f4.py` |
 | F4-B2 | F4 | Input is missing data needed for a mandatory SAR field | Emit `SARContributionRequest` instead of an incomplete `SARDraft` | P12 | `tests/test_f4.py` |
-| F5-B1 | F5 | More than 10 `Sec314bQuery` events from one investigator in 60 minutes | Emit a `rate_limit` `AuditEvent` | P13 | `tests/test_f5.py` |
-| F5-B2 | F5 | `PurposeDeclaration.suspicion_rationale` lacks ML/TF keywords | Emit a `human_review` `AuditEvent` | P13 | `tests/test_f5.py` |
+| F5-B1 | F5 | More than 5 `Sec314bQuery` events from one investigator in 60 seconds, with `max_queries` and `window_seconds` configurable | Emit a `rate_limit` finding in `AuditReviewResult` | P13 | `tests/test_f5.py` |
+| F5-B2 | F5 | Purpose, route, LT-verdict coverage, or privacy-budget audit anomalies are present | Emit typed compliance findings and set `human_review_required` when severity requires it | P13 | `tests/test_f5.py` |
 | F6-B1 | F6 | Prompt injection, jailbreak, private-data extraction, sensitive-path request, or customer-name leakage detected by LT/AML policy | Return `PolicyEvaluationResult(decision="block"|"redact")` with rule hits before the protected message proceeds | P14 | `tests/test_aml_policy.py`, `tests/test_short_contracts.py` |
 | F6-B2 | F6 | Sender role, purpose, recipient, or channel metadata violates the allowed route matrix | Return `PolicyEvaluationResult(decision="block")` and emit an LT verdict audit event | P14 | `tests/test_aml_policy.py`, `tests/test_short_contracts.py` |
 
@@ -409,8 +409,8 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 
 **Agent F5: Compliance auditor agent**
 
-- **Role:** Subscribes to the normalized audit stream, including LT verdicts and AML adapter events. Reasons about whether each cross-agent message exceeds §314(b) authorization or pattern-matches a "fishing expedition." Emits compliance annotations to the audit panel.
-- **Reasoning:** Gemini call. F5 reasons about whether a query series is investigating a legitimate suspicion or trolling for general information about a peer bank's customers. Flags anomalies in NL form.
+- **Role:** Reviews normalized audit artifacts, including LT verdicts and AML adapter events. Determines whether each supplied audit window contains rate-limit, budget-pressure, route, purpose, or policy-coverage findings. Emits compliance annotations to the audit panel.
+- **Reasoning:** deterministic audit checks for P13. A prompt file is present for future optional explanation or anomaly review, but live model calls do not decide hard compliance findings.
 - **Rule constraints (LLM cannot override):**
   - Read-only on the audit stream (cannot block or modify agent behavior)
   - Cannot suppress audit events from being logged
@@ -1113,27 +1113,29 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P13 — F5 compliance auditor agent**
 
-- *Goal:* Full LLM agent that subscribes to the live audit stream and reasons about whether agent behavior pattern-matches a fishing expedition, a §314(b) purpose mismatch, or a sustained-abuse pattern. Emits compliance annotations and `HUMAN_REVIEW` escalations.
+- *Goal:* Read-only deterministic auditor that reviews signed audit artifacts and emits typed compliance findings for rate limits, budget pressure, missing Lobster Trap verdicts, route anomalies, and purpose anomalies. A future optional LLM path may explain ambiguous patterns, but hard compliance findings come from deterministic Python checks.
 - *Files:* `backend/agents/f5_compliance_auditor.py`, `backend/agents/prompts/f5_system.md`, `tests/test_f5.py`.
-- *Inputs:* a streaming sequence of `AuditEvent` records from any object implementing an `AuditSource` protocol (`subscribe() -> AsyncIterator[AuditEvent]`). Unit tests use an in-memory source; P15 later wires F5 to the orchestrator's real audit channel.
-- *Outputs:* `AuditEvent` records of kind `human_review` or `rate_limit`, plus a periodic `AuditSummary` digest (every N events or every 30 seconds, whichever first).
-- *Approach (Gemini call):*
-  - F5 batches incoming events into windows (e.g., the last 60 seconds of activity). For each window, it sends the structured event list to Gemini with a prompt asking "does anything here exceed §314(b) authorization or pattern-match a fishing expedition?"
-  - The structured output is `F5BatchResult { findings: list[F5Finding] }` where each finding has a kind, a referenced event_id, and a rationale.
-  - F5 emits each finding as an `AuditEvent`.
+- *Inputs:* `AuditReviewRequest` with a bounded list of normalized `AuditEvent` records, optional `DismissalRationale` records, and related query IDs. P15 later wires this request to the orchestrator's real audit channel.
+- *Outputs:* `AuditReviewResult` with `ComplianceFinding` records, `human_review_required`, and `rate_limit_triggered`.
+- *Approach (deterministic checks):*
+  - F5 scans `Sec314bQuery` message events by source actor. Defaults are `max_queries=5` and `window_seconds=60`; the sixth query inside the window emits a `rate_limit` finding. Both values are configuration, not magic constants.
+  - F5 flags budget exhaustion or low remaining DP budget, governed messages missing a matching Lobster Trap allow verdict, non-allow LT verdicts, and route or purpose constraint violations.
+  - F5 returns typed findings without mutating, suppressing, or blocking the audited runtime behavior.
 - *Rule bypasses:* implement `F5-B1` and `F5-B2` from the Section 8.3 bypass rule catalog.
 - *Rule constraints:*
   - Read-only on the audit stream (cannot block or modify agent behavior).
   - Cannot suppress audit events from being logged.
   - Cannot retain customer identifiers (they wouldn't be in the audit stream anyway — but the constraint is enforced for defense in depth).
-- *Approach to "fishing expedition" detection:* the LLM looks for patterns like: many `Sec314bQuery` events from one investigator without any resulting `SARContribution`; a single investigator querying about many unrelated `name_hash` values in succession; queries with vague or boilerplate `suspicion_rationale` strings.
-- *Out of scope for this part:* no automatic remediation — F5 only annotates; humans (or future tooling) act on the annotations. No persistent audit-history store beyond what the orchestrator keeps.
+- *Approach to "fishing expedition" detection:* P13 covers deterministic precursors such as rate-limit breaches, route or purpose violations, missing LT governance evidence, and budget pressure. LLM-assisted explanation or ambiguous anomaly review is deferred and must remain optional.
+- *Out of scope for this part:* no automatic remediation - F5 only annotates; humans (or future tooling) act on the annotations. No persistent audit-history store beyond what the orchestrator keeps.
 - *Acceptance:* `tests/test_f5.py`:
-  - **Test 1 (rate limit):** synthesize a stream of 11 `Sec314bQuery` events from one investigator within 60 minutes; F5 emits a `rate_limit` AuditEvent referencing the 11th query.
-  - **Test 2 (purpose mismatch):** synthesize a `Sec314bQuery` with `suspicion_rationale = "we're curious about this customer"`; F5 emits a `human_review` annotation regardless of LLM judgment.
-  - **Test 3 (LLM-judgment fishing pattern):** synthesize 5 queries from one investigator referencing 5 unrelated `name_hash` values without any follow-up SAR contributions; F5 emits a `human_review` with the LLM-authored rationale.
-  - **Test 4 (no false alarms):** synthesize a normal canonical-flow audit stream; F5 emits no `human_review` annotations.
-- *Risks specific to this part:* (a) the LLM may over-flag (every query looks like a fishing expedition to a cautious model) — mitigation: prompt explicitly says "normal investigative behavior is not a fishing expedition; only flag specific anomalies." Test 4 catches over-flagging. (b) F5's batching window introduces latency in the demo; mitigation: tune window to 5–10 seconds for demo runs; document the tradeoff.
+  - **Test 1 (rate limit):** synthesize a stream of 6 `Sec314bQuery` events from one investigator within 60 seconds; F5 returns a `rate_limit` finding referencing the violating window.
+  - **Test 2 (configurable threshold):** lower `max_queries` and `window_seconds` in test config and verify the threshold moves without code changes.
+  - **Test 3 (budget pressure):** synthesize budget exhaustion or low remaining DP budget events; F5 returns a `budget_pressure` finding.
+  - **Test 4 (LT coverage):** synthesize a governed message with no matching LT allow verdict; F5 returns a `missing_lt_verdict` finding.
+  - **Test 5 (route or purpose anomaly):** synthesize route and purpose constraint-violation events; F5 returns typed human-review findings.
+  - **Test 6 (no false alarms):** synthesize a normal canonical-flow audit window; F5 emits no findings.
+- *Risks specific to this part:* (a) deterministic anomaly checks can over-flag if the governed-message list is broader than the audit normalizer can currently populate - mitigation: keep governed message types configurable and test canonical clean windows. (b) future LLM review could drift into deciding hard findings - mitigation: prompt and tests state that hard findings are deterministic.
 - *Depends on:* P4, P5. P15 later wires the already-built F5 listener into the live orchestrator audit channel.
 - *Scope check:* one to two focused sessions.
 
@@ -1209,7 +1211,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Audit events form a hash chain through `prev_event_hash` and `event_hash`; tests verify tampering changes the chain head.
 - *Bank↔primitives wiring:* on init, the orchestrator constructs each bank's `StatsPrimitivesLayer` (from P7) and passes a handle to that bank's A3 only. A2 receives alert evidence and aggregated responses but no DB or P7 handle.
 - *Cloud node wiring:* in cloud-demo mode, no process gets all handles. Each A3 service receives only its own P7 handle and bank database path. The federation service receives only service URLs and public verification keys for A2/A3 nodes. Investigator services receive only F1's URL and verification key.
-- *F5 wiring:* F5 is optional at construction time. When enabled, it subscribes to the audit channel via `audit.subscribe()`. F5's findings are themselves AuditEvents (kind `human_review` or `rate_limit`). This avoids a build-order cycle: P13 is tested against an `AuditSource` protocol first, then P15 wires it into the real orchestrator.
+- *F5 wiring:* F5 is optional at construction time. When enabled, the orchestrator sends bounded `AuditReviewRequest` batches built from the audit channel. F5 returns `AuditReviewResult` findings that P15 can mirror into timeline or audit-panel records. This avoids a build-order cycle: P13 is tested against typed request fixtures first, then P15 wires those requests into the real orchestrator.
 - *Out of scope for this part:* no production-grade Kubernetes operator; no multi-region failover; no real bank network connectivity; no agent hot-reload. Cloud-demo mode is for visible trust boundaries, not production operations. The control API remains the P9a demo-scoped API and must not become a privileged bypass path.
 - *Acceptance:* `tests/test_orchestrator.py`:
   - Instantiate the orchestrator (with stubbed LLM agents that return canned outputs for predictability); drop a hand-crafted `Alert` into Bank Alpha's A2 inbox; call `run_until_idle()`; verify the audit channel contains at least: the original alert routed, A2's `Sec314bQuery`, F1's broadcasts to peer A3 responders, peer A3s' responses, F1's aggregated response, A2's `SARContribution`, F4's `SARDraft`, and F5's audit annotations.
