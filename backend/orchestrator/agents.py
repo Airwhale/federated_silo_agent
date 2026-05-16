@@ -320,13 +320,16 @@ class StubBankStatsPrimitives:
         *,
         window: tuple[date, date],
         requester: RequesterKey,
+        candidate_entity_hashes: list[str] | None = None,
         rho: float = 0.04,
     ) -> PrimitiveResult:
         _ = requester
+        approved_candidates = sorted(set(candidate_entity_hashes or []))
         aggregate = BankAggregate(
             bank_id=self.bank_id,
             edge_count_distribution=[1, 0, 2, 0],
             bucketed_flow_histogram=[0, 4, 1, 0, 0],
+            candidate_entity_hashes=approved_candidates,
             rho_debited=rho,
         )
         return PrimitiveResult(
@@ -345,6 +348,16 @@ class StubBankStatsPrimitives:
                     args={"window_end": window[1].isoformat(), "rho": rho},
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho / 2,
+                ),
+                _primitive_record(
+                    field_name="candidate_entity_hashes",
+                    primitive_name="stub_pattern_aggregate_for_f2",
+                    args={
+                        "candidate_entity_hashes": approved_candidates,
+                        "rho": 0.0,
+                    },
+                    returned_value_kind=ResponseValueKind.HASH_LIST,
+                    rho_debited=0.0,
                 ),
             ],
         )
