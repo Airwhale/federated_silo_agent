@@ -61,6 +61,8 @@ class OrchestratorAuditRecorder(AuditEmitter):
                 status=status,
                 detail=detail,
                 model_name="deterministic_orchestrator",
+                # The hash-chain list order is the authoritative sequence;
+                # timestamps are wall-clock observability fields only.
                 created_at=datetime.now(UTC),
             )
         )

@@ -353,6 +353,10 @@ class StubBankStatsPrimitives:
 def _allowlist_entries(
     principals: dict[str, OrchestratorPrincipal],
 ) -> list[PrincipalAllowlistEntry]:
+    # These message and recipient constraints are consumed by
+    # PrincipalAllowlist.verify_message/verify_route_approval, not by the
+    # dataclass itself. Keeping them here makes the orchestrator and UI probes
+    # share the same security envelope policy.
     entries: list[PrincipalAllowlistEntry] = []
     for bank_id in BANK_IDS:
         a2 = principals[f"{bank_id.value}.A2"]

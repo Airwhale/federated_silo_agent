@@ -48,6 +48,7 @@ from shared.enums import (
 )
 from shared.messages import (
     EntityPresencePayload,
+    LocalSiloContributionRequest,
     PurposeDeclaration,
     RouteApproval,
     Sec314bQuery,
@@ -199,6 +200,9 @@ _DETAIL_ELLIPSIS = " …[truncated]"
 
 
 _LIVE_AGENT_COMPONENTS = {
+    # This is intentionally an explicit UI placement list, not generated
+    # from AgentRegistry. F2/F4/F5/F6 may be live as backend components but
+    # P15 still stops before scheduling them in the live orchestrator path.
     ComponentId.A1,
     ComponentId.A2,
     ComponentId.F1,
@@ -1391,10 +1395,8 @@ def _sync_security_snapshots(
         session.latest_envelope = _envelope_snapshot(
             message,
             status=SnapshotStatus.LIVE,
-            signature_status="valid" if getattr(message, "signature", None) else "not_checked",
-            freshness_status=(
-                "fresh" if getattr(message, "expires_at", None) is not None else "not_checked"
-            ),
+            signature_status="valid" if message.signature else "missing",
+            freshness_status=_message_freshness_status(message),
             detail="Latest orchestrator message is visible after a live turn.",
         )
 
@@ -1433,24 +1435,33 @@ def _sync_security_snapshots(
 
 def _latest_signed_message(
     state: SessionOrchestratorState,
-) -> Sec314bQuery | Sec314bResponse | None:
+) -> Sec314bQuery | LocalSiloContributionRequest | Sec314bResponse | None:
     if state.aggregate_response is not None:
         return state.aggregate_response
     if state.a3_responses:
         return state.a3_responses[-1]
     route_request = _latest_routed_request(state)
-    if isinstance(route_request, Sec314bQuery):
+    if isinstance(route_request, (Sec314bQuery, LocalSiloContributionRequest)):
         return route_request
     if state.original_query is not None:
         return state.original_query
     return None
 
 
-def _latest_routed_request(state: SessionOrchestratorState) -> Sec314bQuery | None:
-    for request in reversed(state.routed_requests):
-        if isinstance(request, Sec314bQuery):
-            return request
-    return None
+def _latest_routed_request(
+    state: SessionOrchestratorState,
+) -> Sec314bQuery | LocalSiloContributionRequest | None:
+    if not state.routed_requests:
+        return None
+    return state.routed_requests[-1]
+
+
+def _message_freshness_status(
+    message: Sec314bQuery | LocalSiloContributionRequest | Sec314bResponse,
+) -> Literal["fresh", "expired", "not_checked"]:
+    if message.expires_at is None:
+        return "not_checked"
+    return "fresh" if message.expires_at > utc_now() else "expired"
 
 
 def _dp_ledger_entries(state: SessionOrchestratorState) -> list[DpLedgerEntrySnapshot]:
@@ -1539,7 +1550,7 @@ def _interaction_placeholder_reason(
 
 
 def _envelope_snapshot(
-    message: Sec314bQuery | Sec314bResponse,
+    message: Sec314bQuery | LocalSiloContributionRequest | Sec314bResponse,
     *,
     status: SnapshotStatus,
     signature_status: Literal["valid", "invalid", "missing", "not_checked"],

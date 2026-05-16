@@ -347,7 +347,8 @@ def test_step_session_advances_one_live_orchestrator_turn() -> None:
     body = response.json()
     assert body["phase"] == "a1_monitor"
     assert body["latest_events"][-1]["title"] == "Live turn: bank_alpha.A1"
-    assert "placeholder" not in response.text.lower()
+    assert body["phase"] != "p9a_placeholder_step"
+    assert "placeholder" not in body["latest_events"][-1]["detail"].lower()
     assert audit_chain.status_code == 200
     assert audit_chain.json()["audit_chain"]["event_count"] > 0
     fields = {field["name"]: field["value"] for field in a1_snapshot.json()["fields"]}

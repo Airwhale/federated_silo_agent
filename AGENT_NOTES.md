@@ -603,6 +603,7 @@ Notes:
 Status: in_progress
 Touched files:
 - `backend/orchestrator/`
+- `backend/orchestrator/audit.py`
 - `backend/ui/state.py`
 - `tests/test_ui_api.py`
 - `docs/architecture/0002-orchestrator-design.md`

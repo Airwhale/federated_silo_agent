@@ -38,16 +38,18 @@ def next_turn(state: SessionOrchestratorState) -> AgentTurn | None:
     if state.terminal_reason is not None:
         return None
     if state.latest_alert is None:
+        monitor_bank_id = state.monitor_bank_id
         return AgentTurn(
             kind="a1_monitor",
-            agent_id="bank_alpha.A1",
-            bank_id=BankId.BANK_ALPHA,
+            agent_id=f"{monitor_bank_id.value}.A1",
+            bank_id=monitor_bank_id,
         )
     if state.original_query is None:
+        monitor_bank_id = state.monitor_bank_id
         return AgentTurn(
             kind="a2_alert_triage",
-            agent_id="bank_alpha.A2",
-            bank_id=BankId.BANK_ALPHA,
+            agent_id=f"{monitor_bank_id.value}.A2",
+            bank_id=monitor_bank_id,
         )
     if state.route_plan is None:
         return AgentTurn(kind="f1_route", agent_id="federation.F1")
@@ -69,19 +71,20 @@ def next_turn(state: SessionOrchestratorState) -> AgentTurn | None:
     if state.aggregate_response is None:
         return AgentTurn(kind="f1_aggregate", agent_id="federation.F1")
     if state.sar_contribution is None and state.dismissal is None:
+        monitor_bank_id = state.monitor_bank_id
         return AgentTurn(
             kind="a2_response_synthesis",
-            agent_id="bank_alpha.A2",
-            bank_id=BankId.BANK_ALPHA,
+            agent_id=f"{monitor_bank_id.value}.A2",
+            bank_id=monitor_bank_id,
         )
     return None
 
 
-def _routed_bank(request: Sec314bQuery | LocalSiloContributionRequest) -> BankId:
+def _routed_bank(request: Sec314bQuery | LocalSiloContributionRequest) -> BankId | None:
     if isinstance(request, Sec314bQuery):
+        if not request.target_bank_ids:
+            return None
         if len(request.target_bank_ids) != 1:
-            raise ValueError(
-                "orchestrator expects routed peer queries to have exactly one target bank"
-            )
+            return None
         return request.target_bank_ids[0]
     return request.responding_bank_id

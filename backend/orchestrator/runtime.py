@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
-from uuid import UUID, uuid4
+from uuid import UUID, uuid5
 
 from backend.agents.a1_monitoring import synthetic_velocity_candidate
 from backend.agents.a2_states import CorrelatedAlertSummary
@@ -33,6 +33,9 @@ from shared.messages import (
 )
 
 
+_CORRELATED_ALERT_NAMESPACE = UUID("4ad75c24-d9b4-4f71-a947-3ff21cc6fba1")
+
+
 class TerminalCode(StrEnum):
     """Machine-readable terminal states for orchestrator control flow."""
 
@@ -46,6 +49,7 @@ class TerminalCode(StrEnum):
     F1_NO_ROUTE_PLAN = "f1_no_route_plan"
     F1_REFUSAL = "f1_refusal"
     F4_PENDING = "f4_pending"
+    ROUTE_PLAN_INVALID = "route_plan_invalid"
 
 
 @dataclass
@@ -57,6 +61,7 @@ class SessionOrchestratorState:
     principals: OrchestratorPrincipals
     audit: OrchestratorAuditRecorder
     registry: AgentRegistry
+    monitor_bank_id: BankId = BankId.BANK_ALPHA
     latest_alert: Alert | None = None
     original_query: Sec314bQuery | None = None
     route_plan: F1RoutePlan | None = None
@@ -76,8 +81,14 @@ class SessionOrchestratorState:
 class Orchestrator:
     """Single-process P15 orchestrator used by the demo API."""
 
-    def __init__(self, *, principals: OrchestratorPrincipals) -> None:
+    def __init__(
+        self,
+        *,
+        principals: OrchestratorPrincipals,
+        monitor_bank_id: BankId = BankId.BANK_ALPHA,
+    ) -> None:
         self._principals = principals
+        self._monitor_bank_id = monitor_bank_id
 
     def bootstrap(self, *, session_id: UUID, mode: str) -> SessionOrchestratorState:
         run_id = str(session_id)
@@ -100,6 +111,7 @@ class Orchestrator:
             principals=self._principals,
             audit=audit,
             registry=registry,
+            monitor_bank_id=self._monitor_bank_id,
         )
 
     def next_turn(self, state: SessionOrchestratorState) -> AgentTurn | None:
@@ -124,7 +136,7 @@ class Orchestrator:
         raise ValueError(f"unsupported orchestrator turn: {turn.kind}")
 
     def _run_a1(self, state: SessionOrchestratorState) -> str:
-        bank_id = BankId.BANK_ALPHA
+        bank_id = state.monitor_bank_id
         agent = state.registry.a1_by_bank[bank_id]
         candidate = synthetic_velocity_candidate()
         result = agent.run(agent.build_input([candidate]))
@@ -144,13 +156,13 @@ class Orchestrator:
         agent = state.registry.a2_by_bank[bank_id]
         correlated = [
             CorrelatedAlertSummary(
-                alert_id=uuid4(),
+                alert_id=_correlated_alert_id(state.latest_alert.alert_id, 1),
                 entity_hashes=state.latest_alert.evidence[0].entity_hashes,
                 signal_type=state.latest_alert.signal_type.value,
                 created_at=state.latest_alert.created_at - timedelta(days=1),
             ),
             CorrelatedAlertSummary(
-                alert_id=uuid4(),
+                alert_id=_correlated_alert_id(state.latest_alert.alert_id, 2),
                 entity_hashes=state.latest_alert.evidence[0].entity_hashes,
                 signal_type=state.latest_alert.signal_type.value,
                 created_at=state.latest_alert.created_at - timedelta(days=2),
@@ -209,7 +221,9 @@ class Orchestrator:
             raise ValueError("A3 turn requires routed request")
         bank_id = turn.bank_id
         if bank_id is None:
-            raise ValueError("A3 turn requires bank_id")
+            state.terminal_reason = "A3 turn could not resolve a single routed bank."
+            state.terminal_code = TerminalCode.ROUTE_PLAN_INVALID
+            return state.terminal_reason
         response = state.registry.a3_by_bank[bank_id].run(A3TurnInput(request=turn.request))
         state.a3_responses.append(response)
         if response.refusal_reason:
@@ -286,3 +300,11 @@ class Orchestrator:
             private_key=principal.private_key,
             signing_key_id=principal.signing_key_id,
         )
+
+
+def _correlated_alert_id(source_alert_id: UUID, ordinal: int) -> UUID:
+    """Derive stable synthetic correlation ids from the active alert id."""
+    return uuid5(
+        _CORRELATED_ALERT_NAMESPACE,
+        f"federated_silo_agent:p15:correlated:{source_alert_id}:{ordinal}",
+    )
