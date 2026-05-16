@@ -168,7 +168,7 @@ def test_flow_histogram_serial_composition_splits_bucket_rho() -> None:
     assert layer.ledger.spent(requester()) == 0.03
 
 
-def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_two_records() -> None:
+def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_three_records() -> None:
     layer = primitive_layer()
 
     result = layer.pattern_aggregate_for_f2(

@@ -230,7 +230,7 @@ def _is_clear_negative(signals: TypologySignals) -> bool:
 
 
 def _bucket_value(values: list[int], index: int) -> int:
-    if index >= len(values):
+    if not 0 <= index < len(values):
         return 0
     return values[index]
 

@@ -23,6 +23,7 @@ from backend.agents.llm_client import LLMClient
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
 from shared.enums import AgentRole, AuditEventKind, BankId, PatternClass
 from shared.messages import (
+    CANDIDATE_HASH_LIMIT,
     CrossBankHashToken,
     GraphPatternRequest,
     GraphPatternResponse,
@@ -49,7 +50,10 @@ class F2ClassificationDraft(BaseModel):
 
     pattern_class: PatternClass
     confidence: float = Field(ge=0.0, le=1.0)
-    suspect_entity_hashes: list[CrossBankHashToken] = Field(default_factory=list)
+    suspect_entity_hashes: list[CrossBankHashToken] = Field(
+        default_factory=list,
+        max_length=CANDIDATE_HASH_LIMIT,
+    )
     narrative: MediumText
 
     model_config = ConfigDict(extra="forbid", strict=True, validate_assignment=True)
@@ -225,17 +229,16 @@ class F2GraphAnalysisAgent(Agent[GraphPatternRequest, GraphPatternResponse]):
         draft: F2ClassificationDraft,
     ) -> str | None:
         allowed_hashes = set(signals.candidate_entity_hashes)
-        unexpected = [
-            entity_hash
+        if any(
+            entity_hash not in allowed_hashes
             for entity_hash in draft.suspect_entity_hashes
-            if entity_hash not in allowed_hashes
-        ]
-        if unexpected:
+        ):
             return "suspect_entity_hashes must be drawn from candidate_entity_hashes"
-        if draft.pattern_class == PatternClass.NONE and draft.confidence >= 0.4:
-            return "pattern_class none must have confidence below 0.4"
-        if draft.pattern_class == PatternClass.NONE and draft.suspect_entity_hashes:
-            return "pattern_class none must not include suspect hashes"
+        if draft.pattern_class == PatternClass.NONE:
+            if draft.confidence >= 0.4:
+                return "pattern_class none must have confidence below 0.4"
+            if draft.suspect_entity_hashes:
+                return "pattern_class none must not include suspect hashes"
         if draft.pattern_class != PatternClass.NONE and draft.confidence < 0.4:
             return "detected patterns must have confidence at least 0.4"
         return None
@@ -256,6 +259,6 @@ class F2GraphAnalysisAgent(Agent[GraphPatternRequest, GraphPatternResponse]):
             recipient_agent_id=request.sender_agent_id,
             pattern_class=pattern_class,
             confidence=confidence,
-            suspect_entity_hashes=list(dict.fromkeys(suspect_entity_hashes)),
+            suspect_entity_hashes=sorted(set(suspect_entity_hashes)),
             narrative=narrative,
         )

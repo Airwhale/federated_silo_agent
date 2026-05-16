@@ -572,6 +572,9 @@ class BankStatsPrimitives:
                     field_name="candidate_entity_hashes",
                     primitive_name="pattern_aggregate_for_f2",
                     args={
+                        "window": parsed_window.model_dump(mode="json"),
+                        "component": "candidate_entity_hashes",
+                        "max_transactions": max_transactions,
                         "candidate_entity_hashes": approved_candidates,
                         "requester": requester.stable_key,
                         "rho": 0.0,
