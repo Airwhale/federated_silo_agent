@@ -312,9 +312,9 @@ Next agent:
 
 ### P12 - F4 SAR Drafter
 
-Owner:
-Branch:
-Status: not_started
+Owner: Codex
+Branch: codex/p12-f4
+Status: ready_for_review
 Mode: LLM-driven (narrative synthesis) with a deterministic mandatory-field gate
 Fixtures: A2 `SARContribution` outputs from a canonical run; F3 sanctions hit on S1-D PEP fixture; F2 `GraphPatternResponse` on S1 ring. Construct in the test setup until P15's canonical-run integration test makes real ones available.
 
@@ -357,6 +357,59 @@ Acceptance:
   not customer names.
 
 Notes:
+
+### 2026-05-15 - Codex - codex/p12-f4
+Status: unblocked by `short-contract` commit `de6591e`
+Touched files:
+- `AGENT_NOTES.md`
+
+What changed:
+- Read F4 workstream docs and inspected the existing SAR shared contracts.
+- After the shared-contract update, `SARContribution` now has optional
+  `suspicious_amount_range: tuple[int, int]` in cents.
+
+Assumptions:
+- F4 should keep structured SAR fields deterministic and should not parse prose
+  evidence summaries for mandatory amounts.
+
+Resolved blocker:
+- F4 can deterministically compute `SARDraft.suspicious_amount_range` from
+  provided contribution ranges: lowest low, highest high.
+
+Next agent:
+- Emit `SARContributionRequest` when no contribution provides
+  `suspicious_amount_range`; do not infer amounts from evidence summaries.
+
+### 2026-05-15 - Codex - codex/p12-f4
+Status: ready_for_review
+Touched files:
+- `backend/agents/__init__.py`
+- `backend/agents/f4_sar_drafter.py`
+- `backend/agents/prompts/f4_system.md`
+- `backend/ui/state.py`
+- `tests/test_f4.py`
+- `tests/test_ui_api.py`
+
+What changed:
+- Implemented F4 SAR drafting with deterministic mandatory-field derivation
+  for filing institution, amount range, typology, contributors, priority, and
+  related query IDs.
+- Added the narrative-only LLM prompt and repair path over typed hash-only
+  facts.
+- Marked F4 live in UI readiness and exposed safe generic inspector fields.
+
+Assumptions:
+- F4 returns `SARContributionRequest` when no contribution provides a
+  structured amount range, and it never infers amounts from summaries.
+- `SARDraft` does not carry `in_reply_to`; missing-input requests bind to the
+  SAR case via `SARContributionRequest.in_reply_to`.
+
+Blockers:
+- None.
+
+Next agent:
+- P15 can wire F4 by passing `SARAssemblyRequest` and handling either
+  `SARDraft` or `SARContributionRequest`.
 
 ### P13 - F5 Compliance Auditor
 

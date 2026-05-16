@@ -32,6 +32,7 @@ def test_create_session_returns_typed_component_readiness() -> None:
     assert components["F2"]["status"] == "live"
     assert components["F2"]["available_after"] is None
     assert components["F3"]["status"] == "live"
+    assert components["F4"]["status"] == "live"
     assert components["dp_ledger"]["status"] == "live"
 
 
@@ -98,6 +99,22 @@ def test_f3_component_snapshot_surfaces_watchlist_size_without_leaking_contents(
     assert "PEP" not in body_text
     assert "Fictional SDN fixture" not in body_text
     assert "notes" not in body_text
+
+
+def test_f4_component_snapshot_surfaces_drafting_mode() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.get(f"/sessions/{session_id}/components/F4")
+
+    assert response.status_code == 200
+    body = response.json()
+    fields = {field["name"]: field["value"] for field in body["fields"]}
+    assert fields["drafting_mode"] == "llm_narrative"
+    assert fields["structured_fields"] == "deterministic"
+    assert fields["missing_input_behavior"] == "typed SARContributionRequest"
+    assert "private_key" not in response.text
+    assert "api_key" not in response.text
 
 
 def test_system_snapshot_redacts_secret_values(monkeypatch) -> None:
@@ -338,10 +355,10 @@ def test_not_built_component_interaction_returns_available_after() -> None:
     session_id = create_session(test_client)
 
     response = test_client.post(
-        f"/sessions/{session_id}/components/F4/interactions",
+        f"/sessions/{session_id}/components/F5/interactions",
         json={
             "interaction_kind": "prompt",
-            "payload_text": "Draft a SAR narrative for this case.",
+            "payload_text": "Review the audit trail for this case.",
             "target_instance_id": "federation",
         },
     )
@@ -351,8 +368,8 @@ def test_not_built_component_interaction_returns_available_after() -> None:
     assert body["accepted"] is False
     assert body["status"] == "not_built"
     assert body["blocked_by"] == "not_built"
-    assert body["available_after"] == "P12"
-    assert "P12" in body["reason"]
+    assert body["available_after"] == "P13"
+    assert "P13" in body["reason"]
 
 
 def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:

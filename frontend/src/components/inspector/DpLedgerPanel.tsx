@@ -38,7 +38,7 @@ export function DpLedgerPanel({ snapshot }: Props) {
               <li
                 key={`${entry.requester_key}-${entry.responding_bank_id}`}
                 className="rounded border border-slate-800/70 bg-slate-900/40 px-2.5 py-1.5"
-                title="DP ledger row. Correct state has nonnegative spent/remaining rho within the max budget. Dangerous state is negative remaining budget, hidden debits, or raw requester identity exposure."
+                title="DP ledger row. Expected behavior is nonnegative spent and remaining rho within the max budget. Attack succeeds if budget goes negative, debits are hidden, or raw requester identity leaks."
               >
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="font-medium text-slate-100">{entry.responding_bank_id}</span>

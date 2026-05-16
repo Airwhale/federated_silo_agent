@@ -72,8 +72,8 @@ type RouteGuide = {
   subtitle: string;
   description: string;
   whyImportant: string;
-  blocks: string;
-  badState: string;
+  expectedBehavior: string;
+  attackSucceedsIf: string;
   status: SnapshotStatus;
   componentId?: ComponentId;
 };
@@ -183,10 +183,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "A1 watches one bank's activity and may use a model only after deterministic privacy checks.",
     whyImportant:
       "It starts the investigation while keeping raw customer names and account records inside the bank.",
-    blocks:
-      "Bypass prompts, raw customer-name leakage, and attempts to push obvious policy violations to the model.",
-    badState:
-      "A bad state is A1 sending raw alerts, names, or unfiltered prompt text into the model route.",
+    expectedBehavior:
+      "A1 sends only hash-only alerts through the local policy gate before any model call.",
+    attackSucceedsIf:
+      "A1 sends raw alerts, customer names, accounts, or unfiltered injection text into the model route.",
     componentId: "A1",
   },
   A2: {
@@ -196,10 +196,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "A2 turns a local alert into a narrow Section 314(b) question for the federation.",
     whyImportant:
       "It is outside the TEE, so its request must be constrained before F1 and the bank silos trust it.",
-    blocks:
-      "Invented hashes, raw-data requests, and broad questions that exceed the approved investigation purpose.",
-    badState:
-      "A bad state is A2 asking all banks for raw transactions or accepting silo refusals as successful answers.",
+    expectedBehavior:
+      "A2 drafts narrow, hash-only questions and preserves refusals as refusals.",
+    attackSucceedsIf:
+      "A2 asks all banks for raw transactions, invents hashes, or accepts silo refusals as successful answers.",
     componentId: "A2",
   },
   F2: {
@@ -209,10 +209,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "F2 looks for cross-bank laundering patterns. A structuring ring is repeated smaller movement around a group; a layering chain moves value through steps to hide origin.",
     whyImportant:
       "It lets judges see the cross-bank pattern that no single silo could confidently see alone.",
-    blocks:
-      "Raw transaction access, customer-name disclosure, and model hallucination of suspect hashes not present in evidence.",
-    badState:
-      "A bad state is F2 treating the LLM as the source of truth or inventing extra suspects to strengthen a pattern.",
+    expectedBehavior:
+      "F2 uses DP-noised graph summaries and deterministic rules before model fallback.",
+    attackSucceedsIf:
+      "F2 treats the LLM as the source of truth or invents extra suspects to strengthen a pattern.",
     componentId: "F2",
   },
   F4: {
@@ -222,10 +222,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "F4 turns validated findings into a draft suspicious activity report for human review.",
     whyImportant:
       "It converts the federation's evidence into compliance language while preserving where each fact came from.",
-    blocks:
-      "Unsupported allegations, missing mandatory SAR fields, and raw private identifiers in the narrative.",
-    badState:
-      "A bad state is F4 adding facts that no upstream component proved or claiming an incomplete SAR is complete.",
+    expectedBehavior:
+      "F4 computes required SAR fields in code and lets the model write only from supplied facts.",
+    attackSucceedsIf:
+      "F4 adds facts no upstream component proved or claims an incomplete SAR is complete.",
     componentId: "F4",
   },
   lobster_trap: {
@@ -235,10 +235,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "Lobster Trap scans the prompt and tool payload before a local component sends anything to a model.",
     whyImportant:
       "It is the judge-visible layer that catches prompt injection and data-exfiltration attempts before the LLM sees them.",
-    blocks:
-      "Instruction override attempts, hidden-prompt requests, raw PII exposure, policy bypass language, and unsafe tool payloads.",
-    badState:
-      "A bad state is LT being treated as one global switch or allowing an obvious injection into the model route.",
+    expectedBehavior:
+      "LT scans each local model-bound prompt and blocks or redacts unsafe text before LiteLLM.",
+    attackSucceedsIf:
+      "LT is treated as one global switch or allows an obvious injection into the model route.",
     componentId: "lobster_trap",
   },
   litellm: {
@@ -248,10 +248,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "LiteLLM is the local model route that sends a safe, schema-bound request to Gemini or OpenRouter.",
     whyImportant:
       "It keeps model-provider wiring observable without making the provider the product's control plane.",
-    blocks:
-      "It is not the main policy gate, but it should prevent key exposure, hide provider secrets, and preserve schema expectations.",
-    badState:
-      "A bad state is a global proxy with no per-domain context, leaked API keys, or untracked model failures.",
+    expectedBehavior:
+      "LiteLLM routes schema-bound requests per trust domain while keeping provider keys redacted.",
+    attackSucceedsIf:
+      "A global proxy loses domain context, leaks API keys, or hides model failures.",
     componentId: "litellm",
   },
   provider: {
@@ -261,10 +261,10 @@ const ROUTE_GUIDES: Record<RouteGuideKey, Omit<RouteGuide, "status">> = {
       "The provider is the external model endpoint, such as Gemini through Google services or Gemini through OpenRouter.",
     whyImportant:
       "It produces language or classification only after local policy, schema, and routing controls have narrowed the input.",
-    blocks:
-      "The provider is not a local security layer. It should receive no raw bank records, private keys, or unrestricted prompts.",
-    badState:
-      "A bad state is relying on the provider alone to enforce privacy, identity, audit, or DP policy.",
+    expectedBehavior:
+      "The provider receives only narrowed, policy-checked, schema-bound prompts.",
+    attackSucceedsIf:
+      "The system relies on the provider alone to enforce privacy, identity, audit, or DP policy.",
   },
 };
 
@@ -1121,8 +1121,8 @@ function RouteGuideDrawer({
                 <KeyValueGrid
                   rows={[
                     { label: "Why important", value: guide.whyImportant },
-                    { label: "Blocks or limits", value: guide.blocks, tone: "good" },
-                    { label: "Incorrect state", value: guide.badState, tone: "danger" },
+                    { label: "Expected behavior", value: guide.expectedBehavior, tone: "good" },
+                    { label: "Attack succeeds if", value: guide.attackSucceedsIf, tone: "danger" },
                     {
                       label: "Route status",
                       value: (

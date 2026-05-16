@@ -16,8 +16,8 @@ export function ComponentGuidancePanel({ snapshot }: Props) {
       </p>
       <KeyValueGrid
         rows={[
-          { label: "Correct state", value: guidance.correct, tone: "good" },
-          { label: "Incorrect state", value: guidance.incorrect, tone: "danger" },
+          { label: "Expected behavior", value: guidance.expectedBehavior, tone: "good" },
+          { label: "Attack succeeds if", value: guidance.attackSucceedsIf, tone: "danger" },
         ]}
       />
     </InspectorSection>
