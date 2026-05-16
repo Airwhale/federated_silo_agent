@@ -351,6 +351,48 @@ def test_f5_constraint_event_is_classified_once_by_primary_anomaly() -> None:
     assert [finding.kind for finding in result.findings] == [ROUTE_ANOMALY_FINDING]
 
 
+def test_f5_finding_output_is_independent_of_input_order() -> None:
+    f5, _ = agent()
+    audit_events = [
+        message_event(),
+        budget_exhausted_event(),
+        rho_debited_event(rho_remaining=0.01),
+        constraint_event("invalid_purpose: suspicion rationale is blank"),
+        constraint_event("route_violation: recipient does not match approval"),
+    ]
+    dismissals = [
+        DismissalRationale(
+            sender_agent_id="bank_beta.A2",
+            sender_role=AgentRole.A2,
+            sender_bank_id=BankId.BANK_BETA,
+            recipient_agent_id="federation.F5",
+            alert_id=uuid4(),
+            reason="ok",
+        ),
+        DismissalRationale(
+            sender_agent_id="bank_alpha.A2",
+            sender_role=AgentRole.A2,
+            sender_bank_id=BankId.BANK_ALPHA,
+            recipient_agent_id="federation.F5",
+            alert_id=uuid4(),
+            reason="no",
+        ),
+    ]
+
+    forward = f5.run(request(audit_events, dismissals=dismissals))
+    reversed_result = f5.run(
+        request(list(reversed(audit_events)), dismissals=list(reversed(dismissals)))
+    )
+
+    assert [
+        (finding.kind, finding.severity, finding.detail, finding.related_event_ids)
+        for finding in forward.findings
+    ] == [
+        (finding.kind, finding.severity, finding.detail, finding.related_event_ids)
+        for finding in reversed_result.findings
+    ]
+
+
 def test_f5_clean_canonical_audit_window_has_no_findings() -> None:
     f5, audit = agent()
     query = message_event()

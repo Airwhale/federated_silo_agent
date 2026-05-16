@@ -136,21 +136,23 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
     def run(self, input_data: AuditReviewRequest | object) -> AuditReviewResult:
         """Return deterministic compliance findings for the supplied audit window."""
         request = self._validate_input(input_data)
+        audit_events = _sort_events(request.audit_events)
+        dismissals = sorted(request.dismissals, key=lambda dismissal: dismissal.message_id)
 
         findings = [
-            *self._rate_limit_findings(request.audit_events),
-            *self._budget_pressure_findings(request.audit_events),
-            *self._lt_verdict_findings(request.audit_events),
-            *self._route_and_purpose_findings(request.audit_events),
-            *self._dismissal_findings(request.dismissals),
+            *self._rate_limit_findings(audit_events),
+            *self._budget_pressure_findings(audit_events),
+            *self._lt_verdict_findings(audit_events),
+            *self._route_and_purpose_findings(audit_events),
+            *self._dismissal_findings(dismissals),
         ]
         rate_limit_triggered = any(finding.kind == RATE_LIMIT_FINDING for finding in findings)
         # P13 treats every generated F5 finding as review-worthy. If later
         # informational findings are added, this should inspect kind/severity.
         human_review_required = bool(findings)
-        has_non_rate_limit_findings = any(
-            finding.kind != RATE_LIMIT_FINDING for finding in findings
-        )
+        other_findings = [
+            finding for finding in findings if finding.kind != RATE_LIMIT_FINDING
+        ]
 
         result = AuditReviewResult(
             sender_agent_id=self.agent_id,
@@ -172,9 +174,7 @@ class F5ComplianceAuditorAgent(Agent[AuditReviewRequest, AuditReviewResult]):
                 detail="One actor exceeded the configured query rate limit.",
                 model_name="deterministic_f5",
             )
-        if human_review_required and (
-            not rate_limit_triggered or has_non_rate_limit_findings
-        ):
+        if other_findings:
             self._emit(
                 kind=AuditEventKind.HUMAN_REVIEW,
                 phase="review",
@@ -421,7 +421,7 @@ def _event_ids(events: Iterable[AuditEvent]) -> list[UUID]:
 
 
 def _sort_events(events: Iterable[AuditEvent]) -> list[AuditEvent]:
-    return sorted(events, key=lambda event: event.created_at)
+    return sorted(events, key=lambda event: (event.created_at, event.event_id))
 
 
 def _dismissal_is_vague(
