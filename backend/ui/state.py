@@ -468,6 +468,29 @@ class DemoControlService:
                     ),
                 ],
             )
+        elif component_id == ComponentId.F5:
+            return ComponentSnapshot(
+                component_id=component_id,
+                status=item.status,
+                title=item.label,
+                fields=[
+                    *fields,
+                    SnapshotField(name="audit_mode", value="deterministic"),
+                    SnapshotField(name="execution_boundary", value="read_only"),
+                    SnapshotField(
+                        name="finding_domains",
+                        value="rate_limit,budget,lt_verdict,route_purpose,dismissals",
+                    ),
+                    SnapshotField(
+                        name="input_boundary",
+                        value="signed AuditReviewRequest",
+                    ),
+                    SnapshotField(
+                        name="output_boundary",
+                        value="AuditReviewResult with linked finding event ids",
+                    ),
+                ],
+            )
         if component_id in {ComponentId.LOBSTER_TRAP, ComponentId.LITELLM}:
             return ComponentSnapshot(
                 component_id=component_id,
@@ -742,7 +765,7 @@ class DemoControlService:
             _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."),
             _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.LIVE, "P11 complete."),
             _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.LIVE, "P12 complete."),
-            _component(ComponentId.F5, "F5 auditor", SnapshotStatus.NOT_BUILT, "Available after P13.", "P13"),
+            _component(ComponentId.F5, "F5 auditor", SnapshotStatus.LIVE, "P13 complete."),
             _component(ComponentId.LOBSTER_TRAP, "Lobster Trap", SnapshotStatus.PENDING, "P0 scaffolded; API verdict adapter lands P14."),
             _component(ComponentId.LITELLM, "LiteLLM", SnapshotStatus.PENDING, "P0 scaffolded; provider health adapter lands P14/P15."),
             _component(ComponentId.SIGNING, "Signing", SnapshotStatus.LIVE, "Ed25519 envelope helpers are live."),

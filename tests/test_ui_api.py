@@ -33,6 +33,8 @@ def test_create_session_returns_typed_component_readiness() -> None:
     assert components["F2"]["available_after"] is None
     assert components["F3"]["status"] == "live"
     assert components["F4"]["status"] == "live"
+    assert components["F5"]["status"] == "live"
+    assert components["F5"]["available_after"] is None
     assert components["dp_ledger"]["status"] == "live"
 
 
@@ -128,6 +130,24 @@ def test_f4_component_snapshot_surfaces_drafting_mode() -> None:
     assert fields["drafting_mode"] == "llm_narrative"
     assert fields["structured_fields"] == "deterministic"
     assert fields["missing_input_behavior"] == "typed SARContributionRequest"
+    assert "private_key" not in response.text
+    assert "api_key" not in response.text
+
+
+def test_f5_component_snapshot_surfaces_audit_mode() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.get(f"/sessions/{session_id}/components/F5")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "live"
+    fields = {field["name"]: field["value"] for field in body["fields"]}
+    assert fields["audit_mode"] == "deterministic"
+    assert fields["execution_boundary"] == "read_only"
+    assert fields["input_boundary"] == "signed AuditReviewRequest"
+    assert "rate_limit" in fields["finding_domains"]
     assert "private_key" not in response.text
     assert "api_key" not in response.text
 
@@ -365,12 +385,12 @@ def test_live_component_interaction_returns_snapshot_and_event() -> None:
     assert any(event["title"] == "Interaction: inspect" for event in timeline.json())
 
 
-def test_not_built_component_interaction_returns_available_after() -> None:
+def test_audit_chain_interaction_returns_available_after_until_persistence_lands() -> None:
     test_client = client()
     session_id = create_session(test_client)
 
     response = test_client.post(
-        f"/sessions/{session_id}/components/F5/interactions",
+        f"/sessions/{session_id}/components/audit_chain/interactions",
         json={
             "interaction_kind": "prompt",
             "payload_text": "Review the audit trail for this case.",
@@ -383,8 +403,8 @@ def test_not_built_component_interaction_returns_available_after() -> None:
     assert body["accepted"] is False
     assert body["status"] == "not_built"
     assert body["blocked_by"] == "not_built"
-    assert body["available_after"] == "P13"
-    assert "P13" in body["reason"]
+    assert body["available_after"] == "P13/P15"
+    assert "P13/P15" in body["reason"]
 
 
 def test_prompt_interaction_is_recorded_without_privileged_mutation() -> None:
