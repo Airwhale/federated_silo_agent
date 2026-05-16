@@ -14,6 +14,12 @@ const interactionKinds: ComponentInteractionKind[] = [
   "safe_input",
 ];
 
+// Hardcoded to a known core component instead of indexing TRUST_INSTANCES
+// at module load. If the registry is ever misconfigured with an empty
+// instance, the UI should still render and report the interaction through
+// a valid component endpoint rather than crashing during import.
+const FALLBACK_COMPONENT_ID: ComponentId = "F1";
+
 export function InteractionConsole() {
   const { sessionId } = useSessionContext();
   const [instanceId, setInstanceId] = useState<TrustDomain>("federation");
@@ -30,8 +36,7 @@ export function InteractionConsole() {
   // handle the empty case defensively, so we keep the initializer aligned
   // with that contract rather than crashing if the registry ever drifts.
   const [componentId, setComponentId] = useState<ComponentId>(
-    instance.mechanisms[0]?.componentId ??
-      TRUST_INSTANCES[0].mechanisms[0].componentId,
+    instance.mechanisms[0]?.componentId ?? FALLBACK_COMPONENT_ID,
   );
   const [interactionKind, setInteractionKind] =
     useState<ComponentInteractionKind>("inspect");
@@ -78,9 +83,7 @@ export function InteractionConsole() {
               // TypeError at runtime. The registry is static today, but
               // the indirection keeps the component robust to drift.
               const firstMechanism = nextInstance.mechanisms[0];
-              if (firstMechanism) {
-                setComponentId(firstMechanism.componentId);
-              }
+              setComponentId(firstMechanism?.componentId ?? FALLBACK_COMPONENT_ID);
             }}
             className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs"
           >

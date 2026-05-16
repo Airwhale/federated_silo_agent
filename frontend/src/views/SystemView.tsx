@@ -100,7 +100,7 @@ function ReadinessRow({ component }: { component: ComponentReadinessSnapshot }) 
         <StatusPill status={component.status} />
       </td>
       <td className="py-1.5 pr-3 text-slate-400">
-        {component.available_after ?? <span className="text-slate-600">—</span>}
+        {component.available_after ?? <span className="text-slate-600">none</span>}
       </td>
       <td className="py-1.5 text-slate-400">{component.detail}</td>
     </tr>

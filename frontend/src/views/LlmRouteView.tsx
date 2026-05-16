@@ -24,15 +24,14 @@ import {
 
 type RouteDestination = Extract<ComponentId, "litellm" | "lobster_trap">;
 
-// Route graph models the actual LLM call chain:
+// Route graph models the intended model call chain:
 //
-//   LLM-driven agent ──→ Lobster Trap ──→ LiteLLM ──→ provider
+//   model-using agent -> local Lobster Trap -> local LiteLLM -> provider
 //
-// Five trust-domain nodes is a topology that fits on a slide but lies
-// about the LLM graph: F3 sanctions and F5 auditor are deterministic
-// (no LLM call), F2 graph analysis is aggregate-only (no LLM), and the
-// LT + LiteLLM proxies are single global hops shared by every LLM-
-// driven agent. The layered DAG below reflects that.
+// Five trust-domain cards fit on a slide but hide the route shape: each
+// trust domain owns its local policy/model-egress path, and only some
+// agents use that path. The graph below keeps deterministic control-plane
+// agents off the model route while still surfacing the shared contract.
 
 type LlmAgentNode = {
   id: string;
@@ -51,11 +50,8 @@ type LlmAgentNodeState = {
 const LLM_AGENTS: LlmAgentNode[] = [
   { id: "A1", label: "A1 monitor", componentId: "A1", trustDomain: "investigator", tier: "investigator" },
   { id: "A2", label: "A2 investigator", componentId: "A2", trustDomain: "investigator", tier: "investigator" },
-  { id: "F1", label: "F1 coordinator", componentId: "F1", trustDomain: "federation", tier: "federation" },
+  { id: "F2", label: "F2 graph fallback", componentId: "F2", trustDomain: "federation", tier: "federation" },
   { id: "F4", label: "F4 SAR drafter", componentId: "F4", trustDomain: "federation", tier: "federation" },
-  { id: "A3a", label: "A3 alpha", componentId: "bank_alpha.A3", trustDomain: "bank_alpha", tier: "silo" },
-  { id: "A3b", label: "A3 beta", componentId: "bank_beta.A3", trustDomain: "bank_beta", tier: "silo" },
-  { id: "A3g", label: "A3 gamma", componentId: "bank_gamma.A3", trustDomain: "bank_gamma", tier: "silo" },
 ];
 
 const TIER_LABEL: Record<TrustTier, string> = {
@@ -65,12 +61,15 @@ const TIER_LABEL: Record<TrustTier, string> = {
 };
 
 // Deterministic agents -- listed off-graph so a judge can see at a
-// glance what's deliberately not on the LLM path (and why those
-// branches don't need policy/proxy oversight today).
+// glance what's deliberately not on the default model path. They still
+// sit behind the same signed envelope, AML policy, and audit controls.
 const DETERMINISTIC_AGENTS: { id: string; label: string; componentId: ComponentId; rationale: string }[] = [
-  { id: "F2", label: "F2 graph", componentId: "F2", rationale: "Aggregate-only graph analytics over DP-noised signals." },
+  { id: "F1", label: "F1 coordinator", componentId: "F1", rationale: "Deterministic route approval, retry negotiation, and aggregation." },
   { id: "F3", label: "F3 sanctions", componentId: "F3", rationale: "Exact-hash watchlist screening; LLM would risk list leakage." },
   { id: "F5", label: "F5 auditor", componentId: "F5", rationale: "Schema-based audit-chain checks; deterministic by design." },
+  { id: "A3a", label: "A3 alpha", componentId: "bank_alpha.A3", rationale: "Default path wraps P7 primitives deterministically; optional composition is guarded." },
+  { id: "A3b", label: "A3 beta", componentId: "bank_beta.A3", rationale: "Default path wraps P7 primitives deterministically; optional composition is guarded." },
+  { id: "A3g", label: "A3 gamma", componentId: "bank_gamma.A3", rationale: "Default path wraps P7 primitives deterministically; optional composition is guarded." },
 ];
 
 const ROUTE_DESTINATIONS: { id: RouteDestination; label: string; detail: string }[] = [
@@ -99,7 +98,7 @@ const ATTACKER_PROFILES: AttackerProfile[] = [
   "wrong_role",
 ];
 
-// Layout: 7 agent origins on the left, then LT, LiteLLM, provider in a
+// Layout: model-using agent origins on the left, then LT, LiteLLM, provider in a
 // horizontal chain. Y positions stack the agents from top to bottom in
 // tier order (investigator > federation > silos) so the visual grouping
 // matches the rest of the console.
@@ -166,19 +165,16 @@ export function LlmRouteView() {
   const statusOf = (componentId: ComponentId): SnapshotStatus =>
     readinessByComponent.get(componentId)?.status ?? readinessFallback;
 
-  const agentStates = useMemo<LlmAgentNodeState[]>(
-    () =>
-      LLM_AGENTS.map((agent) => ({
-        agent,
-        status: statusOf(agent.componentId),
-        lastResult: lastResults[resultKey(agent.trustDomain, destination)],
-      })),
-    // statusOf depends on readinessByComponent + readinessFallback; the
-    // function reference itself rotates each render but its inputs are
-    // captured by the dependencies list.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [destination, lastResults, readinessByComponent, readinessFallback],
-  );
+  const agentStates = useMemo<LlmAgentNodeState[]>(() => {
+    const statusForAgent = (componentId: ComponentId): SnapshotStatus =>
+      readinessByComponent.get(componentId)?.status ?? readinessFallback;
+
+    return LLM_AGENTS.map((agent) => ({
+      agent,
+      status: statusForAgent(agent.componentId),
+      lastResult: lastResults[resultKey(agent.trustDomain, destination)],
+    }));
+  }, [destination, lastResults, readinessByComponent, readinessFallback]);
 
   const selectedDestination = ROUTE_DESTINATIONS.find((item) => item.id === destination)
     ?? ROUTE_DESTINATIONS[0];
@@ -213,7 +209,7 @@ export function LlmRouteView() {
               LLM route graph
             </h2>
             <span className="text-[11px] text-slate-500">
-              Agent &rarr; Lobster Trap &rarr; LiteLLM &rarr; provider &middot; click an agent to focus the input form
+              Agent &rarr; local Lobster Trap &rarr; local LiteLLM &rarr; provider &middot; click an agent to focus the input form
             </span>
           </div>
           <StatusPill status={providerHealth?.status ?? "pending"} />
@@ -407,7 +403,7 @@ function RouteGraph({
       <svg
         viewBox="0 30 800 410"
         role="img"
-        aria-label="LLM route graph: LLM-driven agents flow through Lobster Trap and LiteLLM to the model provider"
+        aria-label="LLM route graph: model-using agents flow through local Lobster Trap and local LiteLLM to the model provider"
         className="h-auto w-full max-w-[860px]"
         preserveAspectRatio="xMidYMid meet"
       >
@@ -490,14 +486,14 @@ function RouteGraph({
 
         <ChainNode
           x={LT_X}
-          label="Lobster Trap"
-          subtitle="Policy gate"
+          label="Local LT"
+          subtitle="Per-domain policy"
           status={ltStatus}
         />
         <ChainNode
           x={LITELLM_X}
-          label="LiteLLM"
-          subtitle="Single global proxy"
+          label="Local LiteLLM"
+          subtitle="Per-domain proxy"
           status={litellmStatus}
         />
         <ChainNode
@@ -554,7 +550,7 @@ function AgentNode({ state, y, selected, onSelect }: AgentNodeProps) {
         fill="rgb(15 23 42)"
         stroke={statusStroke(effectiveStatus, selected)}
         strokeWidth={selected ? 2.5 : 1.5}
-        className="hover:stroke-emerald-400/70"
+        className="hover:stroke-sky-400/80"
       />
       <text
         x={x}
@@ -651,10 +647,10 @@ function OffGraphRow() {
     <div className="border-t border-slate-800/70 px-3 py-2 text-xs">
       <div className="mb-1.5 flex items-baseline gap-2">
         <h3 className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-          Off-graph &middot; no LLM call
+          Off-graph &middot; default deterministic
         </h3>
         <span className="text-[10px] text-slate-600">
-          Deterministic agents are deliberately off the policy / proxy chain.
+          These agents do not call the model on their default path.
         </span>
       </div>
       <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
@@ -708,8 +704,8 @@ function Legend({ providerHealth }: LegendProps) {
         ))}
       </ul>
       <p className="mt-2 text-[10px] text-slate-500">
-        LT and LiteLLM are single global hops shared by every LLM-driven
-        agent today; per-agent route metadata lands with P14.
+        Each trust domain owns its local LT/LiteLLM route. P9a reports one
+        configuration snapshot until per-domain telemetry lands with P14/P15.
       </p>
     </div>
   );
@@ -774,4 +770,3 @@ function RouteStatePanel({
     </section>
   );
 }
-

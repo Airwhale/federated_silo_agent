@@ -32,9 +32,9 @@ const TONE_CLASS: Record<NonNullable<KeyValueRow["tone"]>, string> = {
 export function KeyValueGrid({ rows }: Props) {
   return (
     <dl className="divide-y divide-slate-800/70 rounded border border-slate-800/70 bg-slate-900/40 text-xs">
-      {rows.map((row) => (
+      {rows.map((row, index) => (
         <div
-          key={row.label}
+          key={`${row.label}-${index}`}
           className="grid gap-x-3 gap-y-0.5 px-2.5 py-1.5 sm:grid-cols-[10rem_minmax(0,1fr)]"
         >
           <dt className="text-[11px] uppercase tracking-wide text-slate-500">

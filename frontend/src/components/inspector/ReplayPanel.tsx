@@ -13,6 +13,8 @@ export function ReplayPanel({ snapshot }: Props) {
   return (
     <InspectorSection
       title="Replay cache"
+      // ReplayCacheSnapshot currently carries entries only; the parent
+      // ComponentSnapshot is the typed source for panel status.
       status={snapshot.status}
       hint={`${entries.length} ${entries.length === 1 ? "entry" : "entries"}`}
     >
