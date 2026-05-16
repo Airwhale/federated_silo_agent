@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import UTC, date, datetime
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, Literal, Self, TypeAlias
 from uuid import UUID, uuid4
 
 from pydantic import (
@@ -22,9 +22,13 @@ from pydantic import (
 from shared.enums import (
     AgentRole,
     AuditEventKind,
+    AuditReviewScope,
     BankId,
     MessageType,
     PatternClass,
+    PolicyContentChannel,
+    PolicyDecision,
+    PolicySeverity,
     PrivacyUnit,
     QueryShape,
     ResponseValueKind,
@@ -85,6 +89,8 @@ DpCompositionMode: TypeAlias = Literal["parallel_disjoint", "serial"]
 # F1-routed request nonce. Keeping this in shared prevents F1 and A3 from
 # silently drifting if the suffix changes.
 A3_RESPONSE_NONCE_SUFFIX = ":a3-response"
+
+CANDIDATE_HASH_LIMIT = 100
 
 # Defense-in-depth regex against accidental leakage of customer-identifying
 # strings into cross-bank-bound text fields. This list mirrors the planted
@@ -601,11 +607,19 @@ class SanctionsCheckResponse(Message):
 
 
 class BankAggregate(StrictModel):
-    """DP-noised per-bank aggregate sent to F2."""
+    """DP-noised per-bank aggregate sent to F2.
+
+    Candidate hashes are approved query tokens carried through for F2 output
+    binding. They are not mined from local bank rows by the P7 primitive.
+    """
 
     bank_id: BankId
     edge_count_distribution: list[NonNegativeInt]
     bucketed_flow_histogram: list[NonNegativeInt]
+    candidate_entity_hashes: list[CrossBankHashToken] = Field(
+        default_factory=list,
+        max_length=CANDIDATE_HASH_LIMIT,
+    )
     rho_debited: NonNegativeFloat = 0.0
 
     @model_validator(mode="after")
@@ -648,6 +662,143 @@ class GraphPatternResponse(Message):
         return _reject_demo_customer_names(value, "narrative")
 
 
+# Strict ordering of ``PolicyDecision`` values from weakest to strongest.
+# Used by ``PolicyEvaluationResult.validate_policy_result`` to confirm the
+# top-level ``decision`` matches the strongest individual ``rule_hit``.
+# Defined at module level (not inside the validator) so the dict is
+# constructed once at import time rather than rebuilt on every result
+# validation. Order matters: ``BLOCK`` is the strongest verdict and must
+# override any combination of weaker hits.
+_POLICY_DECISION_RANK: dict[PolicyDecision, int] = {
+    PolicyDecision.ALLOW: 0,
+    PolicyDecision.REDACT: 1,
+    PolicyDecision.ESCALATE: 2,
+    PolicyDecision.BLOCK: 3,
+}
+
+
+class PolicyRuleHit(StrictModel):
+    """One Lobster Trap or AML-adapter rule hit."""
+
+    rule_id: NonEmptyStr
+    decision: PolicyDecision
+    severity: PolicySeverity
+    detail: MediumText
+    redacted_fields: list[NonEmptyStr] = Field(default_factory=list, max_length=50)
+
+    @field_validator("detail")
+    @classmethod
+    def detail_must_not_contain_customer_names(cls, value: str) -> str:
+        return _reject_demo_customer_names(value, "detail")
+
+    @model_validator(mode="after")
+    def redact_decision_requires_redacted_fields(self) -> Self:
+        # A REDACT decision is meaningless without at least one redacted
+        # field: ``PolicyEvaluationResult`` requires
+        # ``redacted_field_count >= 1`` when its top-level decision is
+        # REDACT, *and* requires ``redacted_field_count`` to equal the
+        # sum of ``len(hit.redacted_fields)`` across all hits. If a
+        # REDACT hit had an empty ``redacted_fields`` list, those two
+        # constraints together would be unsatisfiable -- the schema
+        # would silently admit a hit that no enclosing result could
+        # accept. Enforcing the invariant here, at hit construction,
+        # makes the impossible state unreachable rather than
+        # discoverable via deferred validation errors at the result
+        # level. ALLOW, ESCALATE, and BLOCK hits may legitimately
+        # carry zero redacted fields.
+        if self.decision == PolicyDecision.REDACT and not self.redacted_fields:
+            raise ValueError(
+                "REDACT decision requires at least one redacted field"
+            )
+        return self
+
+
+class PolicyEvaluationRequest(Message):
+    """Signed request to a local F6/Lobster Trap policy instance.
+
+    F6 is the per-trust-domain policy actor. It evaluates content and metadata,
+    but it must not mutate signing, replay, route approvals, or DP ledgers.
+    """
+
+    message_type: Literal["policy_evaluation_request"] = (
+        MessageType.POLICY_EVALUATION_REQUEST.value
+    )
+    evaluated_message_type: MessageType | None = None
+    evaluated_sender_agent_id: NonEmptyStr
+    evaluated_sender_role: AgentRole
+    evaluated_sender_bank_id: BankId
+    content_channel: PolicyContentChannel
+    content_hash: Sha256Hex
+    content_summary: MediumText
+    declared_purpose: MediumText | None = None
+
+    @field_validator("content_summary", "declared_purpose")
+    @classmethod
+    def text_must_not_contain_customer_names(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _reject_demo_customer_names(value, "policy text")
+
+    @model_validator(mode="after")
+    def recipient_must_be_policy_instance(self) -> Self:
+        if not (
+            self.recipient_agent_id.endswith(".F6")
+            or self.recipient_agent_id == "lobstertrap"
+        ):
+            raise ValueError("recipient_agent_id must identify an F6/Lobster Trap instance")
+        return self
+
+
+class PolicyEvaluationResult(Message):
+    """F6 policy verdict returned to the caller that requested evaluation."""
+
+    message_type: Literal["policy_evaluation_result"] = (
+        MessageType.POLICY_EVALUATION_RESULT.value
+    )
+    in_reply_to: UUID
+    decision: PolicyDecision
+    rule_hits: list[PolicyRuleHit] = Field(default_factory=list, max_length=50)
+    safe_output_summary: MediumText | None = None
+    redacted_field_count: NonNegativeInt = 0
+
+    @field_validator("safe_output_summary")
+    @classmethod
+    def summary_must_not_contain_customer_names(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _reject_demo_customer_names(value, "safe_output_summary")
+
+    @model_validator(mode="after")
+    def validate_policy_result(self) -> Self:
+        if self.sender_role != AgentRole.F6:
+            raise ValueError("PolicyEvaluationResult must be sent by F6")
+        if self.decision != PolicyDecision.ALLOW and not self.rule_hits:
+            raise ValueError("non-allow policy decisions require at least one rule_hit")
+
+        if self.rule_hits:
+            strongest_rule_decision = max(
+                (hit.decision for hit in self.rule_hits),
+                key=lambda decision: _POLICY_DECISION_RANK[decision],
+            )
+            if self.decision != strongest_rule_decision:
+                raise ValueError(
+                    "decision must match the strongest rule_hit decision"
+                )
+
+        redacted_fields_in_hits = sum(len(hit.redacted_fields) for hit in self.rule_hits)
+        if self.redacted_field_count != redacted_fields_in_hits:
+            raise ValueError(
+                "redacted_field_count must equal the total number of redacted "
+                "fields across all rule_hits"
+            )
+
+        if self.decision == PolicyDecision.REDACT and self.redacted_field_count == 0:
+            raise ValueError("redact decisions require redacted_field_count >= 1")
+        if self.decision != PolicyDecision.REDACT and self.redacted_field_count > 0:
+            raise ValueError("redacted_field_count must be 0 for non-redact decisions")
+        return self
+
+
 class ContributorAttribution(StrictModel):
     """Per-bank attribution block in a SAR draft."""
 
@@ -669,6 +820,9 @@ class SARContribution(Message):
     contributing_bank_id: BankId
     contributing_investigator_id: NonEmptyStr
     contributed_evidence: list[EvidenceItem] = Field(min_length=1)
+    # Optional so F4 can request missing data instead of failing old/partial
+    # contributions. Values are cents, matching SARDraft.suspicious_amount_range.
+    suspicious_amount_range: tuple[NonNegativeInt, NonNegativeInt] | None = None
     local_rationale: MediumText
     related_query_ids: list[UUID] = Field(default_factory=list)
 
@@ -676,6 +830,75 @@ class SARContribution(Message):
     @classmethod
     def local_rationale_must_not_contain_customer_names(cls, value: str) -> str:
         return _reject_demo_customer_names(value, "local_rationale")
+
+    @field_validator("suspicious_amount_range")
+    @classmethod
+    def suspicious_amount_range_must_be_ordered(
+        cls, value: tuple[NonNegativeInt, NonNegativeInt] | None
+    ) -> tuple[NonNegativeInt, NonNegativeInt] | None:
+        if value is not None:
+            low, high = value
+            if low > high:
+                raise ValueError(
+                    "suspicious_amount_range lower bound must be less than or equal to upper bound"
+                )
+        return value
+
+
+class SARAssemblyRequest(Message):
+    """Orchestrator/F1 package of evidence sent to F4 for SAR drafting."""
+
+    message_type: Literal["sar_assembly_request"] = MessageType.SAR_ASSEMBLY_REQUEST.value
+    case_id: UUID = Field(default_factory=uuid4)
+    filing_bank_id: BankId
+    contributions: list[SARContribution] = Field(min_length=1, max_length=20)
+    graph_pattern: GraphPatternResponse | None = None
+    sanctions: SanctionsCheckResponse | None = None
+    policy_evaluations: list[PolicyEvaluationResult] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+    related_query_ids: list[UUID] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_sar_assembly_route(self) -> Self:
+        if self.recipient_agent_id != "federation.F4":
+            raise ValueError("SARAssemblyRequest must be addressed to federation.F4")
+        if self.filing_bank_id == BankId.FEDERATION:
+            raise ValueError("filing_bank_id must be a bank")
+        return self
+
+
+class SARContributionRequest(Message):
+    """F4 request for missing SAR evidence or mandatory fields."""
+
+    message_type: Literal["sar_contribution_request"] = (
+        MessageType.SAR_CONTRIBUTION_REQUEST.value
+    )
+    in_reply_to: UUID
+    requested_bank_id: BankId
+    missing_fields: list[NonEmptyStr] = Field(min_length=1, max_length=50)
+    request_reason: MediumText
+    related_query_ids: list[UUID] = Field(default_factory=list)
+
+    @field_validator("request_reason")
+    @classmethod
+    def request_reason_must_not_contain_customer_names(cls, value: str) -> str:
+        return _reject_demo_customer_names(value, "request_reason")
+
+    @model_validator(mode="after")
+    def validate_sar_contribution_request(self) -> Self:
+        # Check both typed role and string agent id. The signed allowlist also
+        # binds them, but this schema catches hand-built or fixture drift early.
+        if self.sender_role != AgentRole.F4:
+            raise ValueError("SARContributionRequest must be sent by F4")
+        if self.sender_agent_id != "federation.F4":
+            raise ValueError("SARContributionRequest sender_agent_id must be federation.F4")
+        if self.requested_bank_id == BankId.FEDERATION:
+            raise ValueError("requested_bank_id must be a bank")
+        if self.recipient_agent_id != "federation.F1":
+            raise ValueError("SARContributionRequest must be addressed to federation.F1")
+        return self
 
 
 class SARDraft(Message):
@@ -847,6 +1070,103 @@ class DismissalRationale(Message):
         return _reject_demo_customer_names(value, "reason")
 
 
+# Module-level constant for the one ``ComplianceFinding.kind`` value
+# validators reference today. Using a constant rather than the magic
+# string ``"rate_limit"`` inline means changing the value is a single
+# edit (and, more importantly, prepares this site for the P13 enum
+# migration: replacing ``_RATE_LIMIT_KIND`` with
+# ``ComplianceFindingKind.RATE_LIMIT`` will be a one-token swap).
+# Caught by Gemini PR-8 iter 7.
+_RATE_LIMIT_KIND = "rate_limit"
+
+
+class ComplianceFinding(StrictModel):
+    """One F5 compliance finding over signed audit artifacts."""
+
+    finding_id: UUID = Field(default_factory=uuid4)
+    # TODO(P13): tighten ``kind`` from ``NonEmptyStr`` to a
+    # ``ComplianceFindingKind`` StrEnum once F5 is implemented and the
+    # full set of finding kinds is known. Current candidates seen in
+    # the design notes: ``rate_limit`` (the only one currently used
+    # by validators below, exported as ``_RATE_LIMIT_KIND``),
+    # ``unauthorized_actor``, ``purpose_overreach``, ``route_mismatch``,
+    # ``signature_failure``, ``replay_detected``, ``redaction_required``.
+    # Defining the enum partially now would force a runtime error the
+    # first time F5 emits a kind not yet listed; defining it fully
+    # requires P13's implementer to decide which kinds the auditor
+    # actually produces. Caught by Gemini PR-8 iter 6.
+    kind: NonEmptyStr
+    severity: PolicySeverity
+    detail: MediumText
+    related_event_ids: list[UUID] = Field(default_factory=list)
+
+    @field_validator("detail")
+    @classmethod
+    def detail_must_not_contain_customer_names(cls, value: str) -> str:
+        return _reject_demo_customer_names(value, "detail")
+
+
+class AuditReviewRequest(Message):
+    """Signed request for F5 to review audit artifacts."""
+
+    message_type: Literal["audit_review_request"] = MessageType.AUDIT_REVIEW_REQUEST.value
+    review_scope: AuditReviewScope
+    audit_events: list[AuditEvent] = Field(min_length=1, max_length=500)
+    dismissals: list[DismissalRationale] = Field(default_factory=list, max_length=50)
+    related_query_ids: list[UUID] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_audit_review_route(self) -> Self:
+        if self.recipient_agent_id != "federation.F5":
+            raise ValueError("AuditReviewRequest must be addressed to federation.F5")
+        return self
+
+
+class AuditReviewResult(Message):
+    """F5 compliance review result returned to the orchestrator or F1."""
+
+    message_type: Literal["audit_review_result"] = MessageType.AUDIT_REVIEW_RESULT.value
+    in_reply_to: UUID
+    review_scope: AuditReviewScope
+    findings: list[ComplianceFinding] = Field(default_factory=list, max_length=100)
+    human_review_required: bool = False
+    rate_limit_triggered: bool = False
+
+    @model_validator(mode="after")
+    def validate_audit_review_result(self) -> Self:
+        # Check both typed role and string agent id. The signed allowlist also
+        # binds them, but this schema catches hand-built or fixture drift early.
+        if self.sender_role != AgentRole.F5:
+            raise ValueError("AuditReviewResult must be sent by F5")
+        if self.sender_agent_id != "federation.F5":
+            raise ValueError("AuditReviewResult sender_agent_id must be federation.F5")
+        if (self.human_review_required or self.rate_limit_triggered) and not self.findings:
+            raise ValueError("flagged audit reviews require at least one finding")
+        if self.rate_limit_triggered and not any(
+            finding.kind == _RATE_LIMIT_KIND for finding in self.findings
+        ):
+            raise ValueError(
+                "rate_limit_triggered requires at least one rate_limit finding"
+            )
+        severe_finding = any(
+            finding.severity in {PolicySeverity.HIGH, PolicySeverity.CRITICAL}
+            for finding in self.findings
+        )
+        if severe_finding and not self.human_review_required:
+            raise ValueError(
+                "human_review_required must be true for high or critical findings"
+            )
+        return self
+
+
+# Public message types, ordered by **investigation-lifecycle position**
+# rather than alphabetically. Reading top-to-bottom traces a canonical run:
+# Alert -> Sec314b query/response -> sanctions -> graph -> policy -> SAR
+# assembly -> audit review. Alphabetical ordering would scatter related
+# message pairs (e.g. ``GraphPatternRequest`` next to ``Sec314bQuery``
+# rather than to ``GraphPatternResponse``) and obscure the flow. The
+# discriminator-tagged ``AgentMessage`` union below mirrors the same
+# ordering for the same reason.
 PUBLIC_MESSAGE_MODELS: tuple[type[BaseModel], ...] = (
     Alert,
     Sec314bQuery,
@@ -856,10 +1176,16 @@ PUBLIC_MESSAGE_MODELS: tuple[type[BaseModel], ...] = (
     SanctionsCheckResponse,
     GraphPatternRequest,
     GraphPatternResponse,
+    PolicyEvaluationRequest,
+    PolicyEvaluationResult,
     SARContribution,
+    SARAssemblyRequest,
+    SARContributionRequest,
     SARDraft,
     AuditEvent,
     DismissalRationale,
+    AuditReviewRequest,
+    AuditReviewResult,
 )
 
 
@@ -872,9 +1198,15 @@ AgentMessage: TypeAlias = Annotated[
     | SanctionsCheckResponse
     | GraphPatternRequest
     | GraphPatternResponse
+    | PolicyEvaluationRequest
+    | PolicyEvaluationResult
     | SARContribution
+    | SARAssemblyRequest
+    | SARContributionRequest
     | SARDraft
     | AuditEvent
-    | DismissalRationale,
+    | DismissalRationale
+    | AuditReviewRequest
+    | AuditReviewResult,
     Field(discriminator="message_type"),
 ]

@@ -12,10 +12,10 @@ Built for the [TechEx Intelligent Enterprise Solutions Hackathon](https://lablab
 
 A multi-agent federated AML investigation platform:
 
-1. **8 agent roles, 14 running agent instances.** Three A1 transaction-monitoring instances, three outside-TEE A2 investigator instances, three inside-bank A3 silo responder instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor.
-2. **Lobster Trap polices inter-agent messages.** The P0 policy already blocks prompt injection, jailbreaks, obfuscation, private-data extraction, data exfiltration, dangerous commands, and sensitive path access. The AML-specific policy pack comes later in P14.
+1. **8 business agent roles, 14 business-agent instances, plus F6 policy actors.** Three A1 transaction-monitoring instances, three outside-TEE A2 investigator instances, three inside-bank A3 silo responder instances, and five federation roles: F1 coordinator, F2 graph analyst, F3 sanctions or PEP screener, F4 SAR drafter, and F5 compliance auditor. F6 is the signed per-domain Lobster Trap / AML policy actor, not a business-reasoning agent.
+2. **Lobster Trap and F6 police inter-agent messages.** The P0 policy blocks prompt injection, jailbreaks, obfuscation, private-data extraction, data exfiltration, dangerous commands, and sensitive path access. The P14 F6 policy adapter adds AML-specific route, purpose, redaction, replay, and audit-normalization checks around those channels.
 3. **Privacy enforcement is layered.** Hash-based entity linkage is the primary cross-bank correlation mechanism. A2 has no raw database or stats-primitive handle. A3 invokes deterministic stats primitives inside each bank boundary. Schema validation limits what can leave a silo. Differential privacy applies to aggregate-count and histogram-style primitives where it provides useful protection.
-4. **The demo UI is an inspection surface.** The planned judge console should show the state of signing, envelope verification, route approvals, replay protection, DP budget, LT verdicts, LiteLLM/provider health, and audit-chain integrity through read-only typed snapshots. These panels explain the trust machinery without granting extra privileges.
+4. **The demo UI is an inspection surface.** The judge console shows signing, envelope verification, route approvals, replay protection, DP budget, LT/F6 policy state, LiteLLM/provider health, and audit-chain integrity through read-only typed snapshots. These panels explain the trust machinery without granting extra privileges.
 
 The demo scenario is a planted structuring ring spanning Bank Alpha, Bank Beta, and Bank Gamma. Each entity holds accounts at two banks. Per-bank activity stays noisy and sub-threshold; the pooled cross-bank pattern reveals the ring. One entity has a synthetic PEP relation for the sanctions agent to flag.
 
@@ -68,8 +68,22 @@ User or analyst
 | P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
 | P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, LLM route cards, system view, timeline filters, and attack lab over the P9a API. |
 | P10 | Done | F3 sanctions/PEP screener over cross-bank hash tokens. It performs exact mock watchlist lookup and returns only boolean flags, never raw names, list sources, or notes. |
+| P10a | Done | Short shared-contract pass for F4 SAR assembly, F5 audit review, and per-domain F6 policy/Lobster Trap evaluation before parallel implementation. |
+| P11 | Done | F2 graph-analysis agent over DP-noised bank aggregates, with deterministic clear-positive typology rules for structuring rings and layering chains plus an LLM narrative seam. |
+| P12 | Done | F4 SAR drafter with deterministic structured SAR fields, missing-field requests, sanctions/PEP priority handling, and constrained LLM narrative generation. |
+| P13 | Done | F5 read-only compliance auditor for rate anomalies, budget pressure, missing LT/F6 governance evidence, route or purpose anomalies, and dismissal review. |
+| P14 | Done | F6 AML policy adapter with redaction, route/purpose enforcement, signed-envelope checks, LT verdict normalization, and per-domain policy-result contracts. |
+| P15 | Done | Local orchestrator and API live adapter. Current live run exercises A1, A2, F1, A3, P7, F3, the audit hash chain, and UI snapshots, then stops explicitly at the F4 handoff until the final canonical flow script is built. |
+| P18 | Done | Judge console polish with improved topology, inspector guidance, hover field help, sample inputs, LLM route graph, and all-probes-visible attack lab. |
 
 See [`plan.md`](plan.md) for the full build plan.
+
+PR #8 is the integration branch for the short-contract and parallel-agent wave.
+It contains the contract pass plus the F2, F4, F5, F6, P15, and P18 workstreams.
+The remaining gap is not missing agent implementations; it is end-to-end demo
+composition. P16/P17 should connect the already-built F2/F4/F5/F6 agents into
+the canonical run script and live smoke test so the demo can terminate at a
+`SARDraft` plus audit review instead of the current P15 `F4 pending` handoff.
 
 ## Data
 
@@ -140,8 +154,10 @@ flowchart TB
         F3["F3 sanctions or PEP screener"]
         F4["F4 SAR drafter"]
         F5["F5 compliance auditor"]
+        F6["F6 policy actor"]
         LT["Lobster Trap"]
         LLM["LiteLLM to Gemini"]
+        F6 --> LT
         LT --> LLM
         F1 --> F2
         F1 --> F3
@@ -196,7 +212,7 @@ The design assumes a possible man-in-the-middle attacker on inter-agent network 
 Planned message-security controls:
 
 - **mTLS service identity** between A2, F1, A3, Lobster Trap, LiteLLM, and supporting services.
-- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `LocalSiloContributionRequest`, `Sec314bResponse`, SAR contributions, and audit events. Hackathon scope uses Ed25519, not a production PKI.
+- **Signed message envelopes** over canonical JSON for `Sec314bQuery`, `LocalSiloContributionRequest`, `Sec314bResponse`, SAR contributions, policy evaluations, audit reviews, and audit events. Hackathon scope uses Ed25519, not a production PKI.
 - **Principal allowlist** that binds `agent_id`, role, bank id, `signing_key_id`, public key, allowed message types, allowed recipients, and allowed routes.
 - **Request/response binding** through `message_id`, `query_id`, `in_reply_to`, route approval metadata, route kind, and a hash of the exact approved query body.
 - **Replay protection** through timestamp, expiration, nonce, and an idempotency cache.
@@ -253,7 +269,7 @@ Start the P9b frontend in a second terminal:
 .\scripts\start_frontend.ps1
 ```
 
-Open `http://127.0.0.1:5173/#/console`. The console reads the P9a typed API, shows all five trust-domain stacks, and keeps not-built components visible with milestone placeholders.
+Open `http://127.0.0.1:5173/#/console`. The console reads the P9a/P15 typed API, shows all five trust-domain stacks, and lets judges inspect component state, run the current live orchestrator path, and launch controlled attack probes. On PR #8, built F2/F4/F5/F6 components are visible and inspectable, but the P15 live run still stops at the explicit F4 handoff pending P16/P17 full-demo composition.
 
 OpenRouter fallback smoke, OpenRouter key required:
 
@@ -281,6 +297,8 @@ federated_silo_agent/
       clinical-archive/            prior clinical pipeline
   docs/
     p0_proxy_chain.md              local P0 runbook
+    architecture/                  ADRs for shared contracts and orchestration
+    workstreams/                   historical launch briefs for PR #8 workstreams
     clinical-archive/              prior clinical plan
   infra/
     litellm_config.yaml            Gemini routing through LiteLLM
@@ -298,9 +316,14 @@ federated_silo_agent/
     smoke_openrouter.py            OpenRouter-backed proxy-chain smoke
     p0_cases.py                    shared P0 prompt cases
   backend/
-    agents/                        A1, A2, A3, and planned F-agent implementations
+    agents/                        A1, A2, A3, F1-F5 implementations and prompts
+    orchestrator/                  P15 local turn scheduler, agent registry, audit chain
+    policy/                        P14 AML policy adapter and redaction helpers
+    ui/                            FastAPI control API, snapshots, and state service
     silos/                         bank-local stats primitives, DP, and budget ledger
     security/                      P8a signing, allowlist, canonical JSON, and replay helpers
+  frontend/
+    src/                           Vite React judge console
   shared/
     enums.py                        shared enum values
     messages.py                     Pydantic v2 message contracts
@@ -312,8 +335,10 @@ federated_silo_agent/
     test_data_checksum.py
     test_dp_composition.py
     test_messages.py
+    test_orchestrator.py
     test_p0_cases.py
     test_stats_primitives.py
+    test_ui_api.py
   plan.md
   README.md
 ```
@@ -343,6 +368,8 @@ Known-good checks:
 ```powershell
 uv run python data/scripts/validate_banks.py
 uv run pytest
+uv run ruff check backend shared tests
+npm --prefix frontend run build
 uv run pytest tests/test_messages.py
 uv run python scripts/smoke_lobstertrap.py
 ```

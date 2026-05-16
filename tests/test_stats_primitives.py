@@ -22,6 +22,8 @@ from shared.messages import BankAggregate
 
 
 FULL_WINDOW = DateWindow(start=date(2025, 1, 1), end=date(2026, 12, 31))
+HASH_A = "a" * 16
+HASH_B = "b" * 16
 
 
 def requester(responding_bank: BankId = BankId.BANK_ALPHA) -> RequesterKey:
@@ -166,7 +168,31 @@ def test_flow_histogram_serial_composition_splits_bucket_rho() -> None:
     assert layer.ledger.spent(requester()) == 0.03
 
 
-def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_two_records() -> None:
+def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_three_records() -> None:
+    layer = primitive_layer()
+
+    result = layer.pattern_aggregate_for_f2(
+        window=FULL_WINDOW,
+        requester=requester(),
+        candidate_entity_hashes=[HASH_A, HASH_B],
+        rho=0.04,
+    )
+
+    assert isinstance(result.value, BankAggregate)
+    assert result.value.bank_id == BankId.BANK_ALPHA
+    assert len(result.value.edge_count_distribution) == 4
+    assert len(result.value.bucketed_flow_histogram) == 5
+    assert result.value.candidate_entity_hashes == [HASH_A, HASH_B]
+    assert result.value.rho_debited == 0.04
+    assert {record.field_name for record in result.records} == {
+        "edge_count_distribution",
+        "bucketed_flow_histogram",
+        "candidate_entity_hashes",
+    }
+    assert sum(record.rho_debited for record in result.records) == 0.04
+
+
+def test_pattern_aggregate_for_f2_does_not_mine_candidate_hashes() -> None:
     layer = primitive_layer()
 
     result = layer.pattern_aggregate_for_f2(
@@ -175,16 +201,19 @@ def test_pattern_aggregate_for_f2_returns_bank_aggregate_and_two_records() -> No
         rho=0.04,
     )
 
-    assert isinstance(result.value, BankAggregate)
-    assert result.value.bank_id == BankId.BANK_ALPHA
-    assert len(result.value.edge_count_distribution) == 4
-    assert len(result.value.bucketed_flow_histogram) == 5
-    assert result.value.rho_debited == 0.04
-    assert {record.field_name for record in result.records} == {
-        "edge_count_distribution",
-        "bucketed_flow_histogram",
-    }
-    assert sum(record.rho_debited for record in result.records) == 0.04
+    assert result.value.candidate_entity_hashes == []
+
+
+def test_pattern_aggregate_for_f2_rejects_oversized_candidate_hashes() -> None:
+    layer = primitive_layer()
+
+    with pytest.raises(ValueError, match="candidate_entity_hashes cannot exceed"):
+        layer.pattern_aggregate_for_f2(
+            window=FULL_WINDOW,
+            requester=requester(),
+            candidate_entity_hashes=[f"{index:016x}" for index in range(101)],
+            rho=0.04,
+        )
 
 
 def test_budget_exhaustion_returns_structural_refusal() -> None:
@@ -272,9 +301,10 @@ def test_args_hash_is_stable_under_small_float_drift() -> None:
 def test_record_property_raises_on_multi_record_result() -> None:
     """PrimitiveResult.record is a single-record convenience; multi-record raises.
 
-    `pattern_aggregate_for_f2` returns two records (one per histogram
-    component). Callers of that primitive must iterate `result.records`;
-    accessing `.record` raises ValueError citing the multi-record case.
+    `pattern_aggregate_for_f2` returns one record per histogram component plus
+    one zero-rho candidate-hash record. Callers of that primitive must iterate
+    `result.records`; accessing `.record` raises ValueError citing the
+    multi-record case.
     """
     layer = primitive_layer()
     result = layer.pattern_aggregate_for_f2(
@@ -283,7 +313,7 @@ def test_record_property_raises_on_multi_record_result() -> None:
         rho=0.04,
     )
 
-    assert len(result.records) == 2  # confirms this is a multi-record primitive
+    assert len(result.records) == 3  # confirms this is a multi-record primitive
     with pytest.raises(ValueError, match="multi-record"):
         _ = result.record
 

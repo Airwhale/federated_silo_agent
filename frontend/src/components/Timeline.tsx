@@ -89,16 +89,21 @@ export function Timeline({ sessionId, onSelect }: Props) {
   }, [filters, timeline.data]);
 
   return (
-    <section className="flex min-h-[520px] flex-col gap-3 rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <div>
-        <h2 className="text-sm font-semibold text-white">Timeline</h2>
-        <p className="mt-1 text-xs text-slate-500">
-          Input: filters narrow events. Output: rows show state changes and blocks.
-        </p>
-        <p className="mt-1 text-xs text-slate-500">{events.length} visible events</p>
+    <section className="flex min-h-[520px] flex-col rounded-lg border border-slate-800 bg-slate-950">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-slate-800/70 px-3 py-2">
+        <div className="flex items-baseline gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-200">
+            Timeline
+          </h2>
+          <span className="text-[11px] text-slate-500">
+            {events.length} visible {events.length === 1 ? "event" : "events"}
+          </span>
+        </div>
+      </header>
+      <div className="border-b border-slate-800/70 px-3 py-2">
+        <FilterBar filters={filters} onChange={setFilters} />
       </div>
-      <FilterBar filters={filters} onChange={setFilters} />
-      <div className="flex flex-1 flex-col gap-2 overflow-y-auto pr-1 scrollbar-thin">
+      <div className="flex flex-1 flex-col gap-1.5 overflow-y-auto p-3 scrollbar-thin">
         {events.map((event) => (
           <TimelineEventRow
             key={event.event_id}
@@ -107,7 +112,7 @@ export function Timeline({ sessionId, onSelect }: Props) {
           />
         ))}
         {events.length === 0 ? (
-          <div className="rounded-md border border-slate-800 p-4 text-sm text-slate-500">
+          <div className="rounded border border-slate-800/70 bg-slate-900/40 p-3 text-center text-[11px] text-slate-500">
             No timeline events match the current filters.
           </div>
         ) : null}

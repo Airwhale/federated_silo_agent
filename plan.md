@@ -290,7 +290,7 @@ Every cross-boundary message is also assumed to need the security envelope from 
 
 ### 8.3 Agent roles and instances
 
-There are **8 agent roles** and **14 running instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. A3 and F1 default to deterministic control-plane/data-plane behavior for security-critical paths; A3's optional Gemini composition is guarded by exact provenance matching. The remaining reasoning-heavy roles are Gemini-backed LLM agents wrapped in deterministic rule checks of two kinds:
+There are **8 business agent roles** and **14 business-agent instances**: three A1 monitors, three A2 investigators, three A3 silo responders, and one each of F1 through F5. There is also a signed **F6 policy actor role** for each trust-domain Lobster Trap / AML adapter instance. F6 is not a reasoning business agent; it is the per-domain policy gate that evaluates content and metadata before messages continue. A2 is the human-facing investigator outside the TEE. A3 is the bank-boundary responder inside each bank's trusted/TEE boundary. A3 and F1 default to deterministic control-plane/data-plane behavior for security-critical paths; A3's optional Gemini composition is guarded by exact provenance matching. The remaining reasoning-heavy roles are Gemini-backed LLM agents wrapped in deterministic rule checks of two kinds:
 
 - **Rule constraints** — hard checks that the LLM cannot override. If a constraint is violated, the agent refuses; the LLM doesn't get to argue.
 - **Rule bypasses** — hard checks that override the LLM. Certain conditions force a specific output regardless of what the LLM would have said. The catalog below is the source of truth for trigger and action semantics.
@@ -320,8 +320,10 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 | F3-B2 | F3 | Exact `name_hash` equality with the S1-D PEP entity | Set `pep_relation=True` | P10 | `tests/test_f3.py` |
 | F4-B1 | F4 | Any contributor evidence references an SDN sanctions match or PEP relation | Set `sar_priority="high"` | P12 | `tests/test_f4.py` |
 | F4-B2 | F4 | Input is missing data needed for a mandatory SAR field | Emit `SARContributionRequest` instead of an incomplete `SARDraft` | P12 | `tests/test_f4.py` |
-| F5-B1 | F5 | More than 10 `Sec314bQuery` events from one investigator in 60 minutes | Emit a `rate_limit` `AuditEvent` | P13 | `tests/test_f5.py` |
-| F5-B2 | F5 | `PurposeDeclaration.suspicion_rationale` lacks ML/TF keywords | Emit a `human_review` `AuditEvent` | P13 | `tests/test_f5.py` |
+| F5-B1 | F5 | More than 5 `Sec314bQuery` events from one investigator in 60 seconds, with `max_queries` and `window_seconds` configurable | Emit a `rate_limit` finding in `AuditReviewResult` | P13 | `tests/test_f5.py` |
+| F5-B2 | F5 | Purpose, route, LT-verdict coverage, or privacy-budget audit anomalies are present | Emit typed compliance findings and set `human_review_required` when severity requires it | P13 | `tests/test_f5.py` |
+| F6-B1 | F6 | Prompt injection, jailbreak, private-data extraction, sensitive-path request, or customer-name leakage detected by LT/AML policy | Return `PolicyEvaluationResult(decision="block"|"redact")` with rule hits before the protected message proceeds | P14 | `tests/test_aml_policy.py`, `tests/test_short_contracts.py` |
+| F6-B2 | F6 | Sender role, purpose, recipient, or channel metadata violates the allowed route matrix | Return `PolicyEvaluationResult(decision="block")` and emit an LT verdict audit event | P14 | `tests/test_aml_policy.py`, `tests/test_short_contracts.py` |
 
 #### Bank-local and silo-boundary agents (×3 banks)
 
@@ -370,12 +372,12 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 **Agent F1: Cross-bank coordinator agent**
 
 - **Role:** Receives `Sec314bQuery` from any bank's A2. Validates purpose declaration. Routes hash-only peer queries to A3 silo responders and same-bank local-contribution requests to the requester bank's A3 when pooled intermediaries need the requester slice. Collects responses and returns an aggregated `Sec314bResponse` to the requester; F2 handoff lands with the graph-analysis/orchestrator milestones.
-- **Reasoning:** deterministic state machine for P9. F1 verifies signed A2 ingress, uses the requester's peer `target_bank_ids` without expanding them, signs route approvals, verifies signed A3 responses, aggregates provenance, and plans at most two bounded retries for negotiable silo refusals. Later P14/P15 work can add richer LT/policy scoring and quota state around this deterministic contract.
+- **Reasoning:** deterministic state machine for P9. F1 verifies signed A2 ingress, uses the requester's peer `target_bank_ids` without expanding them, signs route approvals, verifies signed A3 responses, aggregates provenance, and plans at most two bounded retries for negotiable silo refusals. P14/P15 add AML policy checks, UI-visible policy state, and orchestrated live execution around this deterministic contract.
 - **Rule constraints (LLM cannot override):**
   - Cannot retain customer identifiers between queries (stateless by orchestrator design; adapter rejects identifier-bearing payloads)
   - Cannot forward a query without a valid `Sec314bQuery.purpose` field
   - Cannot send the same query body to peers that contains customer-name strings (AML adapter redacts at the channel)
-- **Rule bypasses:** P9 implements `F1-B1` and `F1-B3`; `F1-B2` is quota-state work for P14/P15.
+- **Rule bypasses:** P9 implements `F1-B1` and `F1-B3`; quota and audit anomaly review are covered by the F5/F6 policy and audit work.
 
 **Agent F2: Graph-analysis agent**
 
@@ -407,12 +409,24 @@ These are the canonical bypass rules. Agent and phase sections below reference t
 
 **Agent F5: Compliance auditor agent**
 
-- **Role:** Subscribes to the normalized audit stream, including LT verdicts and AML adapter events. Reasons about whether each cross-agent message exceeds §314(b) authorization or pattern-matches a "fishing expedition." Emits compliance annotations to the audit panel.
-- **Reasoning:** Gemini call. F5 reasons about whether a query series is investigating a legitimate suspicion or trolling for general information about a peer bank's customers. Flags anomalies in NL form.
+- **Role:** Reviews normalized audit artifacts, including LT verdicts and AML adapter events. Determines whether each supplied audit window contains rate-limit, budget-pressure, route, purpose, or policy-coverage findings. Emits compliance annotations to the audit panel.
+- **Reasoning:** deterministic audit checks for P13. A prompt file is present for future optional explanation or anomaly review, but live model calls do not decide hard compliance findings.
 - **Rule constraints (LLM cannot override):**
   - Read-only on the audit stream (cannot block or modify agent behavior)
   - Cannot suppress audit events from being logged
 - **Rule bypasses:** `F5-B1` and `F5-B2` in the bypass rule catalog.
+
+**Agent F6: Per-domain policy / Lobster Trap actor** (one per trust domain)
+
+- **Role:** Receives `PolicyEvaluationRequest` objects from the local node gateway before an NL prompt, LLM response, structured message, or audit event crosses a sensitive boundary. Returns a `PolicyEvaluationResult` to the caller. F6 represents the local Lobster Trap plus Python AML adapter decision as a signed actor so every domain can expose policy state consistently.
+- **Inputs:** `PolicyEvaluationRequest` addressed to the local F6/Lobster Trap instance, with evaluated sender metadata, content channel, content hash, and safe summary.
+- **Outputs:** `PolicyEvaluationResult` with `decision in {"allow","block","redact","escalate"}` plus typed `PolicyRuleHit` records.
+- **Reasoning:** Deterministic policy adapter plus Lobster Trap verdicts in P14. F6 may call Gemini only for later explainability or ambiguous policy scoring; it must not own the signing, replay, route-approval, or DP-ledger state it observes.
+- **Rule constraints (LLM cannot override):**
+  - Cannot mutate signing state, replay caches, route approvals, DP ledgers, or A3 primitive decisions.
+  - Cannot log raw customer names, private signing keys, API keys, or raw account identifiers.
+  - Non-allow decisions require at least one typed rule hit.
+- **Rule bypasses:** `F6-B1` and `F6-B2` in the bypass rule catalog.
 
 ### 8.4 Threat model
 
@@ -547,7 +561,7 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. The AML data layer, shared message schemas, base agent runtime, A1 transaction-monitoring agent, P7 stats-primitives layer, A2 investigator agent, A3 silo responder, security-envelope foundation, F1 federation coordinator, F3 sanctions/PEP screener, and P9a control API are complete. Audit hash-chain persistence remains a later P13/P14/P15 concern. The demo surface is split in two layers: P9a owns the typed control API and state contracts, and P9b owns the browser UI frame that consumes those contracts. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain state, with unfinished components shown as typed `not_built`, `pending`, or `simulated` placeholders until their live adapters land.
+The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. PR #8 now integrates the AML data layer, shared message schemas, base agent runtime, A1, P7, A2, A3, the security envelope, F1, F2, F3, F4, F5, F6, the P9a/P9b control surface, the P15 local orchestrator adapter, and P18 judge-console polish. P15 currently runs the live A1 -> A2 -> F1 -> A3/P7 -> F3 -> F1 -> A2 path and stops at the explicit F4 handoff; P16/P17 are the next work needed to compose the built F2/F4/F5/F6 agents into a final end-to-end demo that terminates at a SARDraft plus audit review. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, policy state, and audit-chain state.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
@@ -561,16 +575,17 @@ The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lo
 - **P8a** A3 silo responder agent ✓
 - **P9** F1 cross-bank coordinator ✓
 - **P9a** Control API + typed state contracts ✓
-- **P9b** Browser UI frame + placeholder panels ✓
+- **P9b** Browser UI frame + typed placeholder panels ✓
 - **P10** F3 sanctions / PEP screening agent ✓
-- **P11** F2 graph-analysis agent ·
-- **P12** F4 SAR drafter agent ·
-- **P13** F5 compliance auditor agent ·
-- **P14** AML policy adapter + Lobster Trap overlay ·
-- **P15** Agent orchestrator / message bus + API live adapters ·
+- **P10a** Short contract pass for F4/F5/F6 ✓
+- **P11** F2 graph-analysis agent ✓
+- **P12** F4 SAR drafter agent ✓
+- **P13** F5 compliance auditor agent ✓
+- **P14** AML policy adapter + Lobster Trap overlay ✓
+- **P15** Agent orchestrator / message bus + API live adapters ✓
 - **P16** Canonical demo flow script ·
 - **P17** End-to-end smoke test ·
-- **P18** Interactive judge console ·
+- **P18** Interactive judge console ✓
 - **P19** README + mermaid diagrams for AML ·
 - **P20** Pitch deck ·
 - **P21** Demo dry-run × 3 + screencast ·
@@ -635,9 +650,9 @@ The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lo
 
 ---
 
-### Next parts (P4–P13)
+### Built parts (P4-P15, P18)
 
-The agent build follows the canonical demo's call order: alert origination (A1) → investigator (A2) → coordinator (F1) → silo response (A3) → sanctions (F3) → graph analyst (F2) → SAR drafter (F4) → compliance auditor (F5). F3 ships before F2 because it's the simpler federation-layer agent and shakes out the agent base class first; F5 ships last because it depends on the live audit stream. P7 (stats-primitives layer) ships before A3 because A3's cross-bank response path calls into it. A2 no longer has a P7 handle.
+The agent build follows the canonical demo's call order: alert origination (A1) -> investigator (A2) -> coordinator (F1) -> silo response (A3) -> sanctions (F3) -> graph analyst (F2) -> SAR drafter (F4) -> compliance auditor (F5). F3 shipped before F2 because it was the simpler federation-layer agent and shook out the agent base class first; F5 shipped last because it depends on audit artifacts. P7 (stats-primitives layer) shipped before A3 because A3's cross-bank response path calls into it. A2 no longer has a P7 handle.
 
 **P4 — Shared message schemas** ✓
 
@@ -665,9 +680,9 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - **`PrincipalAllowlistEntry`** (runtime trust registry): `agent_id`, `role`, `bank_id`, `signing_key_id`, `public_key`, `allowed_message_types`, `allowed_recipients`, and `allowed_routes`. Used by F1/A3/policy adapter to bind cryptographic identity to permitted behavior.
   - **`SanctionsCheckRequest`** (A2 or F1 → F3): `entity_hashes: list[str]`, `requesting_context: str`.
   - **`SanctionsCheckResponse`** (F3 → caller): `results: dict[hash → {sdn_match: bool, pep_relation: bool}]`. **No list contents disclosed.**
-  - **`GraphPatternRequest`** (F1 → F2): `pattern_aggregates: list[BankAggregate]` (per-bank DP-noised tuples: `bank_id`, `edge_count_distribution`, `bucketed_flow_histogram`), `window_start`, `window_end`.
+  - **`GraphPatternRequest`** (F1 → F2): `pattern_aggregates: list[BankAggregate]` (per-bank DP-noised tuples: `bank_id`, `edge_count_distribution`, `bucketed_flow_histogram`, plus approved `candidate_entity_hashes` carried from the originating query for output binding), `window_start`, `window_end`.
   - **`GraphPatternResponse`** (F2 → caller): `pattern_class ∈ {"structuring_ring","layering_chain","none"}`, `confidence ∈ [0,1]`, `suspect_entity_hashes: list[str]`, `narrative: str (≤500 chars)`.
-  - **`SARContribution`** (A2 → F4): `contributing_bank_id`, `contributing_investigator_id`, `contributed_evidence: list[EvidenceItem]` (hashed identifiers only), `local_rationale`, `related_query_ids: list[UUID]`.
+  - **`SARContribution`** (A2 → F4): `contributing_bank_id`, `contributing_investigator_id`, `contributed_evidence: list[EvidenceItem]` (hashed identifiers only), optional `suspicious_amount_range: tuple[int,int]` in cents, `local_rationale`, `related_query_ids: list[UUID]`.
   - **`SARDraft`** (F4 → orchestrator): `sar_id`, `filing_institution`, `suspicious_amount_range: tuple[int,int]` (cents), `typology_code: TypologyCode`, `narrative` (LLM-authored, regulator-quality), `contributors: list[ContributorAttribution]`, `sar_priority ∈ {"standard","high"}`, `mandatory_fields_complete: bool`, `related_query_ids: list[UUID]`.
   - **`AuditEvent`** (any → audit channel): signed wire-level audit record with `event_id`, `kind ∈ {"message_sent","lt_verdict","constraint_violation","bypass_triggered","rho_debited","budget_exhausted","human_review","rate_limit"}`, `actor_agent_id`, and `payload: AuditPayload` typed by `kind`. This is separate from local `RuntimeAuditEvent` records emitted by the P5 agent base; P15 maps runtime events into wire-level audit envelopes. P13/P15 audit persistence adds the hash-chain fields around these records.
   - **`DismissalRationale`** (A2 → F5): `alert_id`, `reason`, `evidence_considered`.
@@ -795,7 +810,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - `alert_count_for_entity(name_hash: str, window: tuple[date,date], signal_type: SignalType, requester: RequesterKey, rho: float = 0.02) -> (int, rec)` — **DP applied.** Hackathon privacy unit is a clipped transaction contribution, not a full customer-level guarantee. Sensitivity is 1 after enforcing the contribution cap for the queried entity/window. Gaussian mechanism uses σ = sensitivity / sqrt(2ρ). Provenance displays the equivalent ε for fixed δ = 1e-6.
   - `flow_histogram(name_hashes: list[str], window, buckets: list[tuple[float,float]], requester, rho: float = 0.03, composition: "parallel_disjoint" | "serial" = "parallel_disjoint") -> (list[int], rec)`: **DP applied per bucket.** Each transaction lands in exactly one bucket after clipping. The demo default is fixed-bucket `parallel_disjoint` accounting: full declared rho is used per bucket, the ledger pays rho total, and provenance records `dp_composition="parallel_disjoint"` plus `per_bucket_rho=rho`. The conservative `serial` mode splits rho across buckets, records `dp_composition="serial"`, and produces noisier histograms for stricter review.
   - `counterparty_edge_existence(counterparty_hashes: list[str], window, requester, rho: float = 0.0) -> (dict[hash → bool], rec)` — Binary edge existence per hash. **No DP applied.** Hash lookup over `transactions.counterparty_account_id_hashed`.
-  - `pattern_aggregate_for_f2(window, requester, rho: float = 0.04) -> (BankAggregate, rec)` — **DP applied.** Returns a `BankAggregate` of `edge_count_distribution` (histogram of edge counts on hashed counterparties) and `bucketed_flow_histogram`. ρ is split between edge and flow components because they share underlying transactions; within each component, parallel composition uses the full component ρ per bucket. Edge-count sensitivity is L2 `sqrt(2)`, and flow sensitivity is 1.0. This is the input to F2.
+  - `pattern_aggregate_for_f2(window, requester, candidate_entity_hashes, rho: float = 0.04) -> (BankAggregate, rec)` — **DP applied.** Returns a `BankAggregate` of `edge_count_distribution` (histogram of edge counts on hashed counterparties), `bucketed_flow_histogram`, and the approved `candidate_entity_hashes` supplied by A3/F1. The primitive must not mine unrelated local customer hashes for this field. ρ is split between edge and flow components because they share underlying transactions; within each component, parallel composition uses the full component ρ per bucket. Edge-count sensitivity is L2 `sqrt(2)`, and flow sensitivity is 1.0. This is the input to F2.
 - *`RequesterKey`:* `{requesting_investigator_id, requesting_bank_id, responding_bank_id}`. The budget ledger keys debits by this triple so a single investigator can't drain budget across multiple peer banks' allowances independently.
 - *Budget ledger:*
   - Internal budget unit is ρ, not ε. The default session cap is `rho_max` per `(requesting_investigator, this_bank, peer_bank_destination)` triple. The UI converts cumulative ρ to an approximate `(ε, δ)` display value using fixed δ = 1e-6.
@@ -906,18 +921,18 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Files:* `backend/agents/f1_coordinator.py`, `backend/agents/f1_states.py`, `tests/test_f1.py`. Reuses the P8a security-envelope helpers and `tests/test_security_envelope.py`.
 - *Protocol notes:* P9 uses shared `A3_RESPONSE_NONCE_SUFFIX` for F1/A3 response-nonce binding, signed `RouteApproval.retry_count` for bounded retry state, and `Sec314bResponse.partial_refusals` so partial aggregates tell A2 which silos did not contribute. Mixed all-refused aggregates use `refusal_reason="mixed_refusals"` rather than presenting one bank's refusal reason as universal.
 - *Inputs:* `Sec314bQuery` from any bank's A2, accepted only when the signed envelope verifies against an allowlisted A2 principal whose `agent_id`, `role`, and `bank_id` match the declared message sender fields.
-- *Outputs:* one redacted `Sec314bQuery` per target peer A3 (sent via orchestrator); optionally one `LocalSiloContributionRequest` to the requester bank's own A3 when pooled statistical intermediaries need the requesting bank's local contribution; one aggregated `Sec314bResponse` back to the original requester after responses come in; a `SanctionsCheckRequest` to F3 in parallel when the query purpose is sanctions-related. F2 `GraphPatternRequest` construction lands with P11/P15 once F2 and the orchestrator are available.
+- *Outputs:* one redacted `Sec314bQuery` per target peer A3 (sent via orchestrator); optionally one `LocalSiloContributionRequest` to the requester bank's own A3 when pooled statistical intermediaries need the requesting bank's local contribution; one aggregated `Sec314bResponse` back to the original requester after responses come in; a `SanctionsCheckRequest` to F3 in parallel when the query purpose is sanctions-related. F2 `GraphPatternRequest` construction is supported by the P11 contracts and is part of the P16/P17 final-flow composition work.
 - *Approach:*
   1. **Inbound authentication** - deterministic code verifies canonical body hash, Ed25519 signature, `signing_key_id`, expiry, nonce freshness, created-at clock skew, and principal allowlist before any LLM call.
   2. **Identity binding** - deterministic code checks `verified_principal.role == A2`, `verified_principal.bank_id == query.sender_bank_id == query.requesting_bank_id`, and `verified_principal.agent_id == query.sender_agent_id`. `requesting_investigator_id` remains an investigator identifier, not a signing principal.
-  3. **Purpose-declaration validation** - deterministic P9 rejects blank purpose rationale before route planning. Later P14 policy/LT work can add richer purpose scoring without changing the signed route contract.
+  3. **Purpose-declaration validation** - deterministic P9 rejects blank purpose rationale before route planning. P14 policy/LT work adds richer purpose and route scoring without changing the signed route contract.
   4. **Target-bank selection** - deterministic P9 uses the requester-stated peer `target_bank_ids` and never expands them. Later scoring may narrow the set, but not broaden it.
   5. **Local contribution decision** - deterministic code adds the requester bank's own A3 only through `LocalSiloContributionRequest` when the downstream task needs pooled local-plus-peer intermediaries. It is not added to peer `target_bank_ids`.
   6. **Route approval** - deterministic code signs a `RouteApproval` per responding bank, binding the responder, the original `query_id`, route kind (`peer_314b` or `local_contribution`), and the approved query body hash.
-  7. **Hash-only forwarding** - P9 does not run an LLM rewrite step. Customer names should already be absent through A2 schema constraints and later LT/P14 redaction. F1 preserves the non-customer `requesting_investigator_id` because A3 uses it as part of the DP requester key.
+  7. **Hash-only forwarding** - P9 does not run an LLM rewrite step. Customer names should already be absent through A2 schema constraints and P14 redaction. F1 preserves the non-customer `requesting_investigator_id` because A3 uses it as part of the DP requester key.
   8. **Aggregation** - when A3 responses arrive, F1 verifies response signatures and composes a single `Sec314bResponse` to the requester. Provenance from peer and local contributions is preserved verbatim; aggregate `rho_debited_total` is the sum across included responses. F1 revalidates signatures and bindings on already-routed artifacts during aggregation, but does not reapply ingress replay or clock-skew checks to the original query or routed request. A3 responses themselves still go through freshness and replay checks, and F1 rejects responses created after the signed route approval expiry.
   9. **Bounded refusal mediation** - F1 classifies A3 refusals as terminal security, terminal capability, or negotiable request-shape failures. Negotiable failures get at most two revised signed requests with fresh route approvals; each retry note records rho or metric changes, no no-op retry is emitted, and the final silo error is returned to A2 if the limit is reached. A metric fallback such as `alert_count -> flow_histogram` is displayed as a negotiated fallback, not as the original ask. F1 never overrides the silo or opens a free-form LLM negotiation.
-- *Rule bypasses:* P9 implements F1-B1 and F1-B3 from the Section 8.3 bypass rule catalog. F1-B2 needs quota state and lands with the P14/P15 policy/orchestrator work.
+- *Rule bypasses:* P9 implements F1-B1 and F1-B3 from the Section 8.3 bypass rule catalog. F1-B2-style quota review is handled by the P13/P14 audit and policy layers.
 - *Rule constraints:*
   - Cannot retain customer identifiers between queries (F1 is stateless across queries — enforced by clearing state per call).
   - Cannot forward a query without a valid `PurposeDeclaration`.
@@ -955,13 +970,13 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - `POST /sessions/{id}/run-until-idle` runs all currently available live adapters.
   - `GET /sessions/{id}` returns the run summary, phase, active scenario, and component readiness.
   - `GET /sessions/{id}/timeline` returns message, policy, DP, and audit events in display order.
-  - `GET /sessions/{id}/events` streams the timeline using SSE once the audit channel exists; before P15 it may return a fixture-backed or polling-compatible event list.
+  - `GET /sessions/{id}/events` returns the current timeline; SSE remains a later transport optimization over the P15 audit channel.
   - `GET /sessions/{id}/components/{component_id}` returns a typed inspector snapshot for A1, A2, A3, F1-F5, P7, LT, LiteLLM, replay, route approval, signing, DP ledger, and audit chain.
   - `POST /sessions/{id}/probes/{probe_id}` injects a negative probe through the normal signed-envelope/policy path when the target path is built; otherwise it records a `not_built` probe result.
   - `GET /health` returns a minimal `{"status":"ok"}` payload for process health checks.
   - `GET /system` returns provider health, database availability, configured model route, and component readiness with secrets redacted.
-- *Snapshot contract:* every panel is backed by a Pydantic v2 model with `status in {"live","not_built","pending","simulated","error"}`. Placeholder states must name the missing milestone and the expected live adapter, for example `{"status":"not_built","component":"F2","available_after":"P11"}`. The API never asks the frontend to infer trust decisions from logs.
-- *Initial live wiring:* after P9, the API should support the completed spine A1/A2/F1/A3/P7 where available, including signed-envelope verification state, route approvals, replay-cache snapshots, primitive provenance, DP budget snapshots, and partial-refusal notes. F2/F3/F4/F5, LT overlay, audit-chain persistence, and full canonical orchestration appear as placeholders until P10-P15.
+- *Snapshot contract:* every panel is backed by a Pydantic v2 model with `status in {"live","not_built","pending","simulated","error"}`. Placeholder states must name the missing milestone and the expected live adapter. The API never asks the frontend to infer trust decisions from logs.
+- *Current live wiring:* after PR #8, the API supports the completed live spine A1/A2/F1/A3/P7/F3/F1/A2, including signed-envelope verification state, route approvals, replay-cache snapshots, primitive provenance, DP budget snapshots, partial-refusal notes, and an in-memory audit hash chain. F2/F4/F5/F6 are built and inspectable, but final terminal scheduling remains P16/P17.
 - *Local dev mode:* `uv run uvicorn backend.ui.server:app --reload --port 8000` starts the API. The API serves JSON only in P9a; serving the built frontend can be added later for single-container Cloud Run.
 - *Current implementation:* FastAPI app and router live in `backend/ui/server.py` and `backend/ui/api.py`; Pydantic snapshot contracts live in `backend/ui/snapshots.py`; the in-memory session/probe harness lives in `backend/ui/state.py`. Implemented probes exercise real signing/body-hash failure, missing signature failure, wrong-role allowlist failure, replay-cache rejection, A3 route-approval body-hash mismatch, and DP-budget exhaustion. Prompt-injection and unsupported-query-shape probes return explicit typed placeholders until the P14 policy/Lobster Trap adapter and later A3 probe adapters are wired.
 - *Out of scope for this part:* no React implementation, no polished styling, no full canonical flow, no production auth, no complete attack library, no F2/F3/F4/F5 implementation. Placeholder states are allowed; fake successful business outcomes are not.
@@ -1030,11 +1045,25 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P5.
 - *Scope check:* complete.
 
-**P11 — F2 graph-analysis agent**
+**P10a - Short contract pass for F4/F5/F6**
+
+- *Goal:* Freeze the next shared wire contracts before parallel agent work starts. This pass is intentionally not a business-logic implementation; it prevents F4, F5, and F6 workers from inventing incompatible request/response shapes.
+- *Files:* `shared/enums.py`, `shared/messages.py`, `shared/__init__.py`, `tests/test_short_contracts.py`, `docs/architecture/0001-short-contract-pass.md`, README and plan updates.
+- *Contracts added:*
+  - `PolicyEvaluationRequest`, `PolicyEvaluationResult`, and `PolicyRuleHit` for per-domain F6/Lobster Trap plus AML policy decisions. F6 is a signed actor with `AgentRole.F6`, but it is not allowed to mutate signing, replay, route approval, DP ledger, or A3 primitive decisions.
+  - `SARAssemblyRequest` and `SARContributionRequest` for F4. F4 receives one assembled package of SAR inputs and requests missing mandatory fields instead of emitting incomplete drafts.
+  - `AuditReviewRequest`, `AuditReviewResult`, and `ComplianceFinding` for F5. F5 reviews signed audit artifacts and returns read-only compliance findings.
+- *Trust-boundary defaults:* F4, F5, and F6 use signed envelopes for cross-node traffic from day one. F6 is per trust domain, not a central singleton. F5 consumes audit artifacts and emits findings; it does not block or rewrite runtime behavior. F4 may author narrative text, but structured fields and attribution remain typed.
+- *Out of scope for this part:* no F2/F4/F5/F6 agent implementation, no live LT adapter, no orchestrator wiring, no UI redesign. Those parts should consume these contracts rather than modify them unless a real mismatch is discovered.
+- *Acceptance:* `tests/test_short_contracts.py` validates round trips, discriminated-union parsing, F6 non-allow rule-hit requirements, F4 recipient constraints, and F5 finding requirements.
+- *Depends on:* P4, P10.
+- *Scope check:* one short session. Parallel work can start after this lands.
+
+**P11 — F2 graph-analysis agent** ✓
 
 - *Goal:* Full LLM agent that consumes DP-noised cross-bank pattern aggregates from F1 and identifies ring structures. This is the agent that detects the planted S1 ring in the demo's hero moment.
 - *Files:* `backend/agents/f2_graph_analysis.py`, `backend/agents/prompts/f2_system.md`, `backend/agents/f2_typologies.py` (typology pattern definitions — used by both the LLM prompt and the bypass rules), `tests/test_f2.py`.
-- *Inputs:* `GraphPatternRequest { pattern_aggregates: list[BankAggregate], window_start, window_end }`. Each `BankAggregate` arrives already DP-noised (computed by the originating bank's P7 `pattern_aggregate_for_f2` primitive); F2 never sees raw transactions.
+- *Inputs:* `GraphPatternRequest { pattern_aggregates: list[BankAggregate], window_start, window_end }`. Each `BankAggregate` arrives already DP-noised (computed by the originating bank's P7 `pattern_aggregate_for_f2` primitive); F2 never sees raw transactions. `candidate_entity_hashes` are the approved query tokens carried through for F2 output binding, not top-active local customers mined by P7.
 - *Outputs:* `GraphPatternResponse { pattern_class, confidence, suspect_entity_hashes, narrative }`.
 - *Approach (Gemini call):*
   1. The LLM reasons over the three per-bank aggregates as JSON. Each aggregate has an `edge_count_distribution` (how many edges have how many transactions, keyed by hashed counterparty pair) and a `bucketed_flow_histogram`.
@@ -1055,15 +1084,15 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P5, P9.
 - *Scope check:* one to two focused sessions — the typology matchers and the prompt engineering are the bulk of the work.
 
-**P12 — F4 SAR drafter agent**
+**P12 — F4 SAR drafter agent** ✓
 
 - *Goal:* Full LLM agent that synthesizes `SARContribution` messages from A2s + F2's pattern report + F3's sanctions findings into a structured Suspicious Activity Report draft. Per-bank contribution attribution and §314(b) authority references are mandatory.
 - *Files:* `backend/agents/f4_sar_drafter.py`, `backend/agents/prompts/f4_system.md`, `shared/sar_template.py` (the mandatory-fields skeleton + FinCEN typology code enum), `tests/test_f4.py`.
-- *Inputs:* one or more `SARContribution` records (from one or more A2s), an optional `GraphPatternResponse` from F2, an optional `SanctionsCheckResponse` from F3.
+- *Inputs:* one or more `SARContribution` records (from one or more A2s, with optional `suspicious_amount_range` values in cents), an optional `GraphPatternResponse` from F2, an optional `SanctionsCheckResponse` from F3.
 - *Outputs:* `SARDraft` with the schema from P4. The narrative is LLM-authored; the structured fields are deterministically computed from the contributions.
 - *Mandatory structured fields (deterministic, not LLM-generated):*
   - `filing_institution` — the bank whose A2 first emitted the SARContribution
-  - `suspicious_amount_range` — (min, max) in cents, computed from the contributing-evidence amounts
+  - `suspicious_amount_range` — (min, max) in cents, computed deterministically from contribution ranges; use the lowest provided low and highest provided high, and emit `SARContributionRequest` if no contribution provides a range
   - `typology_code` — derived from F2's `pattern_class` (`structuring_ring` → FinCEN typology "structuring"; `layering_chain` → "layering")
   - `contributors` — one entry per contributing bank with the bank_id, investigator_id (kept internal to the SAR, not exposed cross-bank), and a short summary of evidence contributed
   - `related_query_ids` — the §314(b) queries that produced the cross-bank evidence
@@ -1076,43 +1105,45 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Out of scope for this part:* no actual FinCEN submission API (we draft, not file); no per-state SAR variations; no SAR amendment workflow.
 - *Acceptance:* `tests/test_f4.py`:
   - Given S1-flow contributions (3 contributing banks, $795K total flow) + F2 ring report + F3 PEP flag, F4 emits a `SARDraft` with all mandatory fields populated; `typology_code="structuring"`; `sar_priority="high"` (because of PEP); `contributors` has 3 entries; narrative references §314(b) and references each bank by bank_id.
-  - Given a contribution missing the amount field, F4 emits a `SARContributionRequest` to the contributor rather than producing an incomplete SAR.
+  - Given contributions with no `suspicious_amount_range`, F4 emits a `SARContributionRequest` to the contributor rather than producing an incomplete SAR.
   - Narrative passes a customer-name-redaction check.
 - *Risks specific to this part:* (a) the LLM may invent details for the narrative - mitigation: prompt constrains the LLM to only reference facts present in the inputs; constraint check rejects narratives that introduce values not in the structured fields. (b) The narrative is long enough that Gemini latency may be visible in the demo - mitigation: stream the response into the judge console; pre-generate during dry-runs as a fallback.
 - *Depends on:* P5, P8, P10, P11.
 - *Scope check:* one to two focused sessions. The narrative prompt engineering is the bulk.
 
-**P13 — F5 compliance auditor agent**
+**P13 — F5 compliance auditor agent** ✓
 
-- *Goal:* Full LLM agent that subscribes to the live audit stream and reasons about whether agent behavior pattern-matches a fishing expedition, a §314(b) purpose mismatch, or a sustained-abuse pattern. Emits compliance annotations and `HUMAN_REVIEW` escalations.
+- *Goal:* Read-only deterministic auditor that reviews signed audit artifacts and emits typed compliance findings for rate limits, budget pressure, missing Lobster Trap verdicts, route anomalies, and purpose anomalies. A future optional LLM path may explain ambiguous patterns, but hard compliance findings come from deterministic Python checks.
 - *Files:* `backend/agents/f5_compliance_auditor.py`, `backend/agents/prompts/f5_system.md`, `tests/test_f5.py`.
-- *Inputs:* a streaming sequence of `AuditEvent` records from any object implementing an `AuditSource` protocol (`subscribe() -> AsyncIterator[AuditEvent]`). Unit tests use an in-memory source; P15 later wires F5 to the orchestrator's real audit channel.
-- *Outputs:* `AuditEvent` records of kind `human_review` or `rate_limit`, plus a periodic `AuditSummary` digest (every N events or every 30 seconds, whichever first).
-- *Approach (Gemini call):*
-  - F5 batches incoming events into windows (e.g., the last 60 seconds of activity). For each window, it sends the structured event list to Gemini with a prompt asking "does anything here exceed §314(b) authorization or pattern-match a fishing expedition?"
-  - The structured output is `F5BatchResult { findings: list[F5Finding] }` where each finding has a kind, a referenced event_id, and a rationale.
-  - F5 emits each finding as an `AuditEvent`.
+- *Inputs:* `AuditReviewRequest` with a bounded list of normalized `AuditEvent` records, optional `DismissalRationale` records, and related query IDs. P16/P17 should wire this request into the terminal canonical flow after the P15 handoff point.
+- *Outputs:* `AuditReviewResult` with `ComplianceFinding` records, `human_review_required`, and `rate_limit_triggered`.
+- *Approach (deterministic checks):*
+  - F5 scans `Sec314bQuery` message events by source actor. Defaults are `max_queries=5` and `window_seconds=60`; the sixth query inside the window emits a `rate_limit` finding. Both values are configuration, not magic constants.
+  - F5 flags budget exhaustion or low remaining DP budget, governed messages missing a matching Lobster Trap allow verdict, non-allow LT verdicts, and route or purpose constraint violations.
+  - F5 returns typed findings without mutating, suppressing, or blocking the audited runtime behavior.
 - *Rule bypasses:* implement `F5-B1` and `F5-B2` from the Section 8.3 bypass rule catalog.
 - *Rule constraints:*
   - Read-only on the audit stream (cannot block or modify agent behavior).
   - Cannot suppress audit events from being logged.
   - Cannot retain customer identifiers (they wouldn't be in the audit stream anyway — but the constraint is enforced for defense in depth).
-- *Approach to "fishing expedition" detection:* the LLM looks for patterns like: many `Sec314bQuery` events from one investigator without any resulting `SARContribution`; a single investigator querying about many unrelated `name_hash` values in succession; queries with vague or boilerplate `suspicion_rationale` strings.
-- *Out of scope for this part:* no automatic remediation — F5 only annotates; humans (or future tooling) act on the annotations. No persistent audit-history store beyond what the orchestrator keeps.
+- *Approach to "fishing expedition" detection:* P13 covers deterministic precursors such as rate-limit breaches, route or purpose violations, missing LT governance evidence, and budget pressure. LLM-assisted explanation or ambiguous anomaly review is deferred and must remain optional.
+- *Out of scope for this part:* no automatic remediation - F5 only annotates; humans (or future tooling) act on the annotations. No persistent audit-history store beyond what the orchestrator keeps.
 - *Acceptance:* `tests/test_f5.py`:
-  - **Test 1 (rate limit):** synthesize a stream of 11 `Sec314bQuery` events from one investigator within 60 minutes; F5 emits a `rate_limit` AuditEvent referencing the 11th query.
-  - **Test 2 (purpose mismatch):** synthesize a `Sec314bQuery` with `suspicion_rationale = "we're curious about this customer"`; F5 emits a `human_review` annotation regardless of LLM judgment.
-  - **Test 3 (LLM-judgment fishing pattern):** synthesize 5 queries from one investigator referencing 5 unrelated `name_hash` values without any follow-up SAR contributions; F5 emits a `human_review` with the LLM-authored rationale.
-  - **Test 4 (no false alarms):** synthesize a normal canonical-flow audit stream; F5 emits no `human_review` annotations.
-- *Risks specific to this part:* (a) the LLM may over-flag (every query looks like a fishing expedition to a cautious model) — mitigation: prompt explicitly says "normal investigative behavior is not a fishing expedition; only flag specific anomalies." Test 4 catches over-flagging. (b) F5's batching window introduces latency in the demo; mitigation: tune window to 5–10 seconds for demo runs; document the tradeoff.
-- *Depends on:* P4, P5. P15 later wires the already-built F5 listener into the live orchestrator audit channel.
+  - **Test 1 (rate limit):** synthesize a stream of 6 `Sec314bQuery` events from one investigator within 60 seconds; F5 returns a `rate_limit` finding referencing the violating window.
+  - **Test 2 (configurable threshold):** lower `max_queries` and `window_seconds` in test config and verify the threshold moves without code changes.
+  - **Test 3 (budget pressure):** synthesize budget exhaustion or low remaining DP budget events; F5 returns a `budget_pressure` finding.
+  - **Test 4 (LT coverage):** synthesize a governed message with no matching LT allow verdict; F5 returns a `missing_lt_verdict` finding.
+  - **Test 5 (route or purpose anomaly):** synthesize route and purpose constraint-violation events; F5 returns typed human-review findings.
+  - **Test 6 (no false alarms):** synthesize a normal canonical-flow audit window; F5 emits no findings.
+- *Risks specific to this part:* (a) deterministic anomaly checks can over-flag if the governed-message list is broader than the audit normalizer can currently populate - mitigation: keep governed message types configurable and test canonical clean windows. (b) future LLM review could drift into deciding hard findings - mitigation: prompt and tests state that hard findings are deterministic.
+- *Depends on:* P4, P5. P16/P17 wire the already-built F5 listener into the terminal live demo flow.
 - *Scope check:* one to two focused sessions.
 
 ---
 
 ### Integration parts (P14–P18)
 
-**P14 — AML policy adapter + Lobster Trap overlay**
+**P14 — AML policy adapter + Lobster Trap overlay** ✓
 
 - *Goal:* Add AML-specific governance without assuming unsupported LT behavior. Current LT gives us generic prompt inspection, block/allow/HUMAN_REVIEW decisions, `_lobstertrap` response metadata, and JSONL audit logs. The AML-specific behavior lives in our Python policy adapter unless and until LT grows first-class support for that rule type.
 - *Files:* `backend/policy/__init__.py`, `backend/policy/aml.py` (message-level policy adapter), `backend/policy/redaction.py` (demo-grade synthetic-name redactor), `backend/policy/dictionaries/aml_terms.json` (typology codes, ML/TF keywords, synthetic customer-name surface patterns), `infra/lobstertrap/aml_overlay_policy.yaml` (optional LT overlay limited to supported LT fields/actions), `scripts/aml_policy_smoke.py`, `tests/test_aml_policy.py`.
@@ -1145,7 +1176,9 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P4 (message schemas).
 - *Scope check:* one focused session.
 
-**P15 - Agent orchestrator / message bus + API live adapters**
+**P15 - Agent orchestrator / message bus + API live adapters** ✓
+
+- *Current PR #8 implementation:* local single-process orchestrator package in `backend/orchestrator/` plus P9a API live adapters in `backend/ui/state.py`. The current turn scheduler drives A1, A2, F1, A3, P7 stub or live primitives, F3 when routed, F1 aggregation, and A2 synthesis. It intentionally stops at `F4 pending after A2 SAR contribution.` F2, F4, F5, and F6 are built, tested, and visible in the UI/API, but the final canonical script and live terminal chain that invokes F2 -> F4 -> F5 with F6 policy checks remains P16/P17 work. The in-memory audit hash chain is live for session observability; durable audit storage remains out of scope for this branch.
 
 - *Goal:* Runtime that can run in two modes: local deterministic mode for tests and cloud-demo mode with explicit nodes for each silo, investigator, and federation stack. Local mode instantiates all 14 agent instances in one process. Cloud-demo mode deploys separate service processes for the three A3 silo nodes, the A2 investigator nodes, and the F1-F5 federation node; messages cross service boundaries through signed envelopes and each node's local Lobster Trap/LiteLLM stack. P15 upgrades the P9a control API from partial adapters to the full live orchestrator: the same session, timeline, inspector, and probe endpoints now drive the complete stack instead of returning placeholders for later agents.
 - *Files:* `backend/orchestrator.py`, `backend/audit.py` (audit channel implementation, including AuditEvent ringbuffer + SSE-style subscriber API for the web UI), `backend/inbox.py` (per-agent inbox), `backend/runtime/node_config.py` (node identity, service URLs, trust-domain config), `backend/runtime/transport.py` (HTTP/gRPC transport abstraction), `backend/demo/state.py` (scenario/run snapshots for UI inspection), `backend/ui/api.py` and `backend/ui/server.py` (P9a FastAPI endpoints upgraded with live adapters), `tests/test_orchestrator.py`, `tests/test_demo_control_api.py`.
@@ -1180,7 +1213,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Audit events form a hash chain through `prev_event_hash` and `event_hash`; tests verify tampering changes the chain head.
 - *Bank↔primitives wiring:* on init, the orchestrator constructs each bank's `StatsPrimitivesLayer` (from P7) and passes a handle to that bank's A3 only. A2 receives alert evidence and aggregated responses but no DB or P7 handle.
 - *Cloud node wiring:* in cloud-demo mode, no process gets all handles. Each A3 service receives only its own P7 handle and bank database path. The federation service receives only service URLs and public verification keys for A2/A3 nodes. Investigator services receive only F1's URL and verification key.
-- *F5 wiring:* F5 is optional at construction time. When enabled, it subscribes to the audit channel via `audit.subscribe()`. F5's findings are themselves AuditEvents (kind `human_review` or `rate_limit`). This avoids a build-order cycle: P13 is tested against an `AuditSource` protocol first, then P15 wires it into the real orchestrator.
+- *F5 wiring:* F5 is optional at construction time. When enabled, the orchestrator sends bounded `AuditReviewRequest` batches built from the audit channel. F5 returns `AuditReviewResult` findings that P16/P17 can mirror into timeline or audit-panel records. This avoids a build-order cycle: P13 is tested against typed request fixtures first, then final-flow composition wires those requests into the real orchestrator path.
 - *Out of scope for this part:* no production-grade Kubernetes operator; no multi-region failover; no real bank network connectivity; no agent hot-reload. Cloud-demo mode is for visible trust boundaries, not production operations. The control API remains the P9a demo-scoped API and must not become a privileged bypass path.
 - *Acceptance:* `tests/test_orchestrator.py`:
   - Instantiate the orchestrator (with stubbed LLM agents that return canned outputs for predictability); drop a hand-crafted `Alert` into Bank Alpha's A2 inbox; call `run_until_idle()`; verify the audit channel contains at least: the original alert routed, A2's `Sec314bQuery`, F1's broadcasts to peer A3 responders, peer A3s' responses, F1's aggregated response, A2's `SARContribution`, F4's `SARDraft`, and F5's audit annotations.
@@ -1243,7 +1276,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Depends on:* P16.
 - *Scope check:* one short focused session.
 
-**P18 - Interactive judge console**
+**P18 - Interactive judge console** ✓
 
 - *Goal:* Polish and complete the P9b browser frame into the final interactive judge console. Judges can drive, inspect, and safely attack every part of the mechanism. The console shows the federation timeline beat-by-beat with LT verdicts and privacy-budget debits overlaid, but it also exposes component inspectors and probe controls for A1, A2, A3, F1-F5, P7, policy adapters, LT, LiteLLM, inboxes, route approvals, replay cache, signing/envelope state, DP ledger state, audit chain, and final SAR artifacts.
 - *Files:* `frontend/` (web app), `frontend/src/api/` (P9a/P15 client), `frontend/src/components/` (agent badge, message card, privacy-budget meter with epsilon display, policy verdict panel), `frontend/src/views/`, `frontend/src/styles/`, `backend/demo/canonical_flow.py` (extended to support `--ui` flag). Backend endpoint changes belong in P9a/P15 unless polish exposes a missing typed view model.
@@ -1288,7 +1321,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Each security probe reaches the expected block/refusal layer and creates an audit event visible in the audit panel.
   - Layout readable at 1920×1080 resolution (the screen-recording target).
 - *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one attack lab tab first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P9a/P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.
-- *Depends on:* P9a, P9b, P15, P16.
+- *Depends on:* P9a, P9b, P15. P18 is implemented before P16 final-flow composition and should be refined against the P16/P17 live terminal path when that lands.
 - *Scope check:* one focused session for the layout; another for the polish (colors, spacing, edge cases).
 
 ---

@@ -16,6 +16,7 @@ class AgentRole(StrEnum):
     F3 = "F3"
     F4 = "F4"
     F5 = "F5"
+    F6 = "F6"
     ORCHESTRATOR = "orchestrator"
 
 
@@ -50,8 +51,14 @@ class MessageType(StrEnum):
     SANCTIONS_CHECK_RESPONSE = "sanctions_check_response"
     GRAPH_PATTERN_REQUEST = "graph_pattern_request"
     GRAPH_PATTERN_RESPONSE = "graph_pattern_response"
+    POLICY_EVALUATION_REQUEST = "policy_evaluation_request"
+    POLICY_EVALUATION_RESULT = "policy_evaluation_result"
     SAR_CONTRIBUTION = "sar_contribution"
+    SAR_ASSEMBLY_REQUEST = "sar_assembly_request"
+    SAR_CONTRIBUTION_REQUEST = "sar_contribution_request"
     SAR_DRAFT = "sar_draft"
+    AUDIT_REVIEW_REQUEST = "audit_review_request"
+    AUDIT_REVIEW_RESULT = "audit_review_result"
     AUDIT_EVENT = "audit_event"
     DISMISSAL_RATIONALE = "dismissal_rationale"
 
@@ -113,6 +120,43 @@ class SARPriority(StrEnum):
 
     STANDARD = "standard"
     HIGH = "high"
+
+
+class PolicyDecision(StrEnum):
+    """Normalized Lobster Trap / AML policy adapter decisions."""
+
+    ALLOW = "allow"
+    REDACT = "redact"
+    ESCALATE = "escalate"
+    BLOCK = "block"
+
+
+class PolicySeverity(StrEnum):
+    """Severity labels used by policy and audit review outputs."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class PolicyContentChannel(StrEnum):
+    """Content channels evaluated by the F6 policy actor."""
+
+    NATURAL_LANGUAGE = "natural_language"
+    STRUCTURED_MESSAGE = "structured_message"
+    LLM_REQUEST = "llm_request"
+    LLM_RESPONSE = "llm_response"
+    AUDIT_EVENT = "audit_event"
+
+
+class AuditReviewScope(StrEnum):
+    """F5 audit review scopes."""
+
+    INVESTIGATION = "investigation"
+    RATE_LIMIT = "rate_limit"
+    DISMISSAL = "dismissal"
+    FULL_RUN = "full_run"
 
 
 class AuditEventKind(StrEnum):

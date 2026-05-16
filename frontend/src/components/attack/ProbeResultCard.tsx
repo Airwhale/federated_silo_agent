@@ -9,12 +9,19 @@ type Props = {
   result: ProbeResult | null;
 };
 
+/**
+ * Renders the typed result of one Attack-Lab probe launch: status,
+ * blocked layer, reason text, and any envelope / replay / route /
+ * DP-ledger snapshots the backend attached. Reuses the inspector
+ * panels so probe outputs render with the same vocabulary as
+ * direct component inspection.
+ */
 export function ProbeResultCard({ result }: Props) {
   if (!result) {
     return (
-      <div className="rounded-lg border border-slate-800 bg-slate-950 p-4 text-sm text-slate-500">
-        Output appears here: status, blocked layer, and any evidence snapshots.
-      </div>
+      <p className="text-[11px] text-slate-500">
+        Probe result lands here: status, blocked layer, evidence snapshots.
+      </p>
     );
   }
 
@@ -30,18 +37,22 @@ export function ProbeResultCard({ result }: Props) {
   };
 
   return (
-    <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-white">{result.probe_kind}</h3>
-          <p className="mt-1 text-xs text-slate-500">{result.target_component}</p>
+    <div className="flex flex-col gap-2">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-200">
+            Result
+          </span>
+          <code className="truncate font-mono text-[11px] text-slate-500">
+            {result.target_component}
+          </code>
         </div>
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           <StatusPill status={result.timeline_event.status} />
           <StatusPill layer={result.blocked_by} />
         </div>
-      </div>
-      <p className="text-sm text-slate-300">{result.reason}</p>
+      </header>
+      <p className="text-xs text-slate-300">{result.reason}</p>
       <EnvelopePanel snapshot={snapshot} />
       <ReplayPanel snapshot={snapshot} />
       <RouteApprovalPanel snapshot={snapshot} />

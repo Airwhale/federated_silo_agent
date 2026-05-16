@@ -1,4 +1,5 @@
 import type { ComponentSnapshot } from "../../api/types";
+import { InspectorSection } from "./InspectorSection";
 
 type Props = {
   snapshot: ComponentSnapshot;
@@ -7,25 +8,39 @@ type Props = {
 export function ReplayPanel({ snapshot }: Props) {
   const replay = snapshot.replay;
   if (!replay) return null;
+  const entries = replay.entries ?? [];
+
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <h3 className="text-sm font-semibold text-white">Replay Cache</h3>
-      <div className="mt-3 grid gap-2">
-        {(replay.entries ?? []).map((entry) => (
-          <div key={`${entry.principal_id}-${entry.nonce_hash}`} className="rounded-md bg-slate-900 p-2 text-sm">
-            <div className="font-medium text-slate-200">{entry.principal_id}</div>
-            <div className="text-xs text-slate-500">nonce {entry.nonce_hash}</div>
-            <div className="mt-1 text-xs text-slate-400">
-              first seen {entry.first_seen_at} / expires {entry.expires_at}
-            </div>
-          </div>
-        ))}
-        {(replay.entries ?? []).length === 0 ? (
-          <div className="rounded-md bg-slate-900 p-2 text-sm text-slate-500">
-            No replay entries recorded.
-          </div>
-        ) : null}
-      </div>
-    </section>
+    <InspectorSection
+      title="Replay cache"
+      // ReplayCacheSnapshot currently carries entries only; the parent
+      // ComponentSnapshot is the typed source for panel status.
+      status={snapshot.status}
+      hint={`${entries.length} ${entries.length === 1 ? "entry" : "entries"}`}
+    >
+      {entries.length === 0 ? (
+        <p className="text-slate-500">No replay entries recorded.</p>
+      ) : (
+        <ul className="divide-y divide-slate-800/70 rounded border border-slate-800/70 bg-slate-900/40">
+          {entries.map((entry) => (
+            <li
+              key={`${entry.principal_id}-${entry.nonce_hash}`}
+              className="px-2.5 py-1.5"
+              title="Replay entry. Expected behavior stores a redacted nonce hash with first-seen and expiry times. Attack succeeds if raw nonces leak or the same signed message is accepted twice."
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                <span className="font-medium text-slate-100">{entry.principal_id}</span>
+                <span className="font-mono text-[10px] text-slate-500">
+                  nonce {entry.nonce_hash}
+                </span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                first seen {entry.first_seen_at} &middot; expires {entry.expires_at}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </InspectorSection>
   );
 }

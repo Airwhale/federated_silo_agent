@@ -1,5 +1,6 @@
 import type { ComponentSnapshot } from "../../api/types";
-import { StatusPill } from "../StatusPill";
+import { InspectorSection } from "./InspectorSection";
+import { KeyValueGrid, type KeyValueRow } from "./KeyValueGrid";
 
 type Props = {
   snapshot: ComponentSnapshot;
@@ -8,30 +9,31 @@ type Props = {
 export function EnvelopePanel({ snapshot }: Props) {
   const envelope = snapshot.envelope;
   if (!envelope) return null;
+
+  const rows: KeyValueRow[] = [
+    { label: "Message", value: envelope.message_type ?? "not checked", tone: envelope.message_type ? "default" : "muted" },
+    { label: "Sender", value: envelope.sender_agent_id ?? "not checked", tone: envelope.sender_agent_id ? "default" : "muted" },
+    { label: "Recipient", value: envelope.recipient_agent_id ?? "not checked", tone: envelope.recipient_agent_id ? "default" : "muted" },
+    { label: "Body hash", value: envelope.body_hash ?? "not checked", tone: envelope.body_hash ? "default" : "muted" },
+    { label: "Signature", value: envelope.signature_status, tone: signatureTone(envelope.signature_status) },
+    { label: "Freshness", value: envelope.freshness_status, tone: freshnessTone(envelope.freshness_status) },
+  ];
+
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-white">Envelope</h3>
-        <StatusPill status={envelope.status} />
-      </div>
-      <dl className="mt-3 grid gap-2 text-sm">
-        <Row name="Message" value={envelope.message_type ?? "not checked"} />
-        <Row name="Sender" value={envelope.sender_agent_id ?? "not checked"} />
-        <Row name="Recipient" value={envelope.recipient_agent_id ?? "not checked"} />
-        <Row name="Body hash" value={envelope.body_hash ?? "not checked"} />
-        <Row name="Signature" value={envelope.signature_status} />
-        <Row name="Freshness" value={envelope.freshness_status} />
-      </dl>
-      <p className="mt-3 text-sm text-slate-400">{envelope.detail}</p>
-    </section>
+    <InspectorSection title="Envelope" status={envelope.status} hint={envelope.detail}>
+      <KeyValueGrid rows={rows} />
+    </InspectorSection>
   );
 }
 
-function Row({ name, value }: { name: string; value: string }) {
-  return (
-    <div className="rounded-md bg-slate-900 p-2">
-      <dt className="text-[11px] uppercase text-slate-500">{name}</dt>
-      <dd className="mt-1 break-words text-slate-200">{value}</dd>
-    </div>
-  );
+function signatureTone(value: string): KeyValueRow["tone"] {
+  if (value === "valid") return "good";
+  if (value === "invalid" || value === "missing") return "danger";
+  return "muted";
+}
+
+function freshnessTone(value: string): KeyValueRow["tone"] {
+  if (value === "fresh") return "good";
+  if (value === "stale" || value === "replay") return "danger";
+  return "muted";
 }

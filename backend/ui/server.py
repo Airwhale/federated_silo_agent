@@ -32,6 +32,14 @@ def create_app(service: DemoControlService | None = None) -> FastAPI:
         allow_origins=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            # P18 worktree dev port: the main 5173 slot is taken by the
+            # sibling `federated_silo_agent` worktree's frontend, so P18
+            # polish work runs on 5180 (paired with the 8060 backend in
+            # this worktree). Per the comment above, sibling-worktree
+            # origins are opt-in; this addition is opt-in for the
+            # duration of P18 development.
+            "http://localhost:5180",
+            "http://127.0.0.1:5180",
         ],
         allow_credentials=False,
         allow_methods=["*"],

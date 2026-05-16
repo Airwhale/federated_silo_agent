@@ -53,8 +53,8 @@ export function ModelRoutePanel({ providerHealth, trustDomainLabel, lastResult }
   );
 
   return (
-    <div className="grid gap-3">
-      <p className="text-sm text-slate-400">{providerHealth.detail}</p>
+    <div className="flex flex-col gap-2">
+      <p className="text-[11px] text-slate-400">{providerHealth.detail}</p>
       <KeyValueGrid rows={rows} />
     </div>
   );

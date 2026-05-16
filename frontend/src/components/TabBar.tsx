@@ -15,7 +15,7 @@ type Props = {
 
 export function TabBar({ active, onChange }: Props) {
   return (
-    <nav className="flex items-center gap-1">
+    <nav className="flex items-center gap-0.5" aria-label="Console views">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const selected = active === tab.id;
@@ -24,13 +24,20 @@ export function TabBar({ active, onChange }: Props) {
             key={tab.id}
             type="button"
             onClick={() => onChange(tab.id)}
-            className={`inline-flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+            aria-current={selected ? "page" : undefined}
+            // Tighter padding (px-2.5 py-1) and a stronger active state
+            // (filled emerald-tinted background instead of just an
+            // underline) so the active view reads at a glance from the
+            // demo distance. Unselected text uses slate-300 (was
+            // slate-400) for better legibility on the near-black
+            // header backdrop.
+            className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium uppercase tracking-wide transition-colors ${
               selected
-                ? "border-emerald-400 text-emerald-300"
-                : "border-transparent text-slate-400 hover:text-slate-200"
+                ? "bg-emerald-500/15 text-emerald-200"
+                : "text-slate-300 hover:bg-slate-800/70 hover:text-slate-100"
             }`}
           >
-            <Icon size={16} aria-hidden />
+            <Icon size={13} aria-hidden />
             {tab.label}
           </button>
         );

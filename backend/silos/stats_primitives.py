@@ -26,7 +26,12 @@ from backend.silos.dp import (
 from backend.silos.local_reader import bank_db_path
 from shared.enums import BankId, PrivacyUnit, ResponseValueKind, SignalType
 from shared.identifiers import hash_identifier
-from shared.messages import BankAggregate, DpCompositionMode, PrimitiveCallRecord
+from shared.messages import (
+    CANDIDATE_HASH_LIMIT,
+    BankAggregate,
+    DpCompositionMode,
+    PrimitiveCallRecord,
+)
 
 
 DEFAULT_AMOUNT_BUCKETS: tuple[tuple[float, float], ...] = (
@@ -435,11 +440,17 @@ class BankStatsPrimitives:
         *,
         window: DateWindow | tuple[date, date],
         requester: RequesterKey,
+        candidate_entity_hashes: list[str] | None = None,
         rho: float = 0.04,
         max_transactions: int = 10_000,
     ) -> PrimitiveResult:
         """Return a DP-protected bank aggregate for F2 graph analysis."""
         parsed_window = DateWindow.coerce(window)
+        candidate_hashes = candidate_entity_hashes or []
+        if len(candidate_hashes) > CANDIDATE_HASH_LIMIT:
+            raise ValueError(
+                f"candidate_entity_hashes cannot exceed {CANDIDATE_HASH_LIMIT}"
+            )
         if self.ledger.remaining(requester) < rho:
             return _budget_refusal()
 
@@ -448,6 +459,7 @@ class BankStatsPrimitives:
         counterparty_counts = Counter(
             str(row["counterparty_account_id_hashed"]) for row in rows
         )
+        approved_candidates = sorted(set(candidate_hashes))
 
         # Sequential composition between the two components (edge distribution
         # and flow histogram) because they share the same underlying data
@@ -512,6 +524,7 @@ class BankStatsPrimitives:
             bank_id=self.bank_id,
             edge_count_distribution=edge_noised,
             bucketed_flow_histogram=flow_noised,
+            candidate_entity_hashes=approved_candidates,
             rho_debited=rho,
         )
         return PrimitiveResult(
@@ -554,6 +567,23 @@ class BankStatsPrimitives:
                     dp_composition="parallel_disjoint",
                     per_bucket_rho=rho_per_component,
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
+                ),
+                self._record(
+                    field_name="candidate_entity_hashes",
+                    primitive_name="pattern_aggregate_for_f2",
+                    args={
+                        "window": parsed_window.model_dump(mode="json"),
+                        "component": "candidate_entity_hashes",
+                        "max_transactions": max_transactions,
+                        "candidate_entity_hashes": approved_candidates,
+                        "requester": requester.stable_key,
+                        "rho": 0.0,
+                    },
+                    privacy_unit=PrivacyUnit.NONE,
+                    rho_debited=0.0,
+                    sigma_applied=None,
+                    sensitivity=1.0,
+                    returned_value_kind=ResponseValueKind.HASH_LIST,
                 ),
             ],
         )
@@ -598,11 +628,14 @@ class BankStatsPrimitives:
     ) -> list[sqlite3.Row]:
         start, end = window.sqlite_bounds()
         query = """
-            SELECT transaction_id, counterparty_account_id_hashed, amount
-            FROM transactions
-            WHERE timestamp >= ?
-              AND timestamp < ?
-            ORDER BY transaction_id
+            SELECT
+                t.transaction_id,
+                t.counterparty_account_id_hashed,
+                t.amount
+            FROM transactions t
+            WHERE t.timestamp >= ?
+              AND t.timestamp < ?
+            ORDER BY t.transaction_id
             LIMIT ?
         """
         with self._connect() as con:

@@ -1,0 +1,47 @@
+{
+  "typology_codes": [
+    "structuring",
+    "layering",
+    "terrorist_financing",
+    "sanctions_evasion",
+    "pep_exposure"
+  ],
+  "ml_tf_keywords": [
+    "anti-money laundering",
+    "aml",
+    "money laundering",
+    "suspicious activity",
+    "structuring",
+    "smurfing",
+    "layering",
+    "terrorist financing",
+    "sanctions evasion",
+    "pep exposure",
+    "politically exposed person"
+  ],
+  "synthetic_customer_name_patterns": [
+    "Jane Doe",
+    "John Doe",
+    "Alice Smith",
+    "Bob Jones",
+    "Acme Holdings LLC",
+    "Acme Holdings",
+    "Beacon Logistics Inc",
+    "Beacon Logistics",
+    "Citadel Trading Co",
+    "Citadel Trading",
+    "Delta Imports Ltd",
+    "Delta Imports",
+    "Eagle Consulting Group",
+    "Eagle Consulting",
+    "Foxtrot Wholesale",
+    "Gulf Stream Trading",
+    "Horizon Ventures",
+    "Iridium Capital Partners",
+    "Iridium Capital",
+    "Juniper Asset Mgmt",
+    "Juniper Asset Management",
+    "Kestrel Holdings",
+    "Lattice Investments"
+  ]
+}
