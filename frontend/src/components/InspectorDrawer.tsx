@@ -4,6 +4,7 @@ import { useComponent } from "@/api/hooks";
 import { useSessionContext } from "@/components/SessionContext";
 import { StatusPill } from "@/components/StatusPill";
 import { AuditChainPanel } from "@/components/inspector/AuditChainPanel";
+import { ComponentGuidancePanel } from "@/components/inspector/ComponentGuidancePanel";
 import { DpLedgerPanel } from "@/components/inspector/DpLedgerPanel";
 import { EnvelopePanel } from "@/components/inspector/EnvelopePanel";
 import { GenericFieldsPanel } from "@/components/inspector/GenericFieldsPanel";
@@ -28,7 +29,10 @@ export function InspectorDrawer() {
     <Dialog.Root open={Boolean(selection)} onOpenChange={(open) => !open && setSelection(null)}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-slate-950/70" />
-        <Dialog.Content className="fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl">
+        <Dialog.Content
+          data-inspector-drawer
+          className="fixed right-0 top-0 z-50 flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-950 shadow-2xl"
+        >
           {/*
             Compact drawer header: title + inline trust-domain badge +
             status pill + close button on one row. Dropped the previous
@@ -61,6 +65,7 @@ export function InspectorDrawer() {
               </div>
             ) : (
               <>
+                <ComponentGuidancePanel snapshot={snapshot} />
                 <NotBuiltPanel snapshot={snapshot} />
                 <SigningPanel snapshot={snapshot} />
                 <EnvelopePanel snapshot={snapshot} />

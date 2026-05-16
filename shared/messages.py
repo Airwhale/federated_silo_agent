@@ -90,6 +90,8 @@ DpCompositionMode: TypeAlias = Literal["parallel_disjoint", "serial"]
 # silently drifting if the suffix changes.
 A3_RESPONSE_NONCE_SUFFIX = ":a3-response"
 
+CANDIDATE_HASH_LIMIT = 100
+
 # Defense-in-depth regex against accidental leakage of customer-identifying
 # strings into cross-bank-bound text fields. This list mirrors the planted
 # shell-entity cover-business names from data/scripts/plant_scenarios.py
@@ -605,11 +607,19 @@ class SanctionsCheckResponse(Message):
 
 
 class BankAggregate(StrictModel):
-    """DP-noised per-bank aggregate sent to F2."""
+    """DP-noised per-bank aggregate sent to F2.
+
+    Candidate hashes are approved query tokens carried through for F2 output
+    binding. They are not mined from local bank rows by the P7 primitive.
+    """
 
     bank_id: BankId
     edge_count_distribution: list[NonNegativeInt]
     bucketed_flow_histogram: list[NonNegativeInt]
+    candidate_entity_hashes: list[CrossBankHashToken] = Field(
+        default_factory=list,
+        max_length=CANDIDATE_HASH_LIMIT,
+    )
     rho_debited: NonNegativeFloat = 0.0
 
     @model_validator(mode="after")

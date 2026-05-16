@@ -26,12 +26,14 @@ from backend.agents.rules import BypassRule, ConstraintRule
 if TYPE_CHECKING:
     from backend.agents.a2_investigator import A2InvestigatorAgent
     from backend.agents.a3_silo_responder import A3SiloResponderAgent
+    from backend.agents.f2_graph_analysis import F2GraphAnalysisAgent
     from backend.agents.f1_coordinator import F1CoordinatorAgent
     from backend.agents.f3_sanctions import F3SanctionsAgent
 
 _LAZY_EXPORTS = {
     "A2InvestigatorAgent": ("backend.agents.a2_investigator", "A2InvestigatorAgent"),
     "A3SiloResponderAgent": ("backend.agents.a3_silo_responder", "A3SiloResponderAgent"),
+    "F2GraphAnalysisAgent": ("backend.agents.f2_graph_analysis", "F2GraphAnalysisAgent"),
     "F1CoordinatorAgent": ("backend.agents.f1_coordinator", "F1CoordinatorAgent"),
     "F3SanctionsAgent": ("backend.agents.f3_sanctions", "F3SanctionsAgent"),
 }
@@ -48,6 +50,7 @@ __all__ = [
     "ChatMessage",
     "ConstraintRule",
     "ConstraintViolation",
+    "F2GraphAnalysisAgent",
     "F1CoordinatorAgent",
     "F3SanctionsAgent",
     "InMemoryAuditEmitter",

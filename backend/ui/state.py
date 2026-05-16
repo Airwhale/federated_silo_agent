@@ -385,6 +385,18 @@ class DemoControlService:
                 fields=fields,
                 dp_ledger=ledger,
             )
+        if component_id == ComponentId.F2:
+            return ComponentSnapshot(
+                component_id=component_id,
+                status=item.status,
+                title=item.label,
+                fields=[
+                    *fields,
+                    SnapshotField(name="analysis_mode", value="hybrid"),
+                    SnapshotField(name="clear_positive_rules", value="F2-B1,F2-B2"),
+                    SnapshotField(name="input_boundary", value="dp_noised_aggregates"),
+                ],
+            )
         if component_id == ComponentId.F3:
             # Surface F3-specific operational state in the inspector: the
             # number of unique-hash entries loaded into the screener and
@@ -561,10 +573,10 @@ class DemoControlService:
                 status = SnapshotStatus.PENDING
                 blocked_by = None
                 event_status = SnapshotStatus.PENDING
-                reason = _truncate_detail(
-                    f"{request.interaction_kind.value} was recorded for "
-                    f"{readiness_item.label}; the live handler lands with "
-                    "P14/P15. No protected state was mutated."
+                reason = _interaction_placeholder_reason(
+                    component_id,
+                    interaction_kind=request.interaction_kind,
+                    label=readiness_item.label,
                 )
 
             event = TimelineEventSnapshot(
@@ -713,7 +725,7 @@ class DemoControlService:
             _component(ComponentId.BANK_GAMMA_A3, "Bank Gamma A3", SnapshotStatus.LIVE, "P8a complete."),
             _component(ComponentId.P7, "P7 stats primitives", SnapshotStatus.LIVE, db_status),
             _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."),
-            _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.NOT_BUILT, "Available after P11.", "P11"),
+            _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.LIVE, "P11 complete."),
             _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.NOT_BUILT, "Available after P12.", "P12"),
             _component(ComponentId.F5, "F5 auditor", SnapshotStatus.NOT_BUILT, "Available after P13.", "P13"),
             _component(ComponentId.LOBSTER_TRAP, "Lobster Trap", SnapshotStatus.PENDING, "P0 scaffolded; API verdict adapter lands P14."),
@@ -1163,6 +1175,37 @@ def _database_detail() -> str:
 def _redacted_requester_key(requester: RequesterKey) -> str:
     digest = hashlib.sha256(requester.stable_key.encode("utf-8")).hexdigest()[:16]
     return f"requester:{digest}"
+
+
+def _interaction_placeholder_reason(
+    component_id: ComponentId,
+    *,
+    interaction_kind: ComponentInteractionKind,
+    label: str,
+) -> str:
+    """Describe accepted-but-not-executed prompt paths for the UI.
+
+    P9b can route demo input to either the LT policy gate or the direct
+    LiteLLM/model-route harness. The live LT verdict and provider call
+    still land in P14/P15, so the wording must make clear which boundary
+    was reached and what is not yet executing.
+    """
+    if component_id == ComponentId.LITELLM:
+        return _truncate_detail(
+            f"{interaction_kind.value} reached the LiteLLM/model route directly. "
+            "Live provider execution lands with P14/P15, so no model call was made yet. "
+            "No protected state was mutated."
+        )
+    if component_id == ComponentId.LOBSTER_TRAP:
+        return _truncate_detail(
+            f"{interaction_kind.value} reached the Lobster Trap policy gate. "
+            "Live LT verdicts and model forwarding land with P14/P15. "
+            "No protected state was mutated."
+        )
+    return _truncate_detail(
+        f"{interaction_kind.value} was recorded for {label}; the live handler lands "
+        "with P14/P15. No protected state was mutated."
+    )
 
 
 def _envelope_snapshot(

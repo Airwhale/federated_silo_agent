@@ -306,6 +306,7 @@ class A3SiloResponderAgent(Agent[A3TurnInput, Sec314bResponse]):
             result = self.primitives.pattern_aggregate_for_f2(
                 window=(payload.window_start, payload.window_end),
                 requester=requester,
+                candidate_entity_hashes=payload.name_hashes,
                 rho=rho,
             )
             if result.refusal_reason is not None:
@@ -319,6 +320,9 @@ class A3SiloResponderAgent(Agent[A3TurnInput, Sec314bResponse]):
                     ),
                     "bucketed_flow_histogram": HistogramResponseValue(
                         histogram=aggregate.bucketed_flow_histogram
+                    ),
+                    "candidate_entity_hashes": HashListResponseValue(
+                        hash_list=aggregate.candidate_entity_hashes
                     ),
                 },
                 provenance=result.records,

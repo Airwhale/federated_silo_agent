@@ -268,6 +268,48 @@ Acceptance:
 
 Notes:
 
+### 2026-05-15 - Codex - codex/p11-f2
+Status: ready_for_review
+Touched files:
+- backend/agents/f2_graph_analysis.py
+- backend/agents/f2_typologies.py
+- backend/agents/prompts/f2_system.md
+- backend/agents/__init__.py
+- backend/silos/stats_primitives.py
+- backend/ui/state.py
+- shared/messages.py
+- tests/test_f2.py
+- tests/test_stats_primitives.py
+- tests/test_ui_api.py
+
+What changed:
+- Built F2 as a hybrid federation graph-analysis agent: deterministic F2-B1
+  structuring-ring and F2-B2 layering-chain classification over DP-noised
+  histograms, deterministic clear-negative bypass, and LLM fallback for
+  ambiguous classifications.
+- Added `BankAggregate.candidate_entity_hashes` because the existing
+  aggregate-only contract could not support `GraphPatternResponse.suspect_entity_hashes`.
+- Updated P7/A3 so `candidate_entity_hashes` are approved query tokens carried
+  through for F2 output binding, not top-active local customers mined from bank
+  rows.
+- Marked F2 live in the UI readiness snapshot and added a generic F2 inspector
+  branch exposing mode/rules/input boundary only.
+
+Assumptions:
+- F2 accepts `GraphPatternRequest` only from F1 and only inside the federation
+  trust domain.
+- Candidate hashes are cross-bank linkage tokens, not customer names. They are
+  needed for F2 to return suspect hash sets honestly, but must be scoped to the
+  approved query.
+- The 100-token candidate cap is the current Pydantic boundary.
+
+Blockers:
+- None.
+
+Next agent:
+- Review the `BankAggregate.candidate_entity_hashes` contract addition before
+  wiring downstream orchestrator/F4 code against F2 outputs.
+
 ### P12 - F4 SAR Drafter
 
 Owner:

@@ -1,11 +1,20 @@
-import { Send } from "lucide-react";
+import { Send, Shuffle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { describeError } from "@/api/errors";
 import { useInteraction } from "@/api/hooks";
-import type { ComponentId, ComponentInteractionKind } from "@/api/types";
+import type { ComponentId, ComponentInteractionKind, ComponentSnapshot } from "@/api/types";
+import { ComponentGuidancePanel } from "@/components/inspector/ComponentGuidancePanel";
+import { KeyValueGrid } from "@/components/inspector/KeyValueGrid";
+import { RawJsonPanel } from "@/components/inspector/RawJsonPanel";
 import { useSessionContext } from "@/components/SessionContext";
 import { StatusPill } from "@/components/StatusPill";
+import { fieldGuidance } from "@/domain/fieldGuidance";
 import { TRUST_INSTANCES, type TrustDomain } from "@/domain/instances";
+import {
+  firstSampleForInteraction,
+  nextSample,
+  samplesForComponent,
+} from "@/domain/sampleInputs";
 
 const interactionKinds: ComponentInteractionKind[] = [
   "prompt",
@@ -19,6 +28,47 @@ const interactionKinds: ComponentInteractionKind[] = [
 // instance, the UI should still render and report the interaction through
 // a valid component endpoint rather than crashing during import.
 const FALLBACK_COMPONENT_ID: ComponentId = "F1";
+
+type SnapshotResultPanelProps = {
+  snapshot: ComponentSnapshot;
+};
+
+function SnapshotResultPanel({ snapshot }: SnapshotResultPanelProps) {
+  const fieldRows = (snapshot.fields ?? []).map((field) => {
+    const value = field.redacted ? "[redacted]" : String(field.value);
+    const guidance = fieldGuidance(snapshot.component_id, field.name, value);
+    return {
+      label: field.name,
+      value,
+      tone: guidance.dangerous
+        ? ("danger" as const)
+        : field.redacted
+          ? ("muted" as const)
+          : ("default" as const),
+      help: guidance.help,
+    };
+  });
+
+  return (
+    <div className="mt-2 space-y-2 rounded border border-slate-800/80 bg-slate-950/70 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Returned snapshot
+        </span>
+        <StatusPill status={snapshot.status} />
+        <span className="text-xs text-slate-300">{snapshot.title}</span>
+      </div>
+      <ComponentGuidancePanel snapshot={snapshot} />
+      <KeyValueGrid
+        rows={[
+          { label: "Component", value: snapshot.component_id },
+          ...fieldRows,
+        ]}
+      />
+      <RawJsonPanel value={snapshot} />
+    </div>
+  );
+}
 
 export function InteractionConsole() {
   const { sessionId } = useSessionContext();
@@ -40,20 +90,25 @@ export function InteractionConsole() {
   );
   const [interactionKind, setInteractionKind] =
     useState<ComponentInteractionKind>("inspect");
-  const [payloadText, setPayloadText] = useState("");
+  const [payloadText, setPayloadText] = useState(() =>
+    firstSampleForInteraction(
+      instance.mechanisms[0]?.componentId ?? FALLBACK_COMPONENT_ID,
+      "inspect",
+    ),
+  );
   const interaction = useInteraction(sessionId, componentId);
+  const sampleSet = samplesForComponent(componentId);
 
-  // Reset mutation state (data/error chip in the header) when the
-  // selected component changes. Without this, a stale "API said" /
-  // "Executed" / "Placeholder" badge from a prior component bleeds
-  // into the new component's view until the user fires another
-  // interaction.
+  // Reset mutation state and seed a relevant sample when the selected
+  // component or interaction mode changes. Without this, stale result
+  // badges and stale sample text bleed into the next target.
   useEffect(() => {
     interaction.reset();
-    // ``interaction.reset`` is stable per hook instance; we only
-    // want to fire on componentId change.
+    setPayloadText(firstSampleForInteraction(componentId, interactionKind));
+    // ``interaction.reset`` is stable per hook instance; including the
+    // full mutation object would loop across renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [componentId]);
+  }, [componentId, interactionKind]);
 
   const components = useMemo(() => instance.mechanisms, [instance]);
 
@@ -140,6 +195,26 @@ export function InteractionConsole() {
           className="w-full resize-y rounded border border-slate-700 bg-slate-900 px-2 py-1.5 font-mono text-[11px] text-slate-100"
           placeholder="Demo-safe input"
         />
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => setPayloadText(nextSample(payloadText, sampleSet.normal))}
+            aria-label="Use normal interaction sample"
+            className="inline-flex items-center gap-1 rounded border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-200 hover:bg-emerald-500/20"
+          >
+            <Shuffle size={11} aria-hidden />
+            Normal sample
+          </button>
+          <button
+            type="button"
+            onClick={() => setPayloadText(nextSample(payloadText, sampleSet.attack))}
+            aria-label="Use attack interaction sample"
+            className="inline-flex items-center gap-1 rounded border border-rose-400/40 bg-rose-500/10 px-2 py-1 text-[10px] font-medium text-rose-200 hover:bg-rose-500/20"
+          >
+            <Shuffle size={11} aria-hidden />
+            Attack sample
+          </button>
+        </div>
         {interaction.data ? (
           <div className="rounded border border-slate-800/70 bg-slate-900/40 px-2.5 py-1.5 text-xs">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -160,6 +235,9 @@ export function InteractionConsole() {
               ) : null}
             </div>
             <p className="mt-1 text-slate-300">{interaction.data.reason}</p>
+            {interaction.data.component_snapshot ? (
+              <SnapshotResultPanel snapshot={interaction.data.component_snapshot} />
+            ) : null}
           </div>
         ) : null}
         {interaction.error instanceof Error ? (
