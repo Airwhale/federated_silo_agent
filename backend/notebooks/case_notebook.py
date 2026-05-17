@@ -251,7 +251,7 @@ def generate_case_notebook(
         encoding="utf-8",
     )
     notebook_path.write_text(
-        json.dumps(notebook.model_dump(mode="json"), indent=2),
+        notebook.model_dump_json(indent=2),
         encoding="utf-8",
     )
     artifact_html_path.write_text(rendered_html.artifact_html, encoding="utf-8")
