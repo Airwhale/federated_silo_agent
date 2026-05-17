@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import pytest
 from dotenv import load_dotenv
@@ -14,6 +12,7 @@ from dotenv import load_dotenv
 from backend.demo.canonical_flow import run_canonical_flow
 from backend.demo.seeds import S1_ENTITY_HASHES
 from backend.orchestrator.runtime import TerminalCode
+from backend.runtime.network import tcp_url_reachable
 from shared.enums import AuditEventKind, BankId, SARPriority, TypologyCode
 
 
@@ -107,28 +106,7 @@ def _skip_if_live_proxy_chain_unavailable() -> None:
     unavailable = [
         f"{name} at {url}"
         for name, url in endpoints.items()
-        if not _tcp_endpoint_accepts_connections(url)
+        if not tcp_url_reachable(url, timeout=1.0)
     ]
     if unavailable:
         pytest.skip("live proxy chain is not running: " + ", ".join(unavailable))
-
-
-def _tcp_endpoint_accepts_connections(url: str) -> bool:
-    if "://" not in url:
-        url = f"//{url}"
-    parsed = urlparse(url, scheme="http")
-    if not parsed.hostname:
-        return False
-    if parsed.port is not None:
-        port = parsed.port
-    elif parsed.scheme == "https":
-        port = 443
-    elif parsed.scheme == "http":
-        port = 80
-    else:
-        return False
-    try:
-        with socket.create_connection((parsed.hostname, port), timeout=1.0):
-            return True
-    except OSError:
-        return False

@@ -369,7 +369,7 @@ def test_prompt_injection_probe_blocks_signed_attack_at_lobster_trap() -> None:
 def test_prompt_injection_probe_allows_safe_prompt_without_error(monkeypatch) -> None:
     from backend.ui import state as state_module
 
-    def fake_post(
+    async def fake_post(
         *,
         url: str,
         request: state_module._UiChatCompletionRequest,
@@ -569,6 +569,34 @@ def test_delayed_run_until_idle_returns_before_background_completion() -> None:
         time.sleep(0.02)
     else:  # pragma: no cover - failure path gives a clearer assertion message.
         raise AssertionError("background run-until-idle did not reach terminal state")
+
+
+def test_provider_reachability_refresh_clears_inflight_after_probe_error(
+    monkeypatch,
+) -> None:
+    from backend.ui import state as state_module
+
+    url = "http://127.0.0.1:65534"
+    with state_module._PROVIDER_REACHABILITY_LOCK:
+        state_module._PROVIDER_REACHABILITY_CACHE.pop(url, None)
+        state_module._PROVIDER_REACHABILITY_IN_FLIGHT.discard(url)
+
+    def broken_probe(_: str) -> bool:
+        raise RuntimeError("simulated probe failure")
+
+    monkeypatch.setattr(state_module, "_tcp_url_reachable", broken_probe)
+
+    assert state_module._tcp_url_reachable_cached(url) is False
+    for _ in range(100):
+        with state_module._PROVIDER_REACHABILITY_LOCK:
+            if url not in state_module._PROVIDER_REACHABILITY_IN_FLIGHT:
+                cached = state_module._PROVIDER_REACHABILITY_CACHE[url]
+                break
+        time.sleep(0.01)
+    else:  # pragma: no cover - failure path gives a clearer assertion message.
+        raise AssertionError("reachability refresh stayed in flight after failure")
+
+    assert cached[1] is False
 
 
 def test_case_notebook_endpoint_generates_html_reports() -> None:
@@ -815,7 +843,7 @@ def test_prompt_to_a3_can_bypass_lobster_trap_for_layer_testing() -> None:
 def test_litellm_interaction_executes_direct_model_route(monkeypatch) -> None:
     from backend.ui import state as state_module
 
-    def fake_post(
+    async def fake_post(
         *,
         url: str,
         request: state_module._UiChatCompletionRequest,
@@ -857,7 +885,7 @@ def test_litellm_interaction_executes_direct_model_route(monkeypatch) -> None:
 def test_litellm_interaction_can_route_through_lobster_trap_gate(monkeypatch) -> None:
     from backend.ui import state as state_module
 
-    def fake_post(
+    async def fake_post(
         *,
         url: str,
         request: state_module._UiChatCompletionRequest,
@@ -901,7 +929,7 @@ def test_litellm_interaction_can_route_through_lobster_trap_gate(monkeypatch) ->
 def test_litellm_malicious_prompt_blocks_at_policy_before_live_proxy(monkeypatch) -> None:
     from backend.ui import state as state_module
 
-    def fail_post(**_: object) -> None:
+    async def fail_post(**_: object) -> None:
         raise AssertionError("live proxy should not receive prompts blocked by local LT policy")
 
     monkeypatch.setattr(state_module, "_post_live_chat_completion", fail_post)

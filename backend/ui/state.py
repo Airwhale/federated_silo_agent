@@ -12,16 +12,12 @@ import logging
 import os
 import re
 import shutil
-import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from functools import lru_cache
-from inspect import isawaitable
 from pathlib import Path
-from typing import Any, Awaitable, Literal, Mapping, NamedTuple, cast
-from urllib.parse import urlparse
+from typing import Any, Literal, Mapping, NamedTuple
 from uuid import UUID, uuid4
 
 import httpx
@@ -40,6 +36,7 @@ from backend.orchestrator import Orchestrator, OrchestratorPrincipals
 from backend.orchestrator.runtime import SessionOrchestratorState, TerminalCode
 from backend.policy import AmlPolicyConfig, AmlPolicyEvaluator, RawPolicyContent
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
+from backend.runtime.network import tcp_url_reachable
 from backend.security import (
     PrincipalNotAllowed,
     ReplayCache,
@@ -225,10 +222,6 @@ _PROVIDER_REACHABILITY_CACHE_SECONDS = 2.0
 _MODEL_ROUTE_CLIENT_LOCK = threading.Lock()
 _MODEL_ROUTE_CLIENT: httpx.AsyncClient | None = None
 _PROVIDER_REACHABILITY_LOCK = threading.Lock()
-_PROVIDER_REACHABILITY_EXECUTOR = ThreadPoolExecutor(
-    max_workers=2,
-    thread_name_prefix="ui-provider-health",
-)
 _PROVIDER_REACHABILITY_CACHE: dict[str, tuple[float, bool]] = {}
 _PROVIDER_REACHABILITY_IN_FLIGHT: set[str] = set()
 
@@ -331,30 +324,28 @@ def _tcp_url_reachable(raw_url: str) -> bool:
     # health with a 100ms timeout plus a short TTL cache. It is not used for
     # provider calls or high-volume request forwarding. If the UI API moves
     # to async route handlers, replace this seam with asyncio.open_connection.
-    parsed = urlparse(raw_url)
-    host = parsed.hostname
-    port = parsed.port
-    if not host or port is None:
-        return False
-    try:
-        with socket.create_connection(
-            (host, port),
-            timeout=_SERVICE_CONNECT_TIMEOUT_SECONDS,
-        ):
-            return True
-    except OSError:
-        return False
+    return tcp_url_reachable(raw_url, timeout=_SERVICE_CONNECT_TIMEOUT_SECONDS)
 
 
 def _refresh_tcp_url_reachability(raw_url: str) -> None:
-    reachable = _tcp_url_reachable(raw_url)
-    with _PROVIDER_REACHABILITY_LOCK:
-        _PROVIDER_REACHABILITY_CACHE[raw_url] = (time.monotonic(), reachable)
-        _PROVIDER_REACHABILITY_IN_FLIGHT.discard(raw_url)
+    reachable = False
+    try:
+        # Keep network I/O outside the lock. The finally block below must
+        # always clear the in-flight marker so one unexpected probe failure
+        # cannot permanently suppress future refresh attempts for this URL.
+        reachable = _tcp_url_reachable(raw_url)
+    except Exception:  # noqa: BLE001
+        # Health probes are advisory UI state. A malformed URL parser edge or
+        # unexpected socket-layer failure should render as "not reachable,"
+        # not escape a daemon worker thread.
+        _logger.debug("provider reachability probe failed", exc_info=True)
+    finally:
+        with _PROVIDER_REACHABILITY_LOCK:
+            _PROVIDER_REACHABILITY_CACHE[raw_url] = (time.monotonic(), reachable)
+            _PROVIDER_REACHABILITY_IN_FLIGHT.discard(raw_url)
 
 
-def _tcp_url_reachable_cached(raw_url: str, cache_bucket: int) -> bool:
-    _ = cache_bucket
+def _tcp_url_reachable_cached(raw_url: str) -> bool:
     now = time.monotonic()
     with _PROVIDER_REACHABILITY_LOCK:
         cached = _PROVIDER_REACHABILITY_CACHE.get(raw_url)
@@ -363,33 +354,24 @@ def _tcp_url_reachable_cached(raw_url: str, cache_bucket: int) -> bool:
         stale_value = cached[1] if cached else False
         if raw_url not in _PROVIDER_REACHABILITY_IN_FLIGHT:
             _PROVIDER_REACHABILITY_IN_FLIGHT.add(raw_url)
-            _PROVIDER_REACHABILITY_EXECUTOR.submit(
-                _refresh_tcp_url_reachability,
-                raw_url,
-            )
+            threading.Thread(
+                target=_refresh_tcp_url_reachability,
+                args=(raw_url,),
+                name="ui-provider-health",
+                daemon=True,
+            ).start()
         return stale_value
-
-
-def _provider_reachability_cache_bucket() -> int:
-    return int(time.monotonic() / _PROVIDER_REACHABILITY_CACHE_SECONDS)
 
 
 def _local_provider_state() -> _LocalProviderState:
     infra_root = _infra_root()
-    cache_bucket = _provider_reachability_cache_bucket()
     lobster_trap_url = os.getenv(_LOBSTER_TRAP_URL_ENV, _DEFAULT_LOBSTER_TRAP_URL)
     litellm_url = os.getenv(_LITELLM_URL_ENV, _DEFAULT_LITELLM_URL)
     return _LocalProviderState(
         lobster_trap_configured=(infra_root / "lobstertrap").exists(),
         litellm_configured=(infra_root / "litellm_config.yaml").exists(),
-        lobster_trap_reachable=_tcp_url_reachable_cached(
-            lobster_trap_url,
-            cache_bucket,
-        ),
-        litellm_reachable=_tcp_url_reachable_cached(
-            litellm_url,
-            cache_bucket,
-        ),
+        lobster_trap_reachable=_tcp_url_reachable_cached(lobster_trap_url),
+        litellm_reachable=_tcp_url_reachable_cached(litellm_url),
     )
 
 
@@ -602,19 +584,10 @@ async def _live_model_route_outcome(
     )
 
     try:
-        response_or_awaitable = _post_live_chat_completion(
+        response = await _post_live_chat_completion(
             url=_chat_completion_url(base_url),
             request=chat_request,
         )
-        if isawaitable(response_or_awaitable):
-            response = await cast(
-                Awaitable[_UiChatCompletionResponse],
-                response_or_awaitable,
-            )
-        else:
-            # Tests monkeypatch this seam with a synchronous fake so they
-            # can assert request shape without spinning an event loop.
-            response = cast(_UiChatCompletionResponse, response_or_awaitable)
     except httpx.ConnectError:
         if through_lobster_trap:
             return _LiveInteractionOutcome(
