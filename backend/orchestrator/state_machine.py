@@ -20,6 +20,9 @@ TurnKind = Literal[
     "a3_silo_response",
     "f1_aggregate",
     "a2_response_synthesis",
+    "f2_graph_analysis",
+    "f4_sar_draft",
+    "f5_audit_review",
 ]
 
 
@@ -54,10 +57,6 @@ def next_turn(state: SessionOrchestratorState) -> AgentTurn | None:
     if state.route_plan is None:
         return AgentTurn(kind="f1_route", agent_id="federation.F1")
 
-    route_plan = state.route_plan
-    if route_plan.sanctions_request is not None and state.sanctions_response is None:
-        return AgentTurn(kind="f3_sanctions", agent_id="federation.F3")
-
     routed_requests = state.routed_requests
     if len(state.a3_responses) < len(routed_requests):
         request = routed_requests[len(state.a3_responses)]
@@ -77,6 +76,18 @@ def next_turn(state: SessionOrchestratorState) -> AgentTurn | None:
             agent_id=f"{monitor_bank_id.value}.A2",
             bank_id=monitor_bank_id,
         )
+    if state.sar_contribution is not None and state.graph_pattern_response is None:
+        return AgentTurn(kind="f2_graph_analysis", agent_id="federation.F2")
+    if state.graph_pattern_response is not None and state.sanctions_response is None:
+        return AgentTurn(kind="f3_sanctions", agent_id="federation.F3")
+    if (
+        state.graph_pattern_response is not None
+        and state.sar_draft is None
+        and state.sar_contribution_request is None
+    ):
+        return AgentTurn(kind="f4_sar_draft", agent_id="federation.F4")
+    if state.sar_draft is not None and state.audit_review_result is None:
+        return AgentTurn(kind="f5_audit_review", agent_id="federation.F5")
     return None
 
 

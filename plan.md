@@ -175,7 +175,7 @@ Honest note on what DP doesn't do: it doesn't protect entity-presence binary que
 | Federation timeline | Live agent-to-agent conversation with LT verdicts overlaid, plus step/run controls | The multi-agent demo's signature visual |
 | Silo inspector | Per-bank A3 inbox, route approvals, P7 primitive calls, privacy budget, and returned fields | Shows that each silo owns its own data-plane enforcement |
 | System state dashboard | Signing keys, envelope verification, route-approval state, replay cache, DP ledger, RNG/noise metadata, LT/LiteLLM health, audit-chain head | Makes the hidden trust machinery inspectable |
-| Policy and attack lab | Prompt injection, customer-name leakage, MITM body tamper, replay, route mismatch, and budget-exhaustion attempts | Lets judges probe the security claims directly |
+| Policy and security probes | Lobster Trap prompt checks, customer-name leakage attempts, MITM body tamper, replay, route mismatch, and budget-exhaustion attempts | Lets judges probe the security claims directly |
 | Audit panel | Every LT decision, every DP debit, every schema violation, every route approval, and hash-chain status | The compliance dashboard |
 | SAR draft viewer | Structured form + attributed contributions | Regulatory artifact |
 
@@ -561,7 +561,7 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. PR #8 now integrates the AML data layer, shared message schemas, base agent runtime, A1, P7, A2, A3, the security envelope, F1, F2, F3, F4, F5, F6, the P9a/P9b control surface, the P15 local orchestrator adapter, and P18 judge-console polish. P15 currently runs the live A1 -> A2 -> F1 -> A3/P7 -> F3 -> F1 -> A2 path and stops at the explicit F4 handoff; P16/P17 are the next work needed to compose the built F2/F4/F5/F6 agents into a final end-to-end demo that terminates at a SARDraft plus audit review. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, policy state, and audit-chain state.
+The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. PR #8 integrated the AML data layer, shared message schemas, base agent runtime, A1, P7, A2, A3, the security envelope, F1, F2, F3, F4, F5, F6, the P9a/P9b control surface, the P15 local orchestrator adapter, and P18 judge-console polish. P16 now composes the built agents into the canonical stub run: A1 -> A2 -> F1 -> A3/P7 -> F2 -> F3 -> F4 -> F5, terminating at a SARDraft plus clean audit review. P17 remains the live Gemini/LT/LiteLLM smoke test over the same path. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, policy state, and audit-chain state.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
@@ -583,7 +583,7 @@ The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lo
 - **P13** F5 compliance auditor agent ✓
 - **P14** AML policy adapter + Lobster Trap overlay ✓
 - **P15** Agent orchestrator / message bus + API live adapters ✓
-- **P16** Canonical demo flow script ·
+- **P16** Canonical demo flow script ✓
 - **P17** End-to-end smoke test ·
 - **P18** Interactive judge console ✓
 - **P19** README + mermaid diagrams for AML ·
@@ -996,14 +996,14 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 - *Goal:* Build the browser frame separately from the API so the visual surface can evolve without changing backend contracts. The frame consumes P9a endpoints and renders a control-room style judge console with placeholders for unfinished components.
 - *Files:* `frontend/` (Vite + React + TypeScript), `frontend/src/api/` (generated or hand-written API client types from P9a schemas), `frontend/src/views/`, `frontend/src/components/`, `frontend/src/styles/`, `tests/test_ui_frame.py` or Playwright smoke tests once the frontend test harness exists.
 - *Frontend stack:* Vite + React + TypeScript. TanStack Query handles snapshot fetching. SSE or polling feeds the timeline depending on whether P15's audit stream is available. Keep the visual design quiet and operational, not marketing-style.
-- *Frame layout:* persistent run controls, federation timeline, right-side system-state panels, component inspector drawer, and attack-lab tab. Panels may show `not_built` placeholders, but their shape should be final enough that later milestones fill in data rather than redesigning navigation.
+- *Frame layout:* persistent run controls, federation timeline, right-side system-state panels, component inspector drawer, contextual security probes, and a focused Lobster Trap gate tab. Panels may show `not_built` placeholders, but their shape should be final enough that later milestones fill in data rather than redesigning navigation.
 - *Initial panels:*
   - Run status and scenario selector.
   - Federation topology with A2, F1, and three A3 silos visible.
   - Timeline list backed by `GET /sessions/{id}/timeline`.
   - Component inspector backed by `GET /sessions/{id}/components/{component_id}`.
   - System-state cards for signing, envelope verification, replay, route approval, DP ledger, provider health, and audit-chain status.
-  - Attack lab shell for prompt injection, MITM tamper, replay, route mismatch, unsupported query shape, and budget exhaustion probes.
+  - Security probe shell for prompt injection, MITM tamper, replay, route mismatch, unsupported query shape, and budget exhaustion probes.
 - *Out of scope for this part:* no final polish, no production auth, no arbitrary SQL explorer, no direct trust-decision controls, no hard dependency on live Gemini. The UI must display backend placeholder status honestly rather than inventing successful outputs.
 - *Acceptance:*
   - The React app renders the primary panes against fixture or local P9a API data without requiring live Gemini.
@@ -1012,8 +1012,8 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Run controls call P9a endpoints and show backend errors without swallowing refusal reasons.
   - Security-state panels show signing, route approval, replay, DP accounting, and provider health as first-class UI, not raw JSON dumps.
   - The interaction console calls the typed component-interaction endpoint and records timeline events without privileged state mutation.
-  - The LLM route view shows per-domain model-route cards rather than a single global LiteLLM box.
-- *Current implementation:* P9b lives in `frontend/` as a Vite React TypeScript app. It uses a committed `openapi-typescript` client schema generated from P9a, TanStack Query polling, hash tabs, a five-column swimlane topology, Radix inspector drawer, interaction console, LLM route view, system readiness view, and attack lab. `scripts/start_frontend.ps1` starts the local Vite server on `127.0.0.1:5173`.
+  - The Lobster Trap gate view shows the model-route path, provider health, model-using origins, and prompt-policy test harness without making LiteLLM a separate product surface.
+- *Current implementation:* P9b lives in `frontend/` as a Vite React TypeScript app. It uses a committed `openapi-typescript` client schema generated from P9a, TanStack Query polling, hash tabs, a five-column swimlane topology, Radix inspector drawer, interaction console, Demo Flow security probes, a console-embedded system readiness rail, judge-facing About page, and Lobster Trap gate testing. `scripts/start_frontend.ps1` starts the local Vite server on `127.0.0.1:5173`.
 - *Risks specific to this part:* (a) frontend scope could expand. Mitigation: ship structure and interaction first; visual polish waits for P18. (b) the UI could imply privileges it does not have. Mitigation: all controls call P9a and normal policy paths. (c) layout work can consume time. Mitigation: use dense, operational panels and avoid a landing page.
 - *Depends on:* P9a.
 - *Scope check:* one short session for the first browser frame.
@@ -1231,8 +1231,11 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P16 — Canonical demo flow script**
 
+- *Status:* Built. `uv run python -m backend.demo.canonical_flow --stub` drives the canonical S1 flow through F2, F4, and F5, writes `out/sar_draft.json` plus `out/audit.jsonl`, and exits non-zero if the terminal state is not `sar_draft_ready`. `uv run python -m backend.notebooks.generate_case_notebook --stub` turns the same federation-safe artifacts into `out/notebooks/s1_structuring_ring_analysis.ipynb`, a typed artifact bundle, notebook HTML, and artifact HTML.
+- *Implementation note:* P16 uses deterministic S1 seed facts for peer SAR amount ranges because the current contracts do not include a peer-A2 contribution request/response step. The seeded facts are still wrapped in typed `SARContribution` models; a later protocol can replace that helper without changing F4/F5 contracts.
 - *Goal:* A reproducible script that drives the entire demo flow from a fixed seed without manual UI clicking — for dry-run, screen-recording, and verification.
 - *Files:* `backend/demo/__init__.py`, `backend/demo/canonical_flow.py`, `backend/demo/seeds.py` (the deterministic starting-alert specification).
+- *Notebook reporting:* `backend/notebooks/` builds a `CaseNotebookArtifacts` bundle from the live orchestrator state, then writes a Jupyter notebook, rendered notebook HTML, rendered artifact HTML, and sanitized JSON for reproducibility. The report reconstructs the pooled F2 statistic from per-bank statistical intermediaries, lists DP provenance, and summarizes F3/F4/F5/F6 outputs. It never reads raw silo tables. The P9a/P16 API endpoint `POST /sessions/{session_id}/case-notebook` runs the current demo path to idle if needed and returns both HTML documents for the Demo Flow page and the standalone `#/notebook` / `#/artifacts` pages. Generated HTML includes static flow and bar-chart graphics, and code cells are collapsed by default with a UI **Show code** toggle. Optional `--llm-narrative` lets the local model route write bounded markdown prose from the artifact summary only; code cells and facts remain deterministic.
 - *Approach:*
   1. Initialize the orchestrator (P15) against the canonical `data/silos/*.db` databases.
   2. Pick a deterministic S1-related starting alert from Bank Alpha — specifically, the alert with the highest severity score on the S1-A entity. (Choice is deterministic given the data layer's seeded RNG; encoded as a `transaction_id` constant in `seeds.py`.)
@@ -1303,7 +1306,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   │  [00:05] F4 ──SAR──> orch      │  Human-review flags: 0          │
   └──────────────────────────────────┴─────────────────────────────────┘
   ```
-- The block above is a wireframe only. The implementation target is a browser dashboard with resizable panels, inspector drawers, and an attack-lab tab, not a Rich terminal renderer.
+- The block above is a wireframe only. The implementation target is a browser dashboard with resizable panels, inspector drawers, contextual security probes, and a focused Lobster Trap gate tab, not a Rich terminal renderer.
 - *Implementation notes:* This milestone should fill in and polish the existing P9b layout, not rebuild it. The web server subscribes to the audit channel via `audit.subscribe()` and calls the P9a/P15 control API for run, step, inspect, inject, and export actions. Privacy-budget meters display rho plus approximate epsilon values derived from the ledger. Message cards are color-coded by agent role (A1=cyan, A2=green, A3=teal, F1=yellow, F2=magenta, F3=red, F4=blue, F5=white). Long messages collapse by default, with full typed JSON visible in an inspector drawer.
 - *Interaction model:*
   - **Run controls:** start scenario, reset, step once, run until next artifact, run until idle, switch stub/live/live-with-stub-fallback.
@@ -1320,7 +1323,7 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
   - Signing, route-approval, replay, DP-ledger, LT, LiteLLM, and audit-chain state are visible as first-class panels, not buried in raw logs.
   - Each security probe reaches the expected block/refusal layer and creates an audit event visible in the audit panel.
   - Layout readable at 1920×1080 resolution (the screen-recording target).
-- *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one attack lab tab first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P9a/P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.
+- *Risks specific to this part:* (a) The UI could sprawl because every layer is interesting. Mitigation: ship one primary run view, one inspector drawer, and one focused Lobster Trap/security-probe surface first. (b) The UI could accidentally bypass the architecture it is meant to demonstrate. Mitigation: all actions go through the P9a/P15 control API and normal policy checks. (c) Browser polish can consume time fast. Mitigation: use a restrained operational dashboard, no marketing page.
 - *Depends on:* P9a, P9b, P15. P18 is implemented before P16 final-flow composition and should be refined against the P16/P17 live terminal path when that lands.
 - *Scope check:* one focused session for the layout; another for the polish (colors, spacing, edge cases).
 

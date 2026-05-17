@@ -28,3 +28,6 @@ def test_stub_pattern_aggregate_for_f2_matches_real_primitive_contract() -> None
         "bucketed_flow_histogram",
         "candidate_entity_hashes",
     }
+    debited = [record for record in result.records if record.rho_debited > 0.0]
+    assert debited
+    assert all(record.rho_remaining == 0.96 for record in debited)

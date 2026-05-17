@@ -109,6 +109,28 @@ export function useRunUntilIdle(sessionId: string | null) {
   });
 }
 
+export function useCaseNotebookReport(sessionId: string | null) {
+  return useQuery({
+    queryKey: qk.caseNotebook(sessionId),
+    queryFn: () => api.caseNotebookLatest(sessionId ?? ""),
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useGenerateCaseNotebook(sessionId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["case-notebook", sessionId],
+    mutationFn: () => api.caseNotebook(sessionId ?? ""),
+    onSuccess: async () => {
+      if (!sessionId) return;
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.caseNotebook(sessionId) });
+    },
+  });
+}
+
 export function useProbe(sessionId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
@@ -130,7 +152,7 @@ export function useInteraction(sessionId: string | null, componentId: ComponentI
     // mutations. Note: TanStack's useMutation does NOT auto-reset state
     // when this key changes; callers must call `.reset()` in an effect
     // if they want stale `error`/`data` to clear when componentId
-    // changes (see LlmRouteView and InteractionConsole).
+    // changes (see LobsterTrapGateCard and InteractionConsole).
     mutationKey: ["interaction", sessionId, componentId],
     mutationFn: (request: ComponentInteractionRequest) =>
       api.interaction(sessionId ?? "", componentId, request),

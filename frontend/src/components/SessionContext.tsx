@@ -11,6 +11,7 @@ export type SessionContextValue = {
   sessionId: string | null;
   session: SessionSnapshot | null;
   setSessionId: (sessionId: string | null) => void;
+  recoverSession: () => void;
   selection: InspectorSelection | null;
   setSelection: (selection: InspectorSelection | null) => void;
 };

@@ -14,8 +14,13 @@ from backend.agents.a2_states import SynthesisDecision
 from backend.agents.a3_silo_responder import A3SiloResponderAgent
 from backend.agents.base import AuditEmitter
 from backend.agents.f1_coordinator import F1CoordinatorAgent
+from backend.agents.f2_graph_analysis import F2GraphAnalysisAgent
 from backend.agents.f3_sanctions import F3SanctionsAgent
+from backend.agents.f4_sar_drafter import F4SARDrafterAgent
+from backend.agents.f5_compliance_auditor import F5ComplianceAuditorAgent
 from backend.agents.llm_client import LLMClient
+from backend.demo.seeds import F4_STUB_NARRATIVE
+from backend.policy import AmlPolicyConfig, AmlPolicyEvaluator
 from backend.runtime.context import AgentRuntimeContext, LLMClientConfig, TrustDomain
 from backend.security import (
     PrincipalAllowlist,
@@ -23,7 +28,7 @@ from backend.security import (
     ReplayCache,
     generate_key_pair,
 )
-from backend.silos.budget import RequesterKey
+from backend.silos.budget import PrivacyBudgetLedger, RequesterKey
 from backend.silos.stats_primitives import BankStatsPrimitives, PrimitiveResult
 from shared.enums import (
     AgentRole,
@@ -41,6 +46,17 @@ BANK_IDS: tuple[BankId, ...] = (
     BankId.BANK_BETA,
     BankId.BANK_GAMMA,
 )
+POLICY_BANK_IDS: tuple[BankId, ...] = (*BANK_IDS, BankId.FEDERATION)
+_STUB_EDGE_BY_BANK: dict[BankId, list[int]] = {
+    BankId.BANK_ALPHA: [1, 2, 2, 5],
+    BankId.BANK_BETA: [1, 2, 3, 6],
+    BankId.BANK_GAMMA: [1, 1, 2, 4],
+}
+_STUB_FLOW_BY_BANK: dict[BankId, list[int]] = {
+    BankId.BANK_ALPHA: [0, 3, 42, 3, 0],
+    BankId.BANK_BETA: [0, 2, 48, 4, 0],
+    BankId.BANK_GAMMA: [0, 3, 39, 2, 0],
+}
 
 
 class PrimitiveProvider(Protocol):
@@ -112,7 +128,11 @@ class AgentRegistry:
     a2_by_bank: dict[BankId, A2InvestigatorAgent]
     a3_by_bank: dict[BankId, A3SiloResponderAgent]
     f1: F1CoordinatorAgent
+    f2: F2GraphAnalysisAgent
     f3: F3SanctionsAgent
+    f4: F4SARDrafterAgent
+    f5: F5ComplianceAuditorAgent
+    f6_by_agent_id: dict[str, AmlPolicyEvaluator]
     replay_cache: ReplayCache
 
     @classmethod
@@ -216,12 +236,65 @@ class AgentRegistry:
             ),
             audit=audit,
         )
+        f2 = F2GraphAnalysisAgent(
+            runtime=_context(
+                run_id=run_id,
+                node_id="federation-f2-node",
+                trust_domain=TrustDomain.FEDERATION,
+                stub_mode=stub_mode,
+                audit=audit,
+            ),
+            audit=audit,
+        )
+        f4 = F4SARDrafterAgent(
+            runtime=_context(
+                run_id=run_id,
+                node_id="federation-f4-node",
+                trust_domain=TrustDomain.FEDERATION,
+                stub_mode=stub_mode,
+                audit=audit,
+            ),
+            llm=LLMClient(
+                _llm_config(
+                    node_id="federation-f4-node",
+                    stub_mode=stub_mode,
+                ),
+                stub_responses=(
+                    [{"narrative": F4_STUB_NARRATIVE}] if stub_mode else None
+                ),
+            ),
+            audit=audit,
+        )
+        f5 = F5ComplianceAuditorAgent(
+            runtime=_context(
+                run_id=run_id,
+                node_id="federation-f5-node",
+                trust_domain=TrustDomain.FEDERATION,
+                stub_mode=stub_mode,
+                audit=audit,
+            ),
+            audit=audit,
+        )
+        f6_by_agent_id = {
+            f"{bank_id.value}.F6": AmlPolicyEvaluator(
+                config=AmlPolicyConfig(
+                    policy_agent_id=f"{bank_id.value}.F6",
+                    policy_bank_id=bank_id,
+                    audit_recipient_agent_id="federation.audit",
+                )
+            )
+            for bank_id in POLICY_BANK_IDS
+        }
         return cls(
             a1_by_bank=a1_by_bank,
             a2_by_bank=a2_by_bank,
             a3_by_bank=a3_by_bank,
             f1=f1,
+            f2=f2,
             f3=f3,
+            f4=f4,
+            f5=f5,
+            f6_by_agent_id=f6_by_agent_id,
             replay_cache=replay_cache,
         )
 
@@ -233,6 +306,7 @@ class StubBankStatsPrimitives:
         if bank_id == BankId.FEDERATION:
             raise ValueError("stub primitives require a real bank")
         self.bank_id = bank_id
+        self.ledger = PrivacyBudgetLedger()
 
     def count_entities_by_name_hash(
         self,
@@ -264,7 +338,9 @@ class StubBankStatsPrimitives:
         requester: RequesterKey,
         rho: float = 0.02,
     ) -> PrimitiveResult:
-        _ = requester
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return PrimitiveResult(refusal_reason="budget_exhausted")
         value_by_bank = {
             BankId.BANK_ALPHA: 4,
             BankId.BANK_BETA: 3,
@@ -284,6 +360,7 @@ class StubBankStatsPrimitives:
                     },
                     returned_value_kind=ResponseValueKind.INT,
                     rho_debited=rho,
+                    rho_remaining=debit.rho_remaining,
                 )
             ],
         )
@@ -296,7 +373,9 @@ class StubBankStatsPrimitives:
         requester: RequesterKey,
         rho: float = 0.03,
     ) -> PrimitiveResult:
-        _ = requester
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return PrimitiveResult(refusal_reason="budget_exhausted")
         return PrimitiveResult(
             value=[0, 2, 4, 1, 0],
             records=[
@@ -311,6 +390,7 @@ class StubBankStatsPrimitives:
                     },
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho,
+                    rho_remaining=debit.rho_remaining,
                 )
             ],
         )
@@ -323,12 +403,14 @@ class StubBankStatsPrimitives:
         candidate_entity_hashes: list[str] | None = None,
         rho: float = 0.04,
     ) -> PrimitiveResult:
-        _ = requester
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return PrimitiveResult(refusal_reason="budget_exhausted")
         approved_candidates = sorted(set(candidate_entity_hashes or []))
         aggregate = BankAggregate(
             bank_id=self.bank_id,
-            edge_count_distribution=[1, 0, 2, 0],
-            bucketed_flow_histogram=[0, 4, 1, 0, 0],
+            edge_count_distribution=_STUB_EDGE_BY_BANK[self.bank_id],
+            bucketed_flow_histogram=_STUB_FLOW_BY_BANK[self.bank_id],
             candidate_entity_hashes=approved_candidates,
             rho_debited=rho,
         )
@@ -341,6 +423,7 @@ class StubBankStatsPrimitives:
                     args={"window_start": window[0].isoformat(), "rho": rho},
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho / 2,
+                    rho_remaining=debit.rho_remaining,
                 ),
                 _primitive_record(
                     field_name="bucketed_flow_histogram",
@@ -348,6 +431,7 @@ class StubBankStatsPrimitives:
                     args={"window_end": window[1].isoformat(), "rho": rho},
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho / 2,
+                    rho_remaining=debit.rho_remaining,
                 ),
                 _primitive_record(
                     field_name="candidate_entity_hashes",
@@ -466,6 +550,7 @@ def _primitive_record(
     args: dict[str, object],
     returned_value_kind: ResponseValueKind,
     rho_debited: float,
+    rho_remaining: float | None = None,
 ) -> PrimitiveCallRecord:
     return PrimitiveCallRecord(
         field_name=field_name,
@@ -473,6 +558,7 @@ def _primitive_record(
         args_hash=_args_hash(args),
         privacy_unit=PrivacyUnit.TRANSACTION,
         rho_debited=rho_debited,
+        rho_remaining=rho_remaining,
         eps_delta_display=(0.5, 0.000001) if rho_debited else None,
         sigma_applied=5.0 if rho_debited else None,
         sensitivity=1.0,

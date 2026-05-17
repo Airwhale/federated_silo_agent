@@ -17,6 +17,8 @@ venv/
 # Local tooling and runtime outputs
 .tools/
 logs/
+out/
+artifacts/
 *.log
 
 # Frontend ignores live in ``frontend/.gitignore`` (Vite scaffolding)

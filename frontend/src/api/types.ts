@@ -6,6 +6,7 @@ export type SessionSnapshot = components["schemas"]["SessionSnapshot"];
 export type SessionCreateRequest = components["schemas"]["SessionCreateRequest"];
 export type SessionMode = components["schemas"]["SessionMode"];
 export type TimelineEventSnapshot = components["schemas"]["TimelineEventSnapshot"];
+export type CaseNotebookReportSnapshot = components["schemas"]["CaseNotebookReportSnapshot"];
 export type ComponentSnapshot = components["schemas"]["ComponentSnapshot"];
 export type ComponentId = components["schemas"]["ComponentId"];
 export type ComponentReadinessSnapshot = components["schemas"]["ComponentReadinessSnapshot"];

@@ -71,6 +71,17 @@ export function describeError(error: unknown): string {
   return "Unexpected UI error.";
 }
 
+export function isUnknownSessionError(error: unknown): boolean {
+  return (
+    error instanceof ApiError
+    && error.status === 404
+    && (
+      error.detail.includes("unknown_session_id")
+      || error.detail.includes("unknown session_id")
+    )
+  );
+}
+
 export function normalizeTransportError(error: unknown): ApiError {
   if (error instanceof ApiError) {
     return error;

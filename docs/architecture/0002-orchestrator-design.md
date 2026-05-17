@@ -12,25 +12,24 @@ P10-P14 build the federated AML agents (A1, A2, A3, F1, F2, F3, F4, F5) and the 
 
 P15's job is to wire the built agents into a live session so a judge pressing the Step button in the console actually advances the demo through real cross-agent messages, with security envelopes verified at each boundary and timeline/component snapshots updating from real runtime state.
 
-This was the highest-risk workstream in the PR #8 integration wave. The implemented branch deliberately lands a bounded first adapter: A1, A2, F1, A3/P7, F3, F1 aggregation, and A2 synthesis are live; the run stops at the F4 handoff. P16/P17 own composing the already-built F2, F4, F5, and F6 workstreams into the final terminal demo flow.
+This was the highest-risk workstream in the PR #8 integration wave. The first adapter landed A1, A2, F1, A3/P7, F3, F1 aggregation, and A2 synthesis. P16 extends that path through F2 graph analysis, inline F6 policy records, F4 SAR drafting, and F5 audit review for the canonical stub run. P17 owns the live Gemini/LT/LiteLLM smoke test over the same path.
 
 ## Decision
 
-### PR #8 implementation note
+### PR #8/P16 implementation note
 
 The current implementation is a single-process, deterministic, per-session
-orchestrator in `backend/orchestrator/`. It does not yet implement the full
-conceptual state machine below. In PR #8:
+orchestrator in `backend/orchestrator/`. PR #8 landed the first live spine, and
+P16 adds the canonical terminal composition:
 
 - `Step` and `run-until-idle` exercise live A1, A2, F1, A3, P7 primitives, F3,
-  F1 aggregation, and A2 synthesis.
+  F1 aggregation, A2 synthesis, F2, F4, and F5.
 - the in-memory audit hash chain is live and exposed through UI snapshots.
-- F2, F4, F5, and F6 are implemented, tested, and visible as live components,
-  but are not scheduled by the current P15 turn machine.
-- `run-until-idle` stops at `F4 pending after A2 SAR contribution.`
+- F6 remains an inline per-message policy gate. P16 stores typed policy
+  records keyed by message so F5 and the UI can correlate policy verdicts.
+- `run-until-idle` now reaches `sar_draft_ready` for the canonical stub flow.
 
-The design sections below remain the target shape for P16/P17 final-demo
-composition.
+P17 remains the target for live provider smoke coverage.
 
 ### Turn semantics
 

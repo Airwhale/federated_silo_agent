@@ -1,6 +1,6 @@
 import { ShieldAlert, Shuffle } from "lucide-react";
-import { useMemo, useState } from "react";
-import { describeError } from "@/api/errors";
+import { useEffect, useMemo, useState } from "react";
+import { describeError, isUnknownSessionError } from "@/api/errors";
 import { useProbe } from "@/api/hooks";
 import type { AttackerProfile, ComponentId, ProbeResult } from "@/api/types";
 import { FieldLabel } from "@/components/forms/FieldLabel";
@@ -39,9 +39,10 @@ function targetComponentForProbe(
   defaultComponent: ComponentId,
   businessTarget: ComponentId,
   policyGateEnabled: boolean | null,
+  usesBusinessTarget: boolean,
 ): ComponentId {
-  if (policyGateEnabled !== null) {
-    return policyGateEnabled ? "lobster_trap" : "litellm";
+  if (usesBusinessTarget || policyGateEnabled !== null) {
+    return businessTarget;
   }
   if (
     defaultComponent === "bank_alpha.A3"
@@ -54,7 +55,7 @@ function targetComponentForProbe(
 }
 
 export function ProbeForm({ config }: Props) {
-  const { sessionId } = useSessionContext();
+  const { sessionId, recoverSession } = useSessionContext();
   const [instanceId, setInstanceId] = useState<TrustDomain>(config.defaultInstance);
   const [businessTarget, setBusinessTarget] = useState<ComponentId>(config.defaultBusinessTarget);
   const [runThroughLobsterTrap, setRunThroughLobsterTrap] = useState(
@@ -64,20 +65,45 @@ export function ProbeForm({ config }: Props) {
     useState<AttackerProfile>(config.defaultProfile);
   const normalPayloads = config.normalPayloads ?? [];
   const attackPayloads = config.attackPayloads ?? (config.payload ? [config.payload] : []);
+  const attackerProfiles = config.profiles ?? ATTACKER_PROFILES;
   const [payloadText, setPayloadText] = useState(
     config.payload ?? attackPayloads[0] ?? normalPayloads[0] ?? "",
   );
   const [lastResult, setLastResult] = useState<ProbeResult | null>(null);
   const mutation = useProbe(sessionId);
+  const usesBusinessTarget = Boolean(config.businessTargets || config.policyGateToggle);
+
+  useEffect(() => {
+    if (isUnknownSessionError(mutation.error)) {
+      mutation.reset();
+      recoverSession();
+    }
+    // ``mutation.reset`` is stable per hook instance; including the
+    // full mutation object would loop across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mutation.error, recoverSession]);
 
   const instance = TRUST_INSTANCES.find((item) => item.id === instanceId) ?? TRUST_INSTANCES[0];
+  const componentAllowedForProbe = (componentId: ComponentId) =>
+    BUSINESS_COMPONENTS.has(componentId)
+    && (!config.businessTargets || config.businessTargets.includes(componentId));
+  const selectableInstances = useMemo(() => {
+    if (!usesBusinessTarget) return TRUST_INSTANCES;
+    const matches = TRUST_INSTANCES.filter((item) =>
+      item.mechanisms.some((mechanism) => componentAllowedForProbe(mechanism.componentId)),
+    );
+    return matches.length ? matches : TRUST_INSTANCES;
+  }, [config.businessTargets, usesBusinessTarget]);
+  const visibleInstance = selectableInstances.some((item) => item.id === instanceId)
+    ? instance
+    : selectableInstances[0];
   const allowedComponents = useMemo(() => {
-    return instance.mechanisms.filter((item) => {
+    return visibleInstance.mechanisms.filter((item) => {
       const allowedByProbe =
         !config.businessTargets || config.businessTargets.includes(item.componentId);
       return allowedByProbe && BUSINESS_COMPONENTS.has(item.componentId);
     });
-  }, [config.businessTargets, instance]);
+  }, [config.businessTargets, visibleInstance]);
   const visibleBusinessTarget = allowedComponents.some((item) => item.componentId === businessTarget)
     ? businessTarget
     : allowedComponents[0]?.componentId ?? config.defaultBusinessTarget;
@@ -85,7 +111,21 @@ export function ProbeForm({ config }: Props) {
     config.defaultComponent,
     visibleBusinessTarget,
     config.policyGateToggle ? runThroughLobsterTrap : null,
+    usesBusinessTarget,
   );
+
+  useEffect(() => {
+    if (visibleInstance.id !== instanceId) {
+      setInstanceId(visibleInstance.id);
+      const nextBusinessTarget = visibleInstance.mechanisms.find(
+        (mechanism) => componentAllowedForProbe(mechanism.componentId),
+      );
+      setBusinessTarget(nextBusinessTarget?.componentId ?? config.defaultBusinessTarget);
+    }
+    // ``componentAllowedForProbe`` closes over stable config props for
+    // this card; including it would recreate the effect every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.defaultBusinessTarget, instanceId, visibleInstance]);
 
   return (
     <article className="flex flex-col rounded-lg border border-slate-800 bg-slate-950">
@@ -116,23 +156,20 @@ export function ProbeForm({ config }: Props) {
         <div className="grid gap-2 sm:grid-cols-3">
           <FieldLabel label="Target instance">
             <select
-              value={instanceId}
+              value={visibleInstance.id}
               onChange={(event) => {
                 const next = event.target.value as TrustDomain;
                 const nextInstance =
-                  TRUST_INSTANCES.find((item) => item.id === next) ?? TRUST_INSTANCES[0];
+                  selectableInstances.find((item) => item.id === next) ?? selectableInstances[0];
                 setInstanceId(next);
                 const nextBusinessTarget = nextInstance.mechanisms.find(
-                  (mechanism) =>
-                    BUSINESS_COMPONENTS.has(mechanism.componentId)
-                    && (!config.businessTargets
-                      || config.businessTargets.includes(mechanism.componentId)),
+                  (mechanism) => componentAllowedForProbe(mechanism.componentId),
                 );
                 setBusinessTarget(nextBusinessTarget?.componentId ?? config.defaultBusinessTarget);
               }}
               className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
             >
-              {TRUST_INSTANCES.map((item) => (
+              {selectableInstances.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.label}
                 </option>
@@ -140,19 +177,27 @@ export function ProbeForm({ config }: Props) {
             </select>
           </FieldLabel>
 
-          <FieldLabel label="Business target">
-            <select
-              value={visibleBusinessTarget}
-              onChange={(event) => setBusinessTarget(event.target.value as ComponentId)}
-              className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
-            >
-              {allowedComponents.map((item) => (
-                <option key={`${item.id}-${item.componentId}`} value={item.componentId}>
-                  {componentLabel(item.componentId)}
-                </option>
-              ))}
-            </select>
-          </FieldLabel>
+          {usesBusinessTarget ? (
+            <FieldLabel label="Business target">
+              <select
+                value={visibleBusinessTarget}
+                onChange={(event) => setBusinessTarget(event.target.value as ComponentId)}
+                className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
+              >
+                {allowedComponents.map((item) => (
+                  <option key={`${item.id}-${item.componentId}`} value={item.componentId}>
+                    {componentLabel(item.componentId)}
+                  </option>
+                ))}
+              </select>
+            </FieldLabel>
+          ) : (
+            <FieldLabel label="Probe target">
+              <div className="rounded border border-slate-800 bg-slate-950 px-1.5 py-1 text-xs text-slate-300">
+                {componentLabel(config.defaultComponent)}
+              </div>
+            </FieldLabel>
+          )}
 
           <FieldLabel label="Profile">
             <select
@@ -160,7 +205,7 @@ export function ProbeForm({ config }: Props) {
               onChange={(event) => setAttackerProfile(event.target.value as AttackerProfile)}
               className="rounded border border-slate-700 bg-slate-900 px-1.5 py-1 text-xs text-slate-100"
             >
-              {ATTACKER_PROFILES.map((item) => (
+              {attackerProfiles.map((item) => (
                 <option key={item} value={item}>
                   {item.replaceAll("_", " ")}
                 </option>
@@ -242,6 +287,7 @@ export function ProbeForm({ config }: Props) {
                 attacker_profile: attackerProfile,
                 payload_text: config.acceptsPayload ? payloadText.trim() || undefined : undefined,
                 target_instance_id: instanceId,
+                route_through_lobster_trap: config.policyGateToggle ? runThroughLobsterTrap : true,
               },
               {
                 onSuccess: (result) => setLastResult(result),

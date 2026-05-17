@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 
 from backend.ui.snapshots import (
+    CaseNotebookReportSnapshot,
     ComponentId,
     ComponentInteractionRequest,
     ComponentInteractionResult,
@@ -68,6 +69,26 @@ def create_router(service: DemoControlService) -> APIRouter:
     def run_until_idle(session_id: UUID) -> SessionSnapshot:
         try:
             return control.run_until_idle(session_id)
+        except KeyError as exc:
+            raise _not_found(exc) from exc
+
+    @router.post(
+        "/sessions/{session_id}/case-notebook",
+        response_model=CaseNotebookReportSnapshot,
+    )
+    def case_notebook(session_id: UUID) -> CaseNotebookReportSnapshot:
+        try:
+            return control.generate_case_notebook_report(session_id)
+        except KeyError as exc:
+            raise _not_found(exc) from exc
+
+    @router.get(
+        "/sessions/{session_id}/case-notebook",
+        response_model=CaseNotebookReportSnapshot,
+    )
+    def get_case_notebook(session_id: UUID) -> CaseNotebookReportSnapshot:
+        try:
+            return control.case_notebook_report(session_id)
         except KeyError as exc:
             raise _not_found(exc) from exc
 

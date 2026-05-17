@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.136.1",
     "httpx>=0.28.1",
     "litellm[proxy]>=1.75",
+    "markdown-it-py>=4.2",
     "numpy>=2.4.4",
     "opendp>=0.14.2",
     "pandas>=3.0.3",

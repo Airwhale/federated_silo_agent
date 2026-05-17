@@ -16,9 +16,14 @@ export function ModelRoutePanel({ providerHealth, trustDomainLabel, lastResult }
   }
   rows.push(
     {
+      label: "Route path",
+      value: "Agent -> Lobster Trap -> LiteLLM -> provider",
+      tone: "good",
+    },
+    {
       label: "Route state",
-      value: configured ? "LT and model proxy configured" : "configuration incomplete",
-      tone: configured ? "good" : "muted",
+      value: providerHealth.status === "live" ? "LT and model proxy reachable" : "configuration incomplete",
+      tone: providerHealth.status === "live" ? "good" : "muted",
     },
     {
       label: "Lobster Trap",
@@ -47,8 +52,8 @@ export function ModelRoutePanel({ providerHealth, trustDomainLabel, lastResult }
   rows.push(
     {
       label: "Live adapter",
-      value: "P14/P15 will replace this presence snapshot with per-domain request telemetry",
-      tone: "muted",
+      value: providerHealth.status === "live" ? "live local route checks enabled" : "waiting for local proxy reachability",
+      tone: providerHealth.status === "live" ? "good" : "muted",
     },
   );
 
