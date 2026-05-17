@@ -906,6 +906,11 @@ class DemoControlService:
     def _run_until_idle_worker(self, session: DemoSessionRuntime) -> None:
         try:
             self._run_until_idle_sync(session)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "Background run-until-idle failed for session %s",
+                session.session_id,
+            )
         finally:
             with session.lock:
                 session.run_until_idle_thread = None
