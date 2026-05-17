@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import inspect
+import textwrap
 from collections import Counter
 from datetime import UTC, datetime
 from enum import StrEnum
 from html import escape
+from importlib.resources import files
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -42,6 +45,7 @@ NotebookParagraph = Annotated[
 NOTEBOOK_PROMPT_PATH = (
     BACKEND_ROOT / "notebooks" / "prompts" / "case_notebook_narrative.md"
 )
+CASE_REPORT_CSS_RESOURCE = "case_report.css"
 NOTEBOOK_REPORTER_AGENT_ID = "federation.notebook_reporter"
 NOTEBOOK_REPORTER_NODE_ID = "federation-notebook-node"
 _FEDERATION_NODE_ID_PREFIX = "federation-"
@@ -408,32 +412,17 @@ def _build_notebook(
             "summing same-shaped histogram buckets. Candidate hashes are carried "
             "through as approved tokens, not discovered from raw bank rows."
         ),
-        # Deliberate duplication with the module-level ``_sum_vectors``
-        # helper at the bottom of this file: the in-notebook function is
-        # part of what a regulator/judge SEES when they open the
-        # notebook, and the inspection-and-re-run value depends on the
-        # pooling math being visible as code rather than as a
-        # pre-computed result injected from Python. Keep both copies in
-        # lockstep; the alternative (inject the result, drop the code
-        # cell) loses the notebook's "verify the algorithm" property.
         _code(
-            "def sum_vectors(rows, key):\n"
-            "    # Match the module-level ``_sum_vectors`` semantics:\n"
-            "    # banks may emit different-width vectors and the\n"
-            "    # narrow ``len(rows[0][key])`` form would IndexError\n"
-            "    # on the first cross-width pooling.\n"
-            "    if not rows:\n"
-            "        return []\n"
-            "    vectors = [row[key] for row in rows]\n"
-            "    width = max(len(v) for v in vectors)\n"
-            "    return [\n"
-            "        sum(v[idx] for v in vectors if idx < len(v))\n"
-            "        for idx in range(width)\n"
-            "    ]\n\n"
+            _sum_vectors_notebook_source()
+            + "\n\n"
             "rows = CASE_ARTIFACTS['statistical_intermediaries']\n"
             "pooled = {\n"
-            "    'edge_count_distribution': sum_vectors(rows, 'edge_count_distribution'),\n"
-            "    'bucketed_flow_histogram': sum_vectors(rows, 'bucketed_flow_histogram'),\n"
+            "    'edge_count_distribution': _sum_vectors(\n"
+            "        [row['edge_count_distribution'] for row in rows]\n"
+            "    ),\n"
+            "    'bucketed_flow_histogram': _sum_vectors(\n"
+            "        [row['bucketed_flow_histogram'] for row in rows]\n"
+            "    ),\n"
             "    'candidate_entity_hashes': sorted({\n"
             "        token\n"
             "        for row in rows\n"
@@ -713,6 +702,16 @@ def _sum_vectors(vectors: list[list[int]]) -> list[int]:
     ]
 
 
+def _sum_vectors_notebook_source() -> str:
+    """Return notebook-visible pooling code from the same source of truth."""
+    return textwrap.dedent(
+        inspect.getsource(_sum_vectors)
+    ).replace(
+        "def _sum_vectors(vectors: list[list[int]]) -> list[int]:",
+        "def _sum_vectors(vectors):",
+    )
+
+
 def _summary_graphics_html(artifacts: CaseNotebookArtifacts) -> str:
     graph = artifacts.graph_pattern_response
     sar = artifacts.sar_draft
@@ -867,6 +866,7 @@ def _markdown_to_html(source: str) -> str:
 def _html_document(*, title: str, eyebrow: str, body: str) -> str:
     escaped_title = escape(title)
     escaped_eyebrow = escape(eyebrow)
+    stylesheet = _case_report_css()
     return (
         "<!doctype html>\n"
         '<html lang="en">\n'
@@ -874,59 +874,7 @@ def _html_document(*, title: str, eyebrow: str, body: str) -> str:
         '  <meta charset="utf-8" />\n'
         f"  <title>{escaped_title}</title>\n"
         "  <style>\n"
-        "    :root { color-scheme: light; font-family: Inter, ui-sans-serif, "
-        "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }\n"
-        "    body { margin: 0; background: #f8fafc; color: #0f172a; }\n"
-        "    main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 48px; }\n"
-        "    .eyebrow { margin: 0 0 8px; color: #0369a1; font-size: 12px; "
-        "font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }\n"
-        "    h1 { margin: 0 0 16px; font-size: 30px; line-height: 1.15; }\n"
-        "    h2 { margin: 0 0 10px; font-size: 18px; }\n"
-        "    h3 { margin: 0 0 8px; font-size: 15px; }\n"
-        "    p, li { color: #334155; font-size: 14px; line-height: 1.6; }\n"
-        "    ul { margin: 8px 0 0 22px; padding: 0; }\n"
-        "    .case-card { margin-top: 14px; border: 1px solid #cbd5e1; "
-        "border-radius: 8px; background: #ffffff; padding: 18px; "
-        "box-shadow: 0 1px 2px rgba(15, 23, 42, .06); }\n"
-        "    .code-cell { background: #0f172a; color: #dbeafe; }\n"
-        "    .code-cell summary { cursor: pointer; color: #93c5fd; font-size: 11px; "
-        "font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }\n"
-        "    .code-cell[open] summary { margin-bottom: 8px; }\n"
-        "    pre { overflow-x: auto; margin: 0; white-space: pre-wrap; "
-        "word-break: break-word; }\n"
-        "    code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', "
-        "monospace; font-size: 12px; line-height: 1.55; }\n"
-        "    .json-block { margin-top: 14px; border-radius: 8px; background: #0f172a; "
-        "color: #dbeafe; padding: 18px; }\n"
-        "    .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); "
-        "gap: 10px; margin-top: 14px; }\n"
-        "    .metric-card { border: 1px solid #dbe3ee; border-radius: 8px; padding: 10px; "
-        "background: #f8fafc; }\n"
-        "    .metric-card span { display: block; color: #64748b; font-size: 11px; "
-        "font-weight: 700; text-transform: uppercase; }\n"
-        "    .metric-card strong { display: block; margin-top: 4px; color: #0f172a; "
-        "font-size: 15px; }\n"
-        "    .flow-graphic { margin-top: 14px; overflow-x: auto; border: 1px solid #e2e8f0; "
-        "border-radius: 8px; background: #f8fafc; }\n"
-        "    .flow-graphic svg { display: block; min-width: 760px; width: 100%; height: auto; }\n"
-        "    .flow-graphic rect { fill: #ffffff; stroke: #38bdf8; stroke-width: 1.4; }\n"
-        "    .flow-graphic path { stroke: #64748b; stroke-width: 1.6; fill: none; "
-        "marker-end: url(#arrow); }\n"
-        "    .flow-graphic marker path { fill: #64748b; }\n"
-        "    .flow-graphic text { fill: #0f172a; font-size: 13px; font-weight: 700; }\n"
-        "    .flow-graphic .boundary { fill: #92400e; font-size: 11px; "
-        "letter-spacing: .08em; text-transform: uppercase; }\n"
-        "    .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); "
-        "gap: 12px; margin-top: 14px; }\n"
-        "    .chart-card { border: 1px solid #dbe3ee; border-radius: 8px; padding: 12px; "
-        "background: #f8fafc; }\n"
-        "    .bar-row { display: grid; grid-template-columns: minmax(54px, 1fr) 4fr auto; "
-        "align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }\n"
-        "    .bar-label { overflow: hidden; color: #475569; text-overflow: ellipsis; white-space: nowrap; }\n"
-        "    .bar-track { height: 10px; overflow: hidden; border-radius: 999px; background: #e2e8f0; }\n"
-        "    .bar-fill { display: block; height: 100%; border-radius: 999px; "
-        "background: linear-gradient(90deg, #0ea5e9, #10b981); }\n"
-        "    .bar-row strong { color: #0f172a; font-size: 12px; }\n"
+        f"{stylesheet}\n"
         "  </style>\n"
         "</head>\n"
         "<body>\n"
@@ -937,6 +885,12 @@ def _html_document(*, title: str, eyebrow: str, body: str) -> str:
         "  </main>\n"
         "</body>\n"
         "</html>\n"
+    )
+
+
+def _case_report_css() -> str:
+    return files("backend.notebooks").joinpath(CASE_REPORT_CSS_RESOURCE).read_text(
+        encoding="utf-8"
     )
 
 

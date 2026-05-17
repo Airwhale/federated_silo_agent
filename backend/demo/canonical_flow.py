@@ -188,55 +188,30 @@ def _render_summary(result: CanonicalFlowResult) -> None:
     table.add_row("reason", result.terminal_reason or "none")
     table.add_row("turns", str(result.turn_count))
     table.add_row("duration_seconds", f"{result.duration_seconds:.3f}")
-    table.add_row(
-        "F2 pattern",
-        (
-            result.graph_pattern.pattern_class.value
-            if result.graph_pattern is not None
-            else "none"
-        ),
-    )
-    table.add_row(
-        "F2 confidence",
-        (
-            f"{result.graph_pattern.confidence:.2f}"
-            if result.graph_pattern is not None
-            and result.graph_pattern.confidence is not None
+    if graph_pattern := result.graph_pattern:
+        table.add_row("F2 pattern", graph_pattern.pattern_class.value)
+        confidence = (
+            f"{graph_pattern.confidence:.2f}"
+            if graph_pattern.confidence is not None
             else "n/a"
-        ),
-    )
-    table.add_row(
-        "SAR typology",
-        (
-            result.sar_draft.typology_code.value
-            if result.sar_draft is not None and result.sar_draft.typology_code
-            else "none"
-        ),
-    )
-    table.add_row(
-        "SAR priority",
-        (
-            result.sar_draft.sar_priority.value
-            if result.sar_draft is not None
-            else "none"
-        ),
-    )
-    table.add_row(
-        "contributors",
-        (
-            str(len(result.sar_draft.contributors))
-            if result.sar_draft is not None
-            else "0"
-        ),
-    )
-    table.add_row(
-        "F5 findings",
-        (
-            str(len(result.audit_review.findings))
-            if result.audit_review is not None
-            else "n/a"
-        ),
-    )
+        )
+        table.add_row("F2 confidence", confidence)
+    else:
+        table.add_row("F2 pattern", "none")
+        table.add_row("F2 confidence", "n/a")
+    if sar_draft := result.sar_draft:
+        typology = sar_draft.typology_code.value if sar_draft.typology_code else "none"
+        table.add_row("SAR typology", typology)
+        table.add_row("SAR priority", sar_draft.sar_priority.value)
+        table.add_row("contributors", str(len(sar_draft.contributors)))
+    else:
+        table.add_row("SAR typology", "none")
+        table.add_row("SAR priority", "none")
+        table.add_row("contributors", "0")
+    if audit_review := result.audit_review:
+        table.add_row("F5 findings", str(len(audit_review.findings)))
+    else:
+        table.add_row("F5 findings", "n/a")
     table.add_row("audit events", str(result.audit_event_count))
     table.add_row("policy evaluations", str(result.policy_evaluation_count))
     table.add_row("outputs", ", ".join(result.output_files) or "none")
