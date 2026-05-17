@@ -210,7 +210,9 @@ _OPENAI_CHAT_PATH = "/v1/chat/completions"
 _DEFAULT_ROUTE_MODEL = "gemini-narrator"
 _DEFAULT_UI_NOTEBOOK_DIR = _REPO_ROOT / "out" / "ui-notebooks"
 _DEFAULT_UI_RUN_TURN_DELAY_SECONDS = 1.0
-_SERVICE_CONNECT_TIMEOUT_SECONDS = 0.25
+# Local proxy health checks must stay cheap because the UI polls snapshots.
+# They only target localhost demo services, so a short timeout is sufficient.
+_SERVICE_CONNECT_TIMEOUT_SECONDS = 0.1
 _MODEL_ROUTE_TIMEOUT_SECONDS = 20.0
 _MODEL_ROUTE_MAX_TOKENS = 64
 _PROVIDER_REACHABILITY_CACHE_SECONDS = 2.0
@@ -377,9 +379,18 @@ def _post_live_chat_completion(
 def _model_route_client() -> httpx.Client:
     global _MODEL_ROUTE_CLIENT
     with _MODEL_ROUTE_CLIENT_LOCK:
-        if _MODEL_ROUTE_CLIENT is None:
+        if _MODEL_ROUTE_CLIENT is None or _MODEL_ROUTE_CLIENT.is_closed:
             _MODEL_ROUTE_CLIENT = httpx.Client(timeout=_MODEL_ROUTE_TIMEOUT_SECONDS)
         return _MODEL_ROUTE_CLIENT
+
+
+def close_model_route_client() -> None:
+    """Close the shared UI model-route client during API shutdown."""
+    global _MODEL_ROUTE_CLIENT
+    with _MODEL_ROUTE_CLIENT_LOCK:
+        if _MODEL_ROUTE_CLIENT is not None:
+            _MODEL_ROUTE_CLIENT.close()
+            _MODEL_ROUTE_CLIENT = None
 
 
 def _response_preview(response: _UiChatCompletionResponse) -> str:

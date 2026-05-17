@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.ui.api import create_router
-from backend.ui.state import DemoControlService, _DEFAULT_UI_RUN_TURN_DELAY_SECONDS
+from backend.ui.state import (
+    DemoControlService,
+    _DEFAULT_UI_RUN_TURN_DELAY_SECONDS,
+    close_model_route_client,
+)
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        close_model_route_client()
 
 
 def create_app(service: DemoControlService | None = None) -> FastAPI:
@@ -20,6 +35,7 @@ def create_app(service: DemoControlService | None = None) -> FastAPI:
         title="Federated Silo Agent Demo Control API",
         version="0.1.0",
         description="Typed P9a control API for judge-console observability and probes.",
+        lifespan=_lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
