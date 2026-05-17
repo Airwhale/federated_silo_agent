@@ -596,6 +596,21 @@ function probeKindsForEdge(edge: FlowEdge): ProbeKind[] {
   return [];
 }
 
+function modelRouteNote(stage: FlowStage): string | null {
+  switch (stage.id) {
+    case "A1":
+      return "Optional model use starts from local alert summaries only. Any prompt must pass local Lobster Trap before LiteLLM/provider.";
+    case "A2":
+      return "A2 can use a model to draft a narrow query, but F1 still requires signed, hash-only, schema-valid output.";
+    case "F2":
+      return "F2 uses deterministic graph rules first. If model fallback is used, it sees DP-noised graph summaries, not raw rows.";
+    case "F4":
+      return "F4 uses the model for SAR narrative wording only. Required fields and provenance remain deterministic.";
+    default:
+      return null;
+  }
+}
+
 function visibleFlowEdges(): FlowEdge[] {
   return FLOW_EDGES.filter((edge) => edge.from !== "A3_ALPHA" && edge.to !== "A3_ALPHA");
 }
@@ -1335,6 +1350,10 @@ function StageExplainer({
     { label: "Output", value: stage.outputDetail },
     { label: "Why it matters", value: stage.whyItMatters },
   ];
+  const routeNote = modelRouteNote(stage);
+  if (routeNote) {
+    rows.push({ label: "Model route", value: routeNote });
+  }
 
   return (
     <section className="rounded-lg border border-slate-800 bg-slate-950">

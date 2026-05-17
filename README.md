@@ -66,7 +66,7 @@ User or analyst
 | P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
 | P9 | Done | Deterministic F1 federation coordinator with signed A2 ingress validation, F1 route approvals, peer A3 routing, local-contribution routing, sanctions side requests, signed A3 response aggregation, and up to two bounded retries for negotiable silo refusals. |
 | P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
-| P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, LLM route cards, system view, timeline filters, and attack lab over the P9a API. |
+| P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, Lobster Trap gate testing, system view, timeline filters, and contextual security probes over the P9a API. |
 | P10 | Done | F3 sanctions/PEP screener over cross-bank hash tokens. It performs exact mock watchlist lookup and returns only boolean flags, never raw names, list sources, or notes. |
 | P10a | Done | Short shared-contract pass for F4 SAR assembly, F5 audit review, and per-domain F6 policy/Lobster Trap evaluation before parallel implementation. |
 | P11 | Done | F2 graph-analysis agent over DP-noised bank aggregates, with deterministic clear-positive typology rules for structuring rings and layering chains plus an LLM narrative seam. |
@@ -75,7 +75,7 @@ User or analyst
 | P14 | Done | F6 AML policy adapter with redaction, route/purpose enforcement, signed-envelope checks, LT verdict normalization, and per-domain policy-result contracts. |
 | P15 | Done | Local orchestrator and API live adapter for the first live spine through A1, A2, F1, A3, P7, F3, F1 aggregation, and A2 synthesis. |
 | P16 | Done | Canonical S1 demo runner. `uv run python -m backend.demo.canonical_flow --stub` drives A1 -> A2 -> F1 -> A3/P7 -> F2 -> F3 -> F4 -> F5 and writes `out/sar_draft.json` plus `out/audit.jsonl`. `uv run python -m backend.notebooks.generate_case_notebook --stub` turns the same federation-safe artifacts into a Jupyter case notebook, artifact bundle, and static HTML reports. |
-| P18 | Done | Judge console polish with improved topology, inspector guidance, hover field help, sample inputs, LLM route graph, and all-probes-visible attack lab. |
+| P18 | Done | Judge console polish with improved topology, inspector guidance, hover field help, sample inputs, Demo Flow security probes, and focused Lobster Trap gate testing. |
 
 See [`plan.md`](plan.md) for the full build plan.
 

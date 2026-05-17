@@ -152,7 +152,7 @@ export function useInteraction(sessionId: string | null, componentId: ComponentI
     // mutations. Note: TanStack's useMutation does NOT auto-reset state
     // when this key changes; callers must call `.reset()` in an effect
     // if they want stale `error`/`data` to clear when componentId
-    // changes (see LlmRouteView and InteractionConsole).
+    // changes (see LobsterTrapGateCard and InteractionConsole).
     mutationKey: ["interaction", sessionId, componentId],
     mutationFn: (request: ComponentInteractionRequest) =>
       api.interaction(sessionId ?? "", componentId, request),

@@ -9,7 +9,6 @@ import { CaseReportView } from "@/views/CaseReportView";
 import { ConsoleView } from "@/views/ConsoleView";
 import { DemoFlowView } from "@/views/DemoFlowView";
 import { LobsterTrapGateView } from "@/views/LobsterTrapGateView";
-import { LlmRouteView } from "@/views/LlmRouteView";
 import { SystemView } from "@/views/SystemView";
 
 export type AppTab =
@@ -18,7 +17,6 @@ export type AppTab =
   | "artifacts"
   | "console"
   | "lobster-trap"
-  | "llm-route"
   | "system";
 
 const SESSION_STORAGE_KEY = "federated_silo_session_id";
@@ -35,12 +33,11 @@ const tabFromHash = (): AppTab => {
     || value === "notebook"
     || value === "artifacts"
     || value === "lobster-trap"
-    || value === "llm-route"
     || value === "system"
   ) {
     return value;
   }
-  if (value === "attack-lab") {
+  if (value === "attack-lab" || value === "llm-route") {
     return "lobster-trap";
   }
   return "demo-flow";
@@ -165,7 +162,6 @@ export function App() {
         {activeTab === "artifacts" ? <CaseReportView kind="artifacts" /> : null}
         {activeTab === "console" ? <ConsoleView /> : null}
         {activeTab === "lobster-trap" ? <LobsterTrapGateView /> : null}
-        {activeTab === "llm-route" ? <LlmRouteView /> : null}
         {activeTab === "system" ? <SystemView /> : null}
         {createSession.error instanceof Error ? (
           <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">

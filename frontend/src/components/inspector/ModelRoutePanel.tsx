@@ -16,6 +16,11 @@ export function ModelRoutePanel({ providerHealth, trustDomainLabel, lastResult }
   }
   rows.push(
     {
+      label: "Route path",
+      value: "Agent -> Lobster Trap -> LiteLLM -> provider",
+      tone: "good",
+    },
+    {
       label: "Route state",
       value: providerHealth.status === "live" ? "LT and model proxy reachable" : "configuration incomplete",
       tone: providerHealth.status === "live" ? "good" : "muted",
