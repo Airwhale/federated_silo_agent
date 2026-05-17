@@ -147,6 +147,10 @@ def _rho_event(
     bank_id: BankId,
     record: PrimitiveCallRecord,
 ) -> AuditEvent:
+    if record.rho_remaining is None:
+        raise ValueError(
+            "debited primitive records must include actual rho_remaining for F5 audit"
+        )
     return _audit_event(
         event_id=event_id,
         kind=AuditEventKind.RHO_DEBITED,
@@ -155,7 +159,7 @@ def _rho_event(
             requester_key=record.args_hash,
             bank_id=bank_id,
             rho_debited=record.rho_debited,
-            rho_remaining=1.0,
+            rho_remaining=record.rho_remaining,
         ),
     )
 

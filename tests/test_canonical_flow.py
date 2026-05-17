@@ -45,11 +45,18 @@ def test_stub_canonical_flow_outputs_policy_and_dp_audit_evidence(tmp_path) -> N
         for line in (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     kinds = {event["kind"] for event in audit_events}
+    rho_payloads = [
+        event["payload"]
+        for event in audit_events
+        if event["kind"] == AuditEventKind.RHO_DEBITED.value
+    ]
 
     assert result.audit_review is not None
     assert AuditEventKind.MESSAGE_SENT.value in kinds
     assert AuditEventKind.LT_VERDICT.value in kinds
     assert AuditEventKind.RHO_DEBITED.value in kinds
+    assert rho_payloads
+    assert all(payload["rho_remaining"] < 1.0 for payload in rho_payloads)
     assert all(
         event["payload"]["verdict"] == "allow"
         for event in audit_events

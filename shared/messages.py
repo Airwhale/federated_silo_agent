@@ -499,6 +499,7 @@ class PrimitiveCallRecord(StrictModel):
     args_hash: Sha256Hex
     privacy_unit: PrivacyUnit = PrivacyUnit.TRANSACTION
     rho_debited: NonNegativeFloat = 0.0
+    rho_remaining: NonNegativeFloat | None = None
     eps_delta_display: tuple[NonNegativeFloat, NonNegativeFloat] | None = None
     sigma_applied: NonNegativeFloat | None = None
     sensitivity: NonNegativeFloat

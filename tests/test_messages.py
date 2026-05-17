@@ -605,6 +605,7 @@ def test_primitive_record_preserves_histogram_accounting_mode() -> None:
         args_hash=ARGS_HASH,
         privacy_unit=PrivacyUnit.TRANSACTION,
         rho_debited=0.03,
+        rho_remaining=0.97,
         eps_delta_display=(0.5, 0.000001),
         sigma_applied=12.909944,
         sensitivity=1.0,
@@ -617,6 +618,7 @@ def test_primitive_record_preserves_histogram_accounting_mode() -> None:
 
     assert parsed.dp_composition == "serial"
     assert parsed.per_bucket_rho == 0.006
+    assert parsed.rho_remaining == 0.97
 
 
 def test_refusal_response_cannot_include_fields() -> None:

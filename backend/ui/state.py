@@ -915,7 +915,10 @@ class DemoControlService:
             with session.lock:
                 if not self._run_one_orchestrator_turn(session):
                     break
-            self._sleep_between_run_turns()
+            # Report generation is a synchronous API path. Unlike the visible
+            # story runner, it intentionally skips the one-second animation
+            # delay so one report request does not hold a worker thread for
+            # many seconds.
         else:
             with session.lock:
                 session.phase = "turn_cap_reached"

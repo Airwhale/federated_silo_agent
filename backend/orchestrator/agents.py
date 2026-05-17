@@ -28,7 +28,7 @@ from backend.security import (
     ReplayCache,
     generate_key_pair,
 )
-from backend.silos.budget import RequesterKey
+from backend.silos.budget import PrivacyBudgetLedger, RequesterKey
 from backend.silos.stats_primitives import BankStatsPrimitives, PrimitiveResult
 from shared.enums import (
     AgentRole,
@@ -306,6 +306,7 @@ class StubBankStatsPrimitives:
         if bank_id == BankId.FEDERATION:
             raise ValueError("stub primitives require a real bank")
         self.bank_id = bank_id
+        self.ledger = PrivacyBudgetLedger()
 
     def count_entities_by_name_hash(
         self,
@@ -337,7 +338,9 @@ class StubBankStatsPrimitives:
         requester: RequesterKey,
         rho: float = 0.02,
     ) -> PrimitiveResult:
-        _ = requester
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return PrimitiveResult(refusal_reason="budget_exhausted")
         value_by_bank = {
             BankId.BANK_ALPHA: 4,
             BankId.BANK_BETA: 3,
@@ -357,6 +360,7 @@ class StubBankStatsPrimitives:
                     },
                     returned_value_kind=ResponseValueKind.INT,
                     rho_debited=rho,
+                    rho_remaining=debit.rho_remaining,
                 )
             ],
         )
@@ -369,7 +373,9 @@ class StubBankStatsPrimitives:
         requester: RequesterKey,
         rho: float = 0.03,
     ) -> PrimitiveResult:
-        _ = requester
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return PrimitiveResult(refusal_reason="budget_exhausted")
         return PrimitiveResult(
             value=[0, 2, 4, 1, 0],
             records=[
@@ -384,6 +390,7 @@ class StubBankStatsPrimitives:
                     },
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho,
+                    rho_remaining=debit.rho_remaining,
                 )
             ],
         )
@@ -396,7 +403,9 @@ class StubBankStatsPrimitives:
         candidate_entity_hashes: list[str] | None = None,
         rho: float = 0.04,
     ) -> PrimitiveResult:
-        _ = requester
+        debit = self.ledger.debit(requester, rho)
+        if not debit.allowed:
+            return PrimitiveResult(refusal_reason="budget_exhausted")
         approved_candidates = sorted(set(candidate_entity_hashes or []))
         aggregate = BankAggregate(
             bank_id=self.bank_id,
@@ -414,6 +423,7 @@ class StubBankStatsPrimitives:
                     args={"window_start": window[0].isoformat(), "rho": rho},
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho / 2,
+                    rho_remaining=debit.rho_remaining,
                 ),
                 _primitive_record(
                     field_name="bucketed_flow_histogram",
@@ -421,6 +431,7 @@ class StubBankStatsPrimitives:
                     args={"window_end": window[1].isoformat(), "rho": rho},
                     returned_value_kind=ResponseValueKind.HISTOGRAM,
                     rho_debited=rho / 2,
+                    rho_remaining=debit.rho_remaining,
                 ),
                 _primitive_record(
                     field_name="candidate_entity_hashes",
@@ -539,6 +550,7 @@ def _primitive_record(
     args: dict[str, object],
     returned_value_kind: ResponseValueKind,
     rho_debited: float,
+    rho_remaining: float | None = None,
 ) -> PrimitiveCallRecord:
     return PrimitiveCallRecord(
         field_name=field_name,
@@ -546,6 +558,7 @@ def _primitive_record(
         args_hash=_args_hash(args),
         privacy_unit=PrivacyUnit.TRANSACTION,
         rho_debited=rho_debited,
+        rho_remaining=rho_remaining,
         eps_delta_display=(0.5, 0.000001) if rho_debited else None,
         sigma_applied=5.0 if rho_debited else None,
         sensitivity=1.0,
