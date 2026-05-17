@@ -715,6 +715,8 @@ export interface components {
             detail: string;
             status: components["schemas"]["SnapshotStatus"];
             blocked_by?: components["schemas"]["SecurityLayer"] | null;
+            /** Turn Agent Id */
+            turn_agent_id?: string | null;
         };
         /**
          * TrustDomainId

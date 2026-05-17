@@ -1,6 +1,7 @@
 import type { ComponentId } from "@/api/types";
 import { InteractionConsole } from "@/components/InteractionConsole";
 import { useSessionContext } from "@/components/SessionContext";
+import { SystemStatusRail } from "@/components/SystemStatusRail";
 import { Timeline } from "@/components/Timeline";
 import { SwimlaneTopology } from "@/components/topology/SwimlaneTopology";
 import type { TrustDomain } from "@/domain/instances";
@@ -15,7 +16,10 @@ export function ConsoleView() {
         <SwimlaneTopology sessionId={sessionId} onSelect={select} />
         <InteractionConsole />
       </div>
-      <Timeline sessionId={sessionId} onSelect={select} />
+      <div className="flex min-w-0 flex-col gap-3">
+        <SystemStatusRail />
+        <Timeline sessionId={sessionId} onSelect={select} />
+      </div>
     </div>
   );
 }

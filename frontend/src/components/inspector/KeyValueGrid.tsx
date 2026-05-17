@@ -222,7 +222,7 @@ function GuidanceTooltip({
  * Two-column label/value rows separated by thin dividers. Replaces the
  * previous one-card-per-row stack which was visually noisy and ate
  * vertical space disproportionately to the information density of each
- * row. Used by the System view's Backend panel and by every inspector
+ * row. Used by the console system-status rail and by every inspector
  * GenericFieldsPanel, so the density change cascades.
  *
  * Label column is fixed-width (10rem) on >= sm so the values align

@@ -624,7 +624,7 @@ function isLiveTurnEvent(
   componentId: ComponentId,
   agentId: string,
 ): boolean {
-  return event.component_id === componentId && event.title === `Live turn: ${agentId}`;
+  return event.component_id === componentId && event.turn_agent_id === agentId;
 }
 
 function latestStageEvent(

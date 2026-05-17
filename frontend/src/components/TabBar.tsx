@@ -1,11 +1,11 @@
-import { Activity, MonitorPlay, Network, ShieldCheck } from "lucide-react";
+import { Info, MonitorPlay, Network, ShieldCheck } from "lucide-react";
 import type { AppTab } from "../App";
 
 const tabs: Array<{ id: AppTab; label: string; icon: typeof Network }> = [
   { id: "demo-flow", label: "Demo Flow", icon: MonitorPlay },
+  { id: "about", label: "About", icon: Info },
   { id: "console", label: "Console", icon: Network },
   { id: "lobster-trap", label: "Lobster Trap", icon: ShieldCheck },
-  { id: "system", label: "System", icon: Activity },
 ];
 
 type Props = {

@@ -279,6 +279,7 @@ class TimelineEventSnapshot(UiModel):
     detail: ShortText
     status: SnapshotStatus
     blocked_by: SecurityLayer | None = None
+    turn_agent_id: NonEmptyStr | None = None
 
 
 class SessionCreateRequest(UiModel):

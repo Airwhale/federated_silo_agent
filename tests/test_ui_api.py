@@ -432,6 +432,30 @@ def test_unsupported_query_shape_probe_allows_supported_control_payload() -> Non
     assert "bank_beta A3 accepted the supported hash-only query shape" in body["reason"]
 
 
+def test_unsupported_query_shape_probe_does_not_flag_negated_raw_phrase() -> None:
+    test_client = client()
+    session_id = create_session(test_client)
+
+    response = test_client.post(
+        f"/sessions/{session_id}/probes",
+        json={
+            "probe_kind": "unsupported_query_shape",
+            "target_component": "bank_beta.A3",
+            "target_instance_id": "bank_beta",
+            "attacker_profile": "valid_but_malicious",
+            "payload_text": (
+                "This is not a raw account record request. "
+                "Request a DP-noised alert count for this hash-only entity."
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["blocked_by"] == "accepted"
+
+
 def test_health_is_minimal_and_audit_chain_is_not_timeline_count() -> None:
     test_client = client()
     session_id = create_session(test_client)
@@ -493,6 +517,9 @@ def test_run_until_idle_drives_built_components_to_sar_terminal() -> None:
     assert "Live turn: federation.F4" in titles
     assert "Live turn: federation.F5" in titles
     assert titles[-1] == "Orchestrator idle"
+    live_turns = [event for event in timeline if event["title"].startswith("Live turn:")]
+    assert live_turns
+    assert all(event["turn_agent_id"] for event in live_turns)
     assert envelope.json()["envelope"]["signature_status"] == "valid"
     assert route.json()["route_approval"]["binding_status"] == "matched"
     assert len(ledger.json()["dp_ledger"]["entries"]) == 2

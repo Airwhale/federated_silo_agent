@@ -66,7 +66,7 @@ User or analyst
 | P8a | Done | A3 inside-bank silo responder plus the security-envelope foundation: canonical JSON, Ed25519 signatures, principal allowlist, replay cache, route approvals, local contributions, and P7 invocation checks. |
 | P9 | Done | Deterministic F1 federation coordinator with signed A2 ingress validation, F1 route approvals, peer A3 routing, local-contribution routing, sanctions side requests, signed A3 response aggregation, and up to two bounded retries for negotiable silo refusals. |
 | P9a | Done | FastAPI control API with typed state snapshots, system readiness, read-only component inspectors, and controlled adversarial probes for signing, allowlist, replay, route-approval, and DP-budget failures. |
-| P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, Lobster Trap gate testing, system view, timeline filters, and contextual security probes over the P9a API. |
+| P9b | Done | Vite React judge console frame with five trust-domain swimlanes, typed OpenAPI client, component inspector drawer, interaction console, Lobster Trap gate testing, console-embedded system status, timeline filters, and contextual security probes over the P9a API. |
 | P10 | Done | F3 sanctions/PEP screener over cross-bank hash tokens. It performs exact mock watchlist lookup and returns only boolean flags, never raw names, list sources, or notes. |
 | P10a | Done | Short shared-contract pass for F4 SAR assembly, F5 audit review, and per-domain F6 policy/Lobster Trap evaluation before parallel implementation. |
 | P11 | Done | F2 graph-analysis agent over DP-noised bank aggregates, with deterministic clear-positive typology rules for structuring rings and layering chains plus an LLM narrative seam. |
@@ -268,7 +268,7 @@ Start the P9b frontend in a second terminal:
 .\scripts\start_frontend.ps1
 ```
 
-Open `http://127.0.0.1:5173/#/console`. The console reads the P9a/P15 typed API, shows all five trust-domain stacks, and lets judges inspect component state, run the current live orchestrator path, and launch controlled attack probes. The canonical stub path now reaches F2 graph analysis, F4 SAR drafting, and F5 audit review.
+Open `http://127.0.0.1:5173/#/console`. The console reads the P9a/P15 typed API, shows all five trust-domain stacks, and lets judges inspect component state, run the current live orchestrator path, and launch controlled attack probes. The `#/about` tab gives judges a technical overview of the AML problem, trust boundaries, Lobster Trap implementation, and data protections. The canonical stub path now reaches F2 graph analysis, F4 SAR drafting, and F5 audit review.
 
 Canonical CLI run:
 

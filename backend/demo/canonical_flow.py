@@ -163,7 +163,7 @@ def main(
         raise typer.Exit(2)
 
 
-def _write_outputs(state, out_dir: Path) -> list[str]:  # noqa: ANN001
+def _write_outputs(state: SessionOrchestratorState, out_dir: Path) -> list[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
     if state.sar_draft is not None:

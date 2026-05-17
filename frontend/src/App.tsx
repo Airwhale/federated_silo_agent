@@ -5,19 +5,19 @@ import { useCreateSession, useSession } from "@/api/hooks";
 import { AppShell } from "@/components/AppShell";
 import { InspectorDrawer } from "@/components/InspectorDrawer";
 import { SessionContext, type InspectorSelection } from "@/components/SessionContext";
+import { AboutView } from "@/views/AboutView";
 import { CaseReportView } from "@/views/CaseReportView";
 import { ConsoleView } from "@/views/ConsoleView";
 import { DemoFlowView } from "@/views/DemoFlowView";
 import { LobsterTrapGateView } from "@/views/LobsterTrapGateView";
-import { SystemView } from "@/views/SystemView";
 
 export type AppTab =
   | "demo-flow"
+  | "about"
   | "notebook"
   | "artifacts"
   | "console"
-  | "lobster-trap"
-  | "system";
+  | "lobster-trap";
 
 const SESSION_STORAGE_KEY = "federated_silo_session_id";
 // Match the UUID shape FastAPI emits (uuid4 in canonical hyphenated form).
@@ -26,16 +26,27 @@ const SESSION_STORAGE_KEY = "federated_silo_session_id";
 // and producing a confusing 404 on first paint.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const hashPath = (): string => window.location.hash.replace(/^#\/?/, "");
+
+const normalizeLegacyHash = () => {
+  if (hashPath() === "system") {
+    window.history.replaceState(null, "", "#/console");
+  }
+};
+
 const tabFromHash = (): AppTab => {
-  const value = window.location.hash.replace(/^#\/?/, "");
+  const value = hashPath();
   if (
     value === "console"
+    || value === "about"
     || value === "notebook"
     || value === "artifacts"
     || value === "lobster-trap"
-    || value === "system"
   ) {
     return value;
+  }
+  if (value === "system") {
+    return "console";
   }
   if (value === "attack-lab" || value === "llm-route") {
     return "lobster-trap";
@@ -94,7 +105,11 @@ export function App() {
   }, [createSession, setStoredSessionId]);
 
   useEffect(() => {
-    const listener = () => setActiveTab(tabFromHash());
+    normalizeLegacyHash();
+    const listener = () => {
+      normalizeLegacyHash();
+      setActiveTab(tabFromHash());
+    };
     window.addEventListener("hashchange", listener);
     return () => window.removeEventListener("hashchange", listener);
   }, []);
@@ -158,11 +173,11 @@ export function App() {
     >
       <AppShell activeTab={activeTab} onTabChange={changeTab}>
         {activeTab === "demo-flow" ? <DemoFlowView /> : null}
+        {activeTab === "about" ? <AboutView /> : null}
         {activeTab === "notebook" ? <CaseReportView kind="notebook" /> : null}
         {activeTab === "artifacts" ? <CaseReportView kind="artifacts" /> : null}
         {activeTab === "console" ? <ConsoleView /> : null}
         {activeTab === "lobster-trap" ? <LobsterTrapGateView /> : null}
-        {activeTab === "system" ? <SystemView /> : null}
         {createSession.error instanceof Error ? (
           <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-100">
             {describeError(createSession.error)}

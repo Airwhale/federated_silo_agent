@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -1454,6 +1455,7 @@ class DemoControlService:
                 if is_f4_pending
                 else SnapshotStatus.LIVE,
                 blocked_by=SecurityLayer.NOT_BUILT if is_f4_pending else None,
+                turn_agent_id=turn.agent_id,
             )
         )
         return True
@@ -2175,20 +2177,23 @@ def _probe_a3_bank(request: ProbeRequest) -> BankId:
     return BankId.BANK_BETA
 
 
+_UNSUPPORTED_SHAPE_PATTERNS = (
+    re.compile(
+        r"\b(request|return|show|print|dump|export|list|give|fetch|reveal)\b"
+        r".{0,80}\b(raw account|raw transaction|every customer|every transaction|transaction row)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(request|return|show|print|dump|export|list|give|fetch|reveal)\b"
+        r".{0,80}\b(without dp|without differential privacy)\b",
+        re.IGNORECASE,
+    ),
+)
+
+
 def _payload_requests_unsupported_shape(payload: str) -> bool:
-    normalized = payload.lower()
-    return any(
-        marker in normalized
-        for marker in (
-            "raw account",
-            "raw transaction",
-            "every customer",
-            "every transaction",
-            "transaction row",
-            "without dp",
-            "without differential privacy",
-        )
-    )
+    normalized = " ".join(payload.split())
+    return any(pattern.search(normalized) for pattern in _UNSUPPORTED_SHAPE_PATTERNS)
 
 
 def _sync_security_snapshots(
