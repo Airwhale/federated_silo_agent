@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -544,6 +545,30 @@ def test_run_until_idle_drives_built_components_to_sar_terminal() -> None:
     a2_fields = {field["name"]: field["value"] for field in a2_snapshot.json()["fields"]}
     assert f1_fields["routed_requests"] == "2"
     assert a2_fields["final_artifact"].startswith("sar_contribution:")
+
+
+def test_delayed_run_until_idle_returns_before_background_completion() -> None:
+    service = DemoControlService(run_turn_delay_seconds=0.01)
+    test_client = TestClient(create_app(service))
+    session_id = create_session(test_client)
+
+    start = time.perf_counter()
+    response = test_client.post(f"/sessions/{session_id}/run-until-idle")
+    elapsed = time.perf_counter() - start
+
+    assert response.status_code == 200
+    assert elapsed < 0.5
+    assert response.json()["phase"] != (
+        "Canonical demo completed with SAR draft and clean audit."
+    )
+
+    for _ in range(100):
+        snapshot = test_client.get(f"/sessions/{session_id}").json()
+        if snapshot["phase"] == "Canonical demo completed with SAR draft and clean audit.":
+            break
+        time.sleep(0.02)
+    else:  # pragma: no cover - failure path gives a clearer assertion message.
+        raise AssertionError("background run-until-idle did not reach terminal state")
 
 
 def test_case_notebook_endpoint_generates_html_reports() -> None:

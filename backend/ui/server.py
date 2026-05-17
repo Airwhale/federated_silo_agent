@@ -21,7 +21,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        close_model_route_client()
+        await close_model_route_client()
 
 
 def create_app(service: DemoControlService | None = None) -> FastAPI:
