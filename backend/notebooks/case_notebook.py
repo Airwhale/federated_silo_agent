@@ -683,6 +683,16 @@ def _code_cell_html(source: str, *, index: int) -> str:
     )
 
 
+def _sum_vectors(vectors: list[list[int]]) -> list[int]:
+    if not vectors:
+        return []
+    width = max(len(vector) for vector in vectors)
+    return [
+        sum(vector[index] for vector in vectors if index < len(vector))
+        for index in range(width)
+    ]
+
+
 def _summary_graphics_html(artifacts: CaseNotebookArtifacts) -> str:
     graph = artifacts.graph_pattern_response
     sar = artifacts.sar_draft
@@ -732,16 +742,6 @@ def _summary_graphics_html(artifacts: CaseNotebookArtifacts) -> str:
         "</div>"
         "</section>"
     )
-
-
-def _sum_vectors(vectors: list[list[int]]) -> list[int]:
-    if not vectors:
-        return []
-    width = max(len(vector) for vector in vectors)
-    return [
-        sum(vector[index] for vector in vectors if index < len(vector))
-        for index in range(width)
-    ]
 
 
 def _flow_svg_html() -> str:

@@ -365,7 +365,23 @@ def test_prompt_injection_probe_blocks_signed_attack_at_lobster_trap() -> None:
     assert "Lobster Trap/F6 policy blocked" in body["reason"]
 
 
-def test_prompt_injection_probe_allows_safe_prompt_without_error() -> None:
+def test_prompt_injection_probe_allows_safe_prompt_without_error(monkeypatch) -> None:
+    from backend.ui import state as state_module
+
+    def fake_post(
+        *,
+        url: str,
+        request: state_module._UiChatCompletionRequest,
+    ) -> state_module._UiChatCompletionResponse:
+        assert url == "http://127.0.0.1:8080/v1/chat/completions"
+        assert request.lobstertrap["target_model"] == "gemini-narrator"
+        assert "Summarize this hash-only alert" in request.messages[-1].content
+        return state_module._UiChatCompletionResponse(
+            choices=[state_module._UiChatChoice(message={"content": "Allowed."})],
+            _lobstertrap={"verdict": "ALLOW"},
+        )
+
+    monkeypatch.setattr(state_module, "_post_live_chat_completion", fake_post)
     test_client = client()
     session_id = create_session(test_client)
 
@@ -385,7 +401,7 @@ def test_prompt_injection_probe_allows_safe_prompt_without_error() -> None:
     assert body["accepted"] is True
     assert body["blocked_by"] == "accepted"
     assert body["timeline_event"]["status"] == "live"
-    assert "local policy allowed this prompt" in body["reason"]
+    assert "returned ALLOW" in body["reason"]
 
 
 def test_unsupported_query_shape_probe_uses_real_a3_policy() -> None:

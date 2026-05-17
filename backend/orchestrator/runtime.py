@@ -65,7 +65,6 @@ from shared.messages import (
 
 _CORRELATED_ALERT_NAMESPACE = UUID("4ad75c24-d9b4-4f71-a947-3ff21cc6fba1")
 F2_AGGREGATE_PRIMITIVE_RHO = 0.04
-NO_PURPOSE_DECLARED = "No purpose declared for this message type."
 
 
 class TerminalCode(StrEnum):
@@ -198,6 +197,8 @@ class Orchestrator:
             state.terminal_code = TerminalCode.A1_NO_ALERT
             return state.terminal_reason
         # This state machine carries one active alert per session cascade.
+        # Re-validate after adjusting created_at so timestamp normalization and
+        # envelope validators still run; model_copy(update=...) skips them.
         state.latest_alert = Alert.model_validate(
             {
                 **emitted[0].model_dump(),
@@ -739,8 +740,6 @@ def _policy_agent_id_for_message(
     return "federation.F6"
 
 
-def _declared_purpose(message: AgentMessage) -> str:
+def _declared_purpose(message: AgentMessage) -> str | None:
     purpose = getattr(message, "purpose_declaration", None)
-    if purpose is not None:
-        return purpose.suspicion_rationale
-    return NO_PURPOSE_DECLARED
+    return purpose.suspicion_rationale if purpose is not None else None

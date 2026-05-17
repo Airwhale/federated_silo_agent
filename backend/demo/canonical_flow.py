@@ -201,6 +201,7 @@ def _render_summary(result: CanonicalFlowResult) -> None:
         (
             f"{result.graph_pattern.confidence:.2f}"
             if result.graph_pattern is not None
+            and result.graph_pattern.confidence is not None
             else "n/a"
         ),
     )
