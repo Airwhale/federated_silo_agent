@@ -313,6 +313,11 @@ def _dotenv_values_cached(
 
 
 def _tcp_url_reachable(raw_url: str) -> bool:
+    # This API module is deliberately synchronous for P9/P16 so TestClient,
+    # CLI smoke tests, and the local demo all share one code path. Keep this
+    # reachability probe sync too, but constrain it to localhost-style service
+    # health with a 100ms timeout plus a short TTL cache. It is not used for
+    # provider calls or high-volume request forwarding.
     parsed = urlparse(raw_url)
     host = parsed.hostname
     port = parsed.port
@@ -369,6 +374,10 @@ def _post_live_chat_completion(
     url: str,
     request: _UiChatCompletionRequest,
 ) -> _UiChatCompletionResponse:
+    # The judge console has a synchronous API surface today. Live model-route
+    # calls happen only after an explicit operator action, outside session
+    # locks, through a shared client with bounded timeout. P15 can move this
+    # seam to AsyncClient when the runtime grows a truly async event stream.
     response = _model_route_client().post(
         url,
         json=request.model_dump(by_alias=True, exclude_none=True, mode="json"),

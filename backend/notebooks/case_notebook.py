@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 import json
-from html import escape
 from collections import Counter
 from datetime import UTC, datetime
 from enum import StrEnum
+from html import escape
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
+from markdown_it import MarkdownIt
 from pydantic import Field, NonNegativeFloat, NonNegativeInt, StringConstraints
 
 from backend import BACKEND_ROOT
 from backend.agents.llm_client import LLMClient, LobsterTrapMetadata
 from backend.demo.seeds import CANONICAL_RUN_LABEL
 from backend.orchestrator.runtime import SessionOrchestratorState
-from backend.runtime.context import LLMClientConfig, TrustDomain
+from backend.runtime.context import TrustDomain
 from shared.enums import AgentRole, BankId, PolicyDecision
 from shared.messages import (
     AuditEvent,
@@ -39,6 +40,10 @@ NotebookParagraph = Annotated[
     StringConstraints(strip_whitespace=True, min_length=1, max_length=1600),
 ]
 NOTEBOOK_PROMPT_PATH = BACKEND_ROOT / "notebooks" / "prompts" / "case_notebook_narrative.md"
+_SAFE_MARKDOWN = (
+    MarkdownIt("commonmark", {"html": False, "linkify": False})
+    .disable(["image", "link", "html_block", "html_inline"])
+)
 
 
 class NotebookNarrativeMode(StrEnum):
@@ -831,61 +836,12 @@ def _format_number(value: int | float) -> str:
 
 
 def _markdown_to_html(source: str) -> str:
-    # Intentionally minimal markdown -> HTML: #/##/### headers,
-    # ``- `` bullets, and paragraphs. Everything else (inline
-    # emphasis, links, raw HTML)
-    # is silently dropped after ``html.escape``. This is a whitelist, not
-    # a feature gap -- the source can be LLM-generated narrative
-    # (NotebookNarrativeMode.LLM), so adopting a full markdown library
-    # would give model output more rendering surface (links, HTML
-    # passthrough via extensions, inline formatting that interleaves with
-    # structured fields). Keep the parser narrow until a real product
-    # need forces richer formatting.
-    html_parts: list[str] = []
-    paragraph: list[str] = []
-    bullet_items: list[str] = []
-
-    def flush_paragraph() -> None:
-        if paragraph:
-            html_parts.append(f"<p>{escape(' '.join(paragraph))}</p>")
-            paragraph.clear()
-
-    def flush_bullets() -> None:
-        if bullet_items:
-            items = "".join(f"<li>{escape(item)}</li>" for item in bullet_items)
-            html_parts.append(f"<ul>{items}</ul>")
-            bullet_items.clear()
-
-    for raw_line in source.splitlines():
-        line = raw_line.strip()
-        if not line:
-            flush_paragraph()
-            flush_bullets()
-            continue
-        if line.startswith("### "):
-            flush_paragraph()
-            flush_bullets()
-            html_parts.append(f"<h3>{escape(line[4:])}</h3>")
-            continue
-        if line.startswith("## "):
-            flush_paragraph()
-            flush_bullets()
-            html_parts.append(f"<h2>{escape(line[3:])}</h2>")
-            continue
-        if line.startswith("# "):
-            flush_paragraph()
-            flush_bullets()
-            html_parts.append(f"<h1>{escape(line[2:])}</h1>")
-            continue
-        if line.startswith("- "):
-            flush_paragraph()
-            bullet_items.append(line[2:])
-            continue
-        flush_bullets()
-        paragraph.append(line)
-    flush_paragraph()
-    flush_bullets()
-    return "\n".join(html_parts)
+    # Render standard CommonMark for headings, lists, and emphasis while
+    # keeping model-controlled narrative constrained: raw HTML, images,
+    # automatic linkification, and explicit links are disabled. That gives
+    # the report predictable formatting without giving LLM prose a richer
+    # outbound surface than the sanitized case artifacts.
+    return _SAFE_MARKDOWN.render(source)
 
 
 def _html_document(*, title: str, eyebrow: str, body: str) -> str:
