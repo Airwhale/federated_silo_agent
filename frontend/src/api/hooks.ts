@@ -109,6 +109,28 @@ export function useRunUntilIdle(sessionId: string | null) {
   });
 }
 
+export function useCaseNotebookReport(sessionId: string | null) {
+  return useQuery({
+    queryKey: qk.caseNotebook(sessionId),
+    queryFn: () => api.caseNotebookLatest(sessionId ?? ""),
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useGenerateCaseNotebook(sessionId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationKey: ["case-notebook", sessionId],
+    mutationFn: () => api.caseNotebook(sessionId ?? ""),
+    onSuccess: async () => {
+      if (!sessionId) return;
+      await queryClient.invalidateQueries({ queryKey: qk.session(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.timeline(sessionId) });
+      await queryClient.invalidateQueries({ queryKey: qk.caseNotebook(sessionId) });
+    },
+  });
+}
+
 export function useProbe(sessionId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({

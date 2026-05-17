@@ -24,6 +24,10 @@ ProbePayloadText = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=4096),
 ]
+ModelRouteName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=120),
+]
 
 class TrustDomainId(StrEnum):
     """Canonical trust-domain identifiers shared across the API boundary.
@@ -307,13 +311,14 @@ class SystemSnapshot(UiModel):
 
 
 class ProbeRequest(UiModel):
-    """Controlled attack request sent through a real or placeholder boundary."""
+    """Controlled attack request sent through a real security boundary."""
 
     probe_kind: ProbeKind
     target_component: ComponentId
     attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
     payload_text: ProbePayloadText | None = None
     target_instance_id: TrustDomainId | None = None
+    route_through_lobster_trap: bool = True
 
 
 class ComponentInteractionRequest(UiModel):
@@ -323,12 +328,33 @@ class ComponentInteractionRequest(UiModel):
     payload_text: ProbePayloadText | None = None
     attacker_profile: AttackerProfile = AttackerProfile.VALID_BUT_MALICIOUS
     target_instance_id: TrustDomainId | None = None
+    route_through_lobster_trap: bool = True
+    model_route: ModelRouteName | None = None
 
 
 class HealthSnapshot(UiModel):
     """Minimal readiness response for process health probes."""
 
     status: Literal["ok"] = "ok"
+
+
+class CaseNotebookReportSnapshot(UiModel):
+    """Generated case notebook plus static HTML report views."""
+
+    status: SnapshotStatus
+    scenario_id: NonEmptyStr
+    run_id: NonEmptyStr
+    generated_at: datetime
+    terminal_code: str | None = None
+    terminal_reason: str | None = None
+    notebook_path: NonEmptyStr
+    artifact_path: NonEmptyStr
+    notebook_html_path: NonEmptyStr
+    artifact_html_path: NonEmptyStr
+    notebook_html: NonEmptyStr
+    artifact_html: NonEmptyStr
+    cell_count: int = Field(ge=0)
+    detail: ShortText
 
 
 class ProbeResult(UiModel):
@@ -364,9 +390,9 @@ class ComponentInteractionResult(UiModel):
       False only when the component is not built yet (and therefore
       cannot be interacted with at all).
     * ``executed`` -- a live handler actually ran and produced
-      meaningful output. False for PROMPT / SAFE_INPUT today because
-      the live LT / LLM adapter lands with P14/P15; the request is
-      still ``accepted`` and shows up on the timeline.
+      meaningful output. PROMPT / SAFE_INPUT either call a live
+      model-route harness or execute the target component's typed
+      boundary check.
 
     The UI uses both to distinguish "successfully inspected" from
     "queued for a future handler" from "refused / not built".

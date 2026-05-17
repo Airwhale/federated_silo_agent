@@ -7,7 +7,7 @@ type Props = {
 
 /**
  * Compact form-field wrapper used across the ops-console forms
- * (Attack Lab probe forms, LLM Route input, Interaction Console).
+ * (Demo Flow probe forms, LLM Route input, Interaction Console).
  * Renders a tiny uppercase label above the control so the field's
  * purpose reads at a glance without focus-tabbing through each input.
  *

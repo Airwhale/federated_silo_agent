@@ -73,17 +73,16 @@ User or analyst
 | P12 | Done | F4 SAR drafter with deterministic structured SAR fields, missing-field requests, sanctions/PEP priority handling, and constrained LLM narrative generation. |
 | P13 | Done | F5 read-only compliance auditor for rate anomalies, budget pressure, missing LT/F6 governance evidence, route or purpose anomalies, and dismissal review. |
 | P14 | Done | F6 AML policy adapter with redaction, route/purpose enforcement, signed-envelope checks, LT verdict normalization, and per-domain policy-result contracts. |
-| P15 | Done | Local orchestrator and API live adapter. Current live run exercises A1, A2, F1, A3, P7, F3, the audit hash chain, and UI snapshots, then stops explicitly at the F4 handoff until the final canonical flow script is built. |
+| P15 | Done | Local orchestrator and API live adapter for the first live spine through A1, A2, F1, A3, P7, F3, F1 aggregation, and A2 synthesis. |
+| P16 | Done | Canonical S1 demo runner. `uv run python -m backend.demo.canonical_flow --stub` drives A1 -> A2 -> F1 -> A3/P7 -> F2 -> F3 -> F4 -> F5 and writes `out/sar_draft.json` plus `out/audit.jsonl`. `uv run python -m backend.notebooks.generate_case_notebook --stub` turns the same federation-safe artifacts into a Jupyter case notebook, artifact bundle, and static HTML reports. |
 | P18 | Done | Judge console polish with improved topology, inspector guidance, hover field help, sample inputs, LLM route graph, and all-probes-visible attack lab. |
 
 See [`plan.md`](plan.md) for the full build plan.
 
-PR #8 is the integration branch for the short-contract and parallel-agent wave.
-It contains the contract pass plus the F2, F4, F5, F6, P15, and P18 workstreams.
-The remaining gap is not missing agent implementations; it is end-to-end demo
-composition. P16/P17 should connect the already-built F2/F4/F5/F6 agents into
-the canonical run script and live smoke test so the demo can terminate at a
-`SARDraft` plus audit review instead of the current P15 `F4 pending` handoff.
+The canonical stub run now terminates at a `SARDraft` plus clean F5 audit
+review. Peer SAR amount ranges are deterministic S1 seed facts in P16 because
+there is not yet a peer-A2 contribution request protocol. P17 remains the live
+Gemini/LT/LiteLLM smoke test over the same path.
 
 ## Data
 
@@ -269,7 +268,28 @@ Start the P9b frontend in a second terminal:
 .\scripts\start_frontend.ps1
 ```
 
-Open `http://127.0.0.1:5173/#/console`. The console reads the P9a/P15 typed API, shows all five trust-domain stacks, and lets judges inspect component state, run the current live orchestrator path, and launch controlled attack probes. On PR #8, built F2/F4/F5/F6 components are visible and inspectable, but the P15 live run still stops at the explicit F4 handoff pending P16/P17 full-demo composition.
+Open `http://127.0.0.1:5173/#/console`. The console reads the P9a/P15 typed API, shows all five trust-domain stacks, and lets judges inspect component state, run the current live orchestrator path, and launch controlled attack probes. The canonical stub path now reaches F2 graph analysis, F4 SAR drafting, and F5 audit review.
+
+Canonical CLI run:
+
+```powershell
+uv run python -m backend.demo.canonical_flow --stub
+```
+
+Generate a federation-safe Jupyter case notebook from the canonical run:
+
+```powershell
+uv run python -m backend.notebooks.generate_case_notebook --stub
+```
+
+The notebook, typed artifact bundle, notebook HTML, and artifact HTML are
+written to `out/notebooks/`. In the Demo Flow page, click **Generate report** to
+run the current session path and view both HTML reports in the browser. The same
+reports also have standalone pages at `#/notebook` and `#/artifacts`, with a
+**Show code** toggle for notebook code cells. They reconstruct the pooled F2
+statistic from per-bank intermediaries, add static visual summaries, and
+summarize F3, F4, F5, F6, DP, and audit evidence without raw silo data. More
+detail lives in [`docs/notebook_reports.md`](docs/notebook_reports.md).
 
 OpenRouter fallback smoke, OpenRouter key required:
 
@@ -318,6 +338,7 @@ federated_silo_agent/
   backend/
     agents/                        A1, A2, A3, F1-F5 implementations and prompts
     orchestrator/                  P15 local turn scheduler, agent registry, audit chain
+    notebooks/                     federation-safe Jupyter case report generator
     policy/                        P14 AML policy adapter and redaction helpers
     ui/                            FastAPI control API, snapshots, and state service
     silos/                         bank-local stats primitives, DP, and budget ledger

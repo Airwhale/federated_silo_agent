@@ -99,8 +99,8 @@ export function RunControls() {
         // Inline error indicator. The full error text is on the title
         // attribute so the header strip stays compact; if a judge needs
         // the full message they can hover. Detailed-error rendering
-        // belongs in the relevant view (e.g. AttackLabView surfaces
-        // probe failures inline next to the probe form).
+        // belongs in the relevant view, such as the Lobster Trap gate
+        // page or the Demo Flow security probe card.
         <span
           className="flex items-center gap-1 rounded border border-rose-400/40 bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-200"
           title={describeError(lastError)}

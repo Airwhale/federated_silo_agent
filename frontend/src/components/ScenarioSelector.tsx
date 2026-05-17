@@ -8,10 +8,22 @@ type Props = {
   onModeChange: (mode: SessionMode) => void;
 };
 
-const SCENARIOS: { id: string; label: string }[] = [
-  { id: "s1_structuring_ring", label: "S1: Structuring ring" },
-  { id: "s2_layering", label: "S2: Layering chain" },
-  { id: "s3_sanctions_evasion", label: "S3: Sanctions evasion" },
+const SCENARIOS: { id: string; label: string; description: string }[] = [
+  {
+    id: "s1_structuring_ring",
+    label: "S1: Structuring ring",
+    description: "Small repeated transfers across banks that may be designed to avoid reporting thresholds.",
+  },
+  {
+    id: "s2_layering",
+    label: "S2: Layering chain",
+    description: "Funds move through several hops to obscure where the money came from.",
+  },
+  {
+    id: "s3_sanctions_evasion",
+    label: "S3: Sanctions evasion",
+    description: "Activity may be routed around a screened or watchlisted party.",
+  },
 ];
 
 const MODES: { id: SessionMode; label: string }[] = [
@@ -31,6 +43,35 @@ export function ScenarioSelector({
     <div className="flex flex-wrap items-center gap-2">
       <label className="flex items-center gap-2 text-xs text-slate-500">
         <span className="uppercase tracking-wide">Scenario</span>
+        <span className="group relative inline-flex">
+          <button
+            type="button"
+            aria-label="Scenario descriptions"
+            aria-describedby="scenario-help"
+            className="grid h-5 w-5 place-items-center rounded-full border border-slate-700 bg-slate-900 text-[11px] font-semibold text-slate-300 hover:border-sky-400 hover:text-sky-100 focus:outline-none focus:ring-2 focus:ring-sky-400/50"
+          >
+            ?
+          </button>
+          <span
+            id="scenario-help"
+            role="tooltip"
+            className="pointer-events-none absolute left-0 top-full z-50 mt-2 hidden w-80 rounded-lg border border-slate-700 bg-slate-950 p-3 text-left text-xs shadow-xl shadow-black/30 group-focus-within:block group-hover:block"
+          >
+            <span className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              Scenario guide
+            </span>
+            <span className="grid gap-2">
+              {SCENARIOS.map((scenario) => (
+                <span key={scenario.id} className="block">
+                  <span className="block font-semibold text-slate-100">{scenario.label}</span>
+                  <span className="block leading-snug text-slate-400">
+                    {scenario.description}
+                  </span>
+                </span>
+              ))}
+            </span>
+          </span>
+        </span>
         <select
           value={scenarioId}
           disabled={disabled}

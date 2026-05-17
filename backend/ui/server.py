@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.ui.api import create_router
-from backend.ui.state import DemoControlService
+from backend.ui.state import DemoControlService, _DEFAULT_UI_RUN_TURN_DELAY_SECONDS
 
 
 def create_app(service: DemoControlService | None = None) -> FastAPI:
@@ -45,7 +45,15 @@ def create_app(service: DemoControlService | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.include_router(create_router(service if service is not None else DemoControlService()))
+    app.include_router(
+        create_router(
+            service
+            if service is not None
+            else DemoControlService(
+                run_turn_delay_seconds=_DEFAULT_UI_RUN_TURN_DELAY_SECONDS
+            )
+        )
+    )
     return app
 
 

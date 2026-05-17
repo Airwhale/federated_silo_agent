@@ -561,7 +561,7 @@ Each part below has a single deliverable, an acceptance test, and an explicit de
 
 ### Current build state
 
-The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. PR #8 now integrates the AML data layer, shared message schemas, base agent runtime, A1, P7, A2, A3, the security envelope, F1, F2, F3, F4, F5, F6, the P9a/P9b control surface, the P15 local orchestrator adapter, and P18 judge-console polish. P15 currently runs the live A1 -> A2 -> F1 -> A3/P7 -> F3 -> F1 -> A2 path and stops at the explicit F4 handoff; P16/P17 are the next work needed to compose the built F2/F4/F5/F6 agents into a final end-to-end demo that terminates at a SARDraft plus audit review. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, policy state, and audit-chain state.
+The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lobster Trap policy behavior, blocked proxy ingress, and OpenRouter fallback pass-through are smoke-tested locally; direct Gemini pass-through still requires a valid Gemini API key. The pivot to AML preserves the generic proxy chain; what changes is the concrete agent code, the stats-primitives layer, and the AML policy adapter plus LT overlay. PR #8 integrated the AML data layer, shared message schemas, base agent runtime, A1, P7, A2, A3, the security envelope, F1, F2, F3, F4, F5, F6, the P9a/P9b control surface, the P15 local orchestrator adapter, and P18 judge-console polish. P16 now composes the built agents into the canonical stub run: A1 -> A2 -> F1 -> A3/P7 -> F2 -> F3 -> F4 -> F5, terminating at a SARDraft plus clean audit review. P17 remains the live Gemini/LT/LiteLLM smoke test over the same path. System-state panels are read-only typed snapshots of signing, envelope verification, replay, route approval, DP ledger, provider health, policy state, and audit-chain state.
 
 - **P0** Repo scaffold + proxy chain smoke ✓
 - **P1** Pivot migration (clinical → AML, plan and archives) ✓
@@ -583,7 +583,7 @@ The proxy chain (Lobster Trap -> LiteLLM -> Gemini/OpenRouter) is scaffolded. Lo
 - **P13** F5 compliance auditor agent ✓
 - **P14** AML policy adapter + Lobster Trap overlay ✓
 - **P15** Agent orchestrator / message bus + API live adapters ✓
-- **P16** Canonical demo flow script ·
+- **P16** Canonical demo flow script ✓
 - **P17** End-to-end smoke test ·
 - **P18** Interactive judge console ✓
 - **P19** README + mermaid diagrams for AML ·
@@ -1231,8 +1231,11 @@ The agent build follows the canonical demo's call order: alert origination (A1) 
 
 **P16 — Canonical demo flow script**
 
+- *Status:* Built. `uv run python -m backend.demo.canonical_flow --stub` drives the canonical S1 flow through F2, F4, and F5, writes `out/sar_draft.json` plus `out/audit.jsonl`, and exits non-zero if the terminal state is not `sar_draft_ready`. `uv run python -m backend.notebooks.generate_case_notebook --stub` turns the same federation-safe artifacts into `out/notebooks/s1_structuring_ring_analysis.ipynb`, a typed artifact bundle, notebook HTML, and artifact HTML.
+- *Implementation note:* P16 uses deterministic S1 seed facts for peer SAR amount ranges because the current contracts do not include a peer-A2 contribution request/response step. The seeded facts are still wrapped in typed `SARContribution` models; a later protocol can replace that helper without changing F4/F5 contracts.
 - *Goal:* A reproducible script that drives the entire demo flow from a fixed seed without manual UI clicking — for dry-run, screen-recording, and verification.
 - *Files:* `backend/demo/__init__.py`, `backend/demo/canonical_flow.py`, `backend/demo/seeds.py` (the deterministic starting-alert specification).
+- *Notebook reporting:* `backend/notebooks/` builds a `CaseNotebookArtifacts` bundle from the live orchestrator state, then writes a Jupyter notebook, rendered notebook HTML, rendered artifact HTML, and sanitized JSON for reproducibility. The report reconstructs the pooled F2 statistic from per-bank statistical intermediaries, lists DP provenance, and summarizes F3/F4/F5/F6 outputs. It never reads raw silo tables. The P9a/P16 API endpoint `POST /sessions/{session_id}/case-notebook` runs the current demo path to idle if needed and returns both HTML documents for the Demo Flow page and the standalone `#/notebook` / `#/artifacts` pages. Generated HTML includes static flow and bar-chart graphics, and code cells are collapsed by default with a UI **Show code** toggle. Optional `--llm-narrative` lets the local model route write bounded markdown prose from the artifact summary only; code cells and facts remain deterministic.
 - *Approach:*
   1. Initialize the orchestrator (P15) against the canonical `data/silos/*.db` databases.
   2. Pick a deterministic S1-related starting alert from Bank Alpha — specifically, the alert with the highest severity score on the S1-A entity. (Choice is deterministic given the data layer's seeded RNG; encoded as a `transaction_id` constant in `seeds.py`.)

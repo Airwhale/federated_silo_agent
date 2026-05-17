@@ -84,7 +84,7 @@ const GENERIC_FIELD_GUIDANCE: Record<string, FieldGuidance> = {
     dangerousWhen: (value) => !String(value).includes("Lobster Trap"),
   },
   "active endpoint": {
-    help: "Backend endpoint currently receiving the interaction. Correct is lobster_trap when policy gate is enabled, litellm when bypass testing is intentional.",
+    help: "Backend model-route endpoint receiving the interaction. Correct is the model route; Lobster Trap is a gate in the route path, not the destination.",
   },
   readiness: {
     help: "Backend readiness detail. Correct when it states live, pending, or not_built honestly.",
@@ -147,12 +147,12 @@ const COMPONENT_FIELD_GUIDANCE: Partial<Record<ComponentId, Record<string, Field
   },
   lobster_trap: {
     detail: {
-      help: "Correct while P14 is pending: scaffold/config presence only. Dangerous if the UI implies live prompt verdicts before the adapter lands.",
+      help: "Correct when it says the local policy proxy is reachable. Dangerous if prompt attacks are shown as pending or only configured after the proxy is running.",
     },
   },
   litellm: {
     detail: {
-      help: "Correct while P14/P15 is pending: provider-route presence only. Dangerous if the UI implies a live provider call happened.",
+      help: "Correct when it says the local model proxy is reachable. Dangerous if direct model-route tests are shown as pending after LiteLLM is running.",
     },
   },
 };

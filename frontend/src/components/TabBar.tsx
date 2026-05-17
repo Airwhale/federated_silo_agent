@@ -1,9 +1,10 @@
-import { Activity, FlaskConical, Network, Route } from "lucide-react";
+import { Activity, MonitorPlay, Network, Route, ShieldCheck } from "lucide-react";
 import type { AppTab } from "../App";
 
 const tabs: Array<{ id: AppTab; label: string; icon: typeof Network }> = [
+  { id: "demo-flow", label: "Demo Flow", icon: MonitorPlay },
   { id: "console", label: "Console", icon: Network },
-  { id: "attack-lab", label: "Attack Lab", icon: FlaskConical },
+  { id: "lobster-trap", label: "Lobster Trap", icon: ShieldCheck },
   { id: "llm-route", label: "LLM Routes", icon: Route },
   { id: "system", label: "System", icon: Activity },
 ];

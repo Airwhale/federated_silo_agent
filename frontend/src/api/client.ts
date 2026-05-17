@@ -3,6 +3,7 @@ import type {
   ComponentId,
   ComponentInteractionRequest,
   ComponentInteractionResult,
+  CaseNotebookReportSnapshot,
   ComponentSnapshot,
   HealthSnapshot,
   ProbeRequest,
@@ -63,6 +64,12 @@ export const api = {
     requestJson<SessionSnapshot>(`/sessions/${sessionId}/step`, { method: "POST" }),
   runUntilIdle: (sessionId: string) =>
     requestJson<SessionSnapshot>(`/sessions/${sessionId}/run-until-idle`, { method: "POST" }),
+  caseNotebookLatest: (sessionId: string) =>
+    requestJson<CaseNotebookReportSnapshot>(`/sessions/${sessionId}/case-notebook`),
+  caseNotebook: (sessionId: string) =>
+    requestJson<CaseNotebookReportSnapshot>(`/sessions/${sessionId}/case-notebook`, {
+      method: "POST",
+    }),
   timeline: (sessionId: string) =>
     requestJson<TimelineEventSnapshot[]>(`/sessions/${sessionId}/timeline`),
   events: (sessionId: string) =>

@@ -1,16 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DEFAULT_SESSION_CREATE } from "@/api/client";
-import { ApiError, describeError } from "@/api/errors";
+import { describeError, isUnknownSessionError } from "@/api/errors";
 import { useCreateSession, useSession } from "@/api/hooks";
 import { AppShell } from "@/components/AppShell";
 import { InspectorDrawer } from "@/components/InspectorDrawer";
 import { SessionContext, type InspectorSelection } from "@/components/SessionContext";
-import { AttackLabView } from "@/views/AttackLabView";
+import { CaseReportView } from "@/views/CaseReportView";
 import { ConsoleView } from "@/views/ConsoleView";
+import { DemoFlowView } from "@/views/DemoFlowView";
+import { LobsterTrapGateView } from "@/views/LobsterTrapGateView";
 import { LlmRouteView } from "@/views/LlmRouteView";
 import { SystemView } from "@/views/SystemView";
 
-export type AppTab = "console" | "attack-lab" | "llm-route" | "system";
+export type AppTab =
+  | "demo-flow"
+  | "notebook"
+  | "artifacts"
+  | "console"
+  | "lobster-trap"
+  | "llm-route"
+  | "system";
 
 const SESSION_STORAGE_KEY = "federated_silo_session_id";
 // Match the UUID shape FastAPI emits (uuid4 in canonical hyphenated form).
@@ -21,10 +30,20 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const tabFromHash = (): AppTab => {
   const value = window.location.hash.replace(/^#\/?/, "");
-  if (value === "attack-lab" || value === "llm-route" || value === "system") {
+  if (
+    value === "console"
+    || value === "notebook"
+    || value === "artifacts"
+    || value === "lobster-trap"
+    || value === "llm-route"
+    || value === "system"
+  ) {
     return value;
   }
-  return "console";
+  if (value === "attack-lab") {
+    return "lobster-trap";
+  }
+  return "demo-flow";
 };
 
 const readStoredSessionId = (): string | null => {
@@ -52,6 +71,31 @@ export function App() {
   const createSession = useCreateSession();
   const session = useSession(sessionId);
 
+  const setStoredSessionId = useCallback((nextSessionId: string | null) => {
+    setSessionId(nextSessionId);
+    try {
+      if (nextSessionId) {
+        window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+      } else {
+        window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+    } catch {
+      // See readStoredSessionId for the cases this guards.
+    }
+  }, []);
+
+  const recoverSession = useCallback(() => {
+    if (createSession.isPending) return;
+    setSelection(null);
+    setStoredSessionId(null);
+    createSession.mutate(
+      DEFAULT_SESSION_CREATE,
+      {
+        onSuccess: (created) => setStoredSessionId(created.session_id),
+      },
+    );
+  }, [createSession, setStoredSessionId]);
+
   useEffect(() => {
     const listener = () => setActiveTab(tabFromHash());
     window.addEventListener("hashchange", listener);
@@ -74,34 +118,21 @@ export function App() {
     createSession.mutate(
       DEFAULT_SESSION_CREATE,
       {
-        onSuccess: (created) => {
-          setSessionId(created.session_id);
-          try {
-            window.localStorage.setItem(SESSION_STORAGE_KEY, created.session_id);
-          } catch {
-            // Private mode or file origin: session lives only for this tab.
-          }
-        },
+        onSuccess: (created) => setStoredSessionId(created.session_id),
       },
     );
-  }, [createSession, sessionId]);
+  }, [createSession, sessionId, setStoredSessionId]);
 
   // Recover from a stale ``sessionId`` in localStorage. If the server was
   // restarted, the in-memory session table was cleared and the stored UUID
-  // now 404s. Without this effect ``sessionId`` stays truthy, the
-  // create-session effect above stays gated off, and the UI is stuck on a
-  // dead session. Detect the 404 from ``useSession`` and clear the stored
-  // ID, which lets the create-session effect run on the next render.
+  // now 404s. Mutation endpoints can hit the same case, so the recovery
+  // path explicitly creates a replacement session instead of only clearing
+  // localStorage and relying on the initial-create effect's idle state.
   useEffect(() => {
-    if (session.error instanceof ApiError && session.error.status === 404) {
-      try {
-        window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      } catch {
-        // localStorage unavailable; state clear below is enough.
-      }
-      setSessionId(null);
+    if (isUnknownSessionError(session.error)) {
+      recoverSession();
     }
-  }, [session.error]);
+  }, [recoverSession, session.error]);
 
   const activeSession = useMemo(() => session.data ?? createSession.data ?? null, [
     createSession.data,
@@ -117,32 +148,23 @@ export function App() {
     window.location.hash = `/${tab}`;
   };
 
-  const setStoredSessionId = (nextSessionId: string | null) => {
-    setSessionId(nextSessionId);
-    try {
-      if (nextSessionId) {
-        window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
-      } else {
-        window.localStorage.removeItem(SESSION_STORAGE_KEY);
-      }
-    } catch {
-      // See readStoredSessionId for the cases this guards.
-    }
-  };
-
   return (
     <SessionContext.Provider
       value={{
         sessionId: activeSession?.session_id ?? sessionId,
         session: activeSession,
         setSessionId: setStoredSessionId,
+        recoverSession,
         selection,
         setSelection,
       }}
     >
       <AppShell activeTab={activeTab} onTabChange={changeTab}>
+        {activeTab === "demo-flow" ? <DemoFlowView /> : null}
+        {activeTab === "notebook" ? <CaseReportView kind="notebook" /> : null}
+        {activeTab === "artifacts" ? <CaseReportView kind="artifacts" /> : null}
         {activeTab === "console" ? <ConsoleView /> : null}
-        {activeTab === "attack-lab" ? <AttackLabView /> : null}
+        {activeTab === "lobster-trap" ? <LobsterTrapGateView /> : null}
         {activeTab === "llm-route" ? <LlmRouteView /> : null}
         {activeTab === "system" ? <SystemView /> : null}
         {createSession.error instanceof Error ? (

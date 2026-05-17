@@ -52,6 +52,8 @@ NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 _PROMPT_INJECTION_RE = re.compile(
     r"("
     r"ignore\s+(?:all\s+)?(?:previous|prior)\s+instructions|"
+    r"ignore\s+(?:all\s+)?(?:(?:previous|prior|the)\s+)?(?:aml\s+)?policy|"
+    r"bypass\s+(?:the\s+)?(?:aml\s+)?policy|"
     r"<\s*/?\s*system\s*>|"
     r"\bDAN\b|do\s+anything\s+now|"
     r"jailbreak|"
@@ -65,9 +67,20 @@ _PRIVATE_DATA_RE = re.compile(
     r"("
     r"\bSSN\b|social\s+security|home\s+address|account\s+number|"
     r"raw\s+(?:customer|transaction|account)|"
-    r"customer\s+name|private\s+key|api\s+key|"
+    r"raw\s+(?:\w+\s+){0,4}(?:customer|transaction|account)|"
+    r"customer\s+name|private\s+customer\s+data|private\s+key|api\s+key|"
     r"all\s+customer\s+records|upload\s+.*pastebin|"
     r"/etc/shadow|rm\s+-rf"
+    r")",
+    re.IGNORECASE,
+)
+_EVIDENCE_FABRICATION_RE = re.compile(
+    r"("
+    r"\binvent\s+(?:extra|additional|new|more)?\s*(?:suspect\s+)?hash(?:es)?|"
+    r"\bfabricate\s+(?:evidence|hash(?:es)?|findings?|alerts?)|"
+    r"\bmake\s+(?:the\s+)?(?:graph|case|evidence)\s+look\s+(?:stronger|worse)|"
+    r"\badd\s+(?:a\s+)?stronger\s+allegation\s+even\s+if\s+it\s+is\s+not\s+supported|"
+    r"\binvent\s+(?:extra|additional|new|more)?\s*(?:evidence|findings?|alerts?)"
     r")",
     re.IGNORECASE,
 )
@@ -463,6 +476,14 @@ class AmlPolicyEvaluator:
                 _rule_hit(
                     rule_id="F6-B2-PRIVATE-DATA-EXTRACTION",
                     detail="Policy detected a private-data extraction request.",
+                    severity=PolicySeverity.CRITICAL,
+                )
+            )
+        if _EVIDENCE_FABRICATION_RE.search(combined):
+            hits.append(
+                _rule_hit(
+                    rule_id="F6-B4-EVIDENCE-FABRICATION",
+                    detail="Policy detected a request to fabricate or strengthen evidence.",
                     severity=PolicySeverity.CRITICAL,
                 )
             )

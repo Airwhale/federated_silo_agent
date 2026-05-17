@@ -106,6 +106,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/case-notebook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Case Notebook */
+        get: operations["get_case_notebook_sessions__session_id__case_notebook_get"];
+        put?: never;
+        /** Case Notebook */
+        post: operations["case_notebook_sessions__session_id__case_notebook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/{session_id}/timeline": {
         parameters: {
             query?: never;
@@ -221,6 +239,42 @@ export interface components {
          */
         BankId: "bank_alpha" | "bank_beta" | "bank_gamma" | "federation";
         /**
+         * CaseNotebookReportSnapshot
+         * @description Generated case notebook plus static HTML report views.
+         */
+        CaseNotebookReportSnapshot: {
+            status: components["schemas"]["SnapshotStatus"];
+            /** Scenario Id */
+            scenario_id: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Terminal Code */
+            terminal_code?: string | null;
+            /** Terminal Reason */
+            terminal_reason?: string | null;
+            /** Notebook Path */
+            notebook_path: string;
+            /** Artifact Path */
+            artifact_path: string;
+            /** Notebook Html Path */
+            notebook_html_path: string;
+            /** Artifact Html Path */
+            artifact_html_path: string;
+            /** Notebook Html */
+            notebook_html: string;
+            /** Artifact Html */
+            artifact_html: string;
+            /** Cell Count */
+            cell_count: number;
+            /** Detail */
+            detail: string;
+        };
+        /**
          * ComponentId
          * @description Inspectable node or mechanism ids shown in the judge console.
          * @enum {string}
@@ -243,6 +297,13 @@ export interface components {
             /** @default valid_but_malicious */
             attacker_profile: components["schemas"]["AttackerProfile"];
             target_instance_id?: components["schemas"]["TrustDomainId"] | null;
+            /**
+             * Route Through Lobster Trap
+             * @default true
+             */
+            route_through_lobster_trap: boolean;
+            /** Model Route */
+            model_route?: string | null;
         };
         /**
          * ComponentInteractionResult
@@ -254,9 +315,9 @@ export interface components {
          *       False only when the component is not built yet (and therefore
          *       cannot be interacted with at all).
          *     * ``executed`` -- a live handler actually ran and produced
-         *       meaningful output. False for PROMPT / SAFE_INPUT today because
-         *       the live LT / LLM adapter lands with P14/P15; the request is
-         *       still ``accepted`` and shows up on the timeline.
+         *       meaningful output. PROMPT / SAFE_INPUT either call a live
+         *       model-route harness or execute the target component's typed
+         *       boundary check.
          *
          *     The UI uses both to distinguish "successfully inspected" from
          *     "queued for a future handler" from "refused / not built".
@@ -398,7 +459,7 @@ export interface components {
         ProbeKind: "prompt_injection" | "unsigned_message" | "body_tamper" | "wrong_role" | "replay_nonce" | "route_mismatch" | "unsupported_query_shape" | "budget_exhaustion";
         /**
          * ProbeRequest
-         * @description Controlled attack request sent through a real or placeholder boundary.
+         * @description Controlled attack request sent through a real security boundary.
          */
         ProbeRequest: {
             probe_kind: components["schemas"]["ProbeKind"];
@@ -408,6 +469,11 @@ export interface components {
             /** Payload Text */
             payload_text?: string | null;
             target_instance_id?: components["schemas"]["TrustDomainId"] | null;
+            /**
+             * Route Through Lobster Trap
+             * @default true
+             */
+            route_through_lobster_trap: boolean;
         };
         /**
          * ProbeResult
@@ -843,6 +909,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_case_notebook_sessions__session_id__case_notebook_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseNotebookReportSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    case_notebook_sessions__session_id__case_notebook_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaseNotebookReportSnapshot"];
                 };
             };
             /** @description Validation Error */
