@@ -15,8 +15,9 @@ import socket
 import threading
 import time
 from datetime import timedelta
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal, NamedTuple
+from typing import Any, Literal, Mapping, NamedTuple
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -212,6 +213,9 @@ _DEFAULT_UI_RUN_TURN_DELAY_SECONDS = 1.0
 _SERVICE_CONNECT_TIMEOUT_SECONDS = 0.25
 _MODEL_ROUTE_TIMEOUT_SECONDS = 20.0
 _MODEL_ROUTE_MAX_TOKENS = 64
+_PROVIDER_REACHABILITY_CACHE_SECONDS = 2.0
+_MODEL_ROUTE_CLIENT_LOCK = threading.Lock()
+_MODEL_ROUTE_CLIENT: httpx.Client | None = None
 
 
 class _UiChatMessage(UiStateModel):
@@ -282,9 +286,27 @@ def _env_key_present(key: str) -> bool:
     if os.getenv(key):
         return True
     env_path = _REPO_ROOT / ".env"
-    if not env_path.exists():
+    try:
+        stat = env_path.stat()
+    except OSError:
         return False
-    return bool(dotenv_values(env_path).get(key))
+    return bool(
+        _dotenv_values_cached(
+            str(env_path),
+            stat.st_mtime_ns,
+            stat.st_size,
+        ).get(key)
+    )
+
+
+@lru_cache(maxsize=8)
+def _dotenv_values_cached(
+    env_path: str,
+    mtime_ns: int,
+    size: int,
+) -> Mapping[str, str | None]:
+    _ = (mtime_ns, size)
+    return dict(dotenv_values(env_path))
 
 
 def _tcp_url_reachable(raw_url: str) -> bool:
@@ -303,16 +325,31 @@ def _tcp_url_reachable(raw_url: str) -> bool:
         return False
 
 
+@lru_cache(maxsize=16)
+def _tcp_url_reachable_cached(raw_url: str, cache_bucket: int) -> bool:
+    _ = cache_bucket
+    return _tcp_url_reachable(raw_url)
+
+
+def _provider_reachability_cache_bucket() -> int:
+    return int(time.monotonic() / _PROVIDER_REACHABILITY_CACHE_SECONDS)
+
+
 def _local_provider_state() -> _LocalProviderState:
     infra_root = _infra_root()
+    cache_bucket = _provider_reachability_cache_bucket()
+    lobster_trap_url = os.getenv(_LOBSTER_TRAP_URL_ENV, _DEFAULT_LOBSTER_TRAP_URL)
+    litellm_url = os.getenv(_LITELLM_URL_ENV, _DEFAULT_LITELLM_URL)
     return _LocalProviderState(
         lobster_trap_configured=(infra_root / "lobstertrap").exists(),
         litellm_configured=(infra_root / "litellm_config.yaml").exists(),
-        lobster_trap_reachable=_tcp_url_reachable(
-            os.getenv(_LOBSTER_TRAP_URL_ENV, _DEFAULT_LOBSTER_TRAP_URL)
+        lobster_trap_reachable=_tcp_url_reachable_cached(
+            lobster_trap_url,
+            cache_bucket,
         ),
-        litellm_reachable=_tcp_url_reachable(
-            os.getenv(_LITELLM_URL_ENV, _DEFAULT_LITELLM_URL)
+        litellm_reachable=_tcp_url_reachable_cached(
+            litellm_url,
+            cache_bucket,
         ),
     )
 
@@ -329,13 +366,20 @@ def _post_live_chat_completion(
     url: str,
     request: _UiChatCompletionRequest,
 ) -> _UiChatCompletionResponse:
-    with httpx.Client(timeout=_MODEL_ROUTE_TIMEOUT_SECONDS) as client:
-        response = client.post(
-            url,
-            json=request.model_dump(by_alias=True, exclude_none=True, mode="json"),
-        )
-        response.raise_for_status()
-        return _UiChatCompletionResponse.model_validate(response.json())
+    response = _model_route_client().post(
+        url,
+        json=request.model_dump(by_alias=True, exclude_none=True, mode="json"),
+    )
+    response.raise_for_status()
+    return _UiChatCompletionResponse.model_validate(response.json())
+
+
+def _model_route_client() -> httpx.Client:
+    global _MODEL_ROUTE_CLIENT
+    with _MODEL_ROUTE_CLIENT_LOCK:
+        if _MODEL_ROUTE_CLIENT is None:
+            _MODEL_ROUTE_CLIENT = httpx.Client(timeout=_MODEL_ROUTE_TIMEOUT_SECONDS)
+        return _MODEL_ROUTE_CLIENT
 
 
 def _response_preview(response: _UiChatCompletionResponse) -> str:

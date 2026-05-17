@@ -129,7 +129,7 @@ def _events_for_primitive_records(
         events.append(
             _rho_event(
                 event_id=_event_id(
-                    UUID(item.record.args_hash[:32]),
+                    item.record.args_hash,
                     f"pattern-rho-{index}",
                 ),
                 actor_agent_id=f"{item.bank_id.value}.A3",
@@ -179,5 +179,5 @@ def _audit_event(
     )
 
 
-def _event_id(seed: UUID, label: str) -> UUID:
+def _event_id(seed: UUID | str, label: str) -> UUID:
     return uuid5(_AUDIT_NAMESPACE, f"{seed}:{label}")
