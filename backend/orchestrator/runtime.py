@@ -110,7 +110,9 @@ class SessionOrchestratorState:
     sar_contribution: SARContribution | None = None
     graph_pattern_request: GraphPatternRequest | None = None
     graph_pattern_response: GraphPatternResponse | None = None
-    pattern_aggregate_provenance: list[PrimitiveAuditRecord] = field(default_factory=list)
+    pattern_aggregate_provenance: list[PrimitiveAuditRecord] = field(
+        default_factory=list
+    )
     policy_evaluations: list[PolicyEvaluationRecord] = field(default_factory=list)
     sar_assembly_request: SARAssemblyRequest | None = None
     sar_contribution_request: SARContributionRequest | None = None
@@ -198,7 +200,9 @@ class Orchestrator:
             return state.terminal_reason
         # This state machine carries one active alert per session cascade.
         # Re-validate after adjusting created_at so timestamp normalization and
-        # envelope validators still run; model_copy(update=...) skips them.
+        # envelope validators still run. Do not replace this with
+        # model_copy(update=...): Pydantic v2 skips model validators on that
+        # path, which would bypass the boundary checks this turn depends on.
         state.latest_alert = Alert.model_validate(
             {
                 **emitted[0].model_dump(),
@@ -259,7 +263,9 @@ class Orchestrator:
         )
         if result.response is not None:
             state.aggregate_response = result.response
-            state.terminal_reason = f"F1 refused query: {result.response.refusal_reason}"
+            state.terminal_reason = (
+                f"F1 refused query: {result.response.refusal_reason}"
+            )
             state.terminal_code = TerminalCode.F1_REFUSAL
             return state.terminal_reason
         if result.route_plan is None:
@@ -269,7 +275,11 @@ class Orchestrator:
         state.route_plan = result.route_plan
         state.routed_requests = [
             *result.route_plan.peer_requests,
-            *([result.route_plan.local_request] if result.route_plan.local_request else []),
+            *(
+                [result.route_plan.local_request]
+                if result.route_plan.local_request
+                else []
+            ),
         ]
         for request in state.routed_requests:
             self._record_policy_evaluation(
@@ -310,7 +320,9 @@ class Orchestrator:
             state.terminal_reason = "A3 turn could not resolve a single routed bank."
             state.terminal_code = TerminalCode.ROUTE_PLAN_INVALID
             return state.terminal_reason
-        response = state.registry.a3_by_bank[bank_id].run(A3TurnInput(request=turn.request))
+        response = state.registry.a3_by_bank[bank_id].run(
+            A3TurnInput(request=turn.request)
+        )
         state.a3_responses.append(response)
         self._record_policy_evaluation(
             state,
@@ -337,7 +349,11 @@ class Orchestrator:
             state.route_plan = result.route_plan
             state.routed_requests = [
                 *result.route_plan.peer_requests,
-                *([result.route_plan.local_request] if result.route_plan.local_request else []),
+                *(
+                    [result.route_plan.local_request]
+                    if result.route_plan.local_request
+                    else []
+                ),
             ]
             state.a3_responses = []
             return "F1 negotiated a retry route plan."
@@ -359,7 +375,9 @@ class Orchestrator:
             or state.original_query is None
             or state.aggregate_response is None
         ):
-            raise ValueError("A2 synthesis requires alert, query, and aggregate response")
+            raise ValueError(
+                "A2 synthesis requires alert, query, and aggregate response"
+            )
         bank_id = state.latest_alert.sender_bank_id
         agent = state.registry.a2_by_bank[bank_id]
         result = agent.run(
@@ -370,14 +388,18 @@ class Orchestrator:
             )
         )
         if result.sar_contribution is not None:
-            state.sar_contribution = _with_canonical_amount_range(result.sar_contribution)
+            state.sar_contribution = _with_canonical_amount_range(
+                result.sar_contribution
+            )
             return "A2 emitted SAR contribution for canonical F2/F4 assembly."
         if result.dismissal is not None:
             state.dismissal = result.dismissal
             state.terminal_reason = "A2 dismissed after peer synthesis."
             state.terminal_code = TerminalCode.A2_DISMISSED_AFTER_PEER
             return state.terminal_reason
-        state.terminal_reason = result.rejection_reason or "A2 synthesis ended without artifact."
+        state.terminal_reason = (
+            result.rejection_reason or "A2 synthesis ended without artifact."
+        )
         state.terminal_code = TerminalCode.A2_SYNTHESIS_NO_ARTIFACT
         return state.terminal_reason
 
@@ -404,7 +426,9 @@ class Orchestrator:
             message=response,
         )
         if response.pattern_class == PatternClass.NONE:
-            state.terminal_reason = "F2 found no cross-bank pattern warranting SAR assembly."
+            state.terminal_reason = (
+                "F2 found no cross-bank pattern warranting SAR assembly."
+            )
             state.terminal_code = TerminalCode.NO_SAR_WARRANTED
             return state.terminal_reason
         return (
@@ -468,7 +492,9 @@ class Orchestrator:
             state.terminal_reason = "F5 found audit issues requiring human review."
             state.terminal_code = TerminalCode.F5_HUMAN_REVIEW_REQUIRED
             return state.terminal_reason
-        state.terminal_reason = "Canonical demo completed with SAR draft and clean audit."
+        state.terminal_reason = (
+            "Canonical demo completed with SAR draft and clean audit."
+        )
         state.terminal_code = TerminalCode.SAR_DRAFT_READY
         return state.terminal_reason
 
@@ -542,7 +568,9 @@ class Orchestrator:
             contributions=contributions,
             graph_pattern=state.graph_pattern_response,
             sanctions=state.sanctions_response,
-            policy_evaluations=[record.policy_result for record in state.policy_evaluations],
+            policy_evaluations=[
+                record.policy_result for record in state.policy_evaluations
+            ],
             related_query_ids=_related_query_ids(state),
         )
 
@@ -615,6 +643,7 @@ def _correlated_alert_id(source_alert_id: UUID, ordinal: int) -> UUID:
 
 
 def _query_window(state: SessionOrchestratorState) -> tuple[date, date]:
+    """Resolve the F2 aggregate window from the routed query or active alert."""
     if state.original_query is not None:
         payload = state.original_query.query_payload
         if payload is not None:
@@ -623,7 +652,11 @@ def _query_window(state: SessionOrchestratorState) -> tuple[date, date]:
             if window_start is not None and window_end is not None:
                 return window_start, window_end
     if state.latest_alert is None:
-        raise ValueError("query window requires original_query or latest_alert")
+        # F2 is only scheduled after A1/A2 in the canonical state machine.
+        # Hitting this branch means a caller bypassed that invariant.
+        raise ValueError(
+            "F2 graph analysis requires original_query payload window or latest_alert"
+        )
     end = state.latest_alert.created_at.date()
     return end - timedelta(days=30), end
 

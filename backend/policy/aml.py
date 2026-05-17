@@ -20,7 +20,11 @@ from backend.security import (
     SecurityEnvelopeError,
     approved_body_hash,
 )
-from backend.security.exceptions import PrincipalNotAllowed, ReplayDetected, SignatureInvalid
+from backend.security.exceptions import (
+    PrincipalNotAllowed,
+    ReplayDetected,
+    SignatureInvalid,
+)
 from shared.enums import (
     AgentRole,
     AuditEventKind,
@@ -67,7 +71,7 @@ _PRIVATE_DATA_RE = re.compile(
     r"("
     r"\bSSN\b|social\s+security|home\s+address|account\s+number|"
     r"raw\s+(?:customer|transaction|account)|"
-    r"raw\s+(?:\w+\s+){0,4}(?:customer|transaction|account)|"
+    r"raw\s+(?:[A-Za-z0-9_]{1,40}\s+){0,4}(?:customer|transaction|account)|"
     r"customer\s+name|private\s+customer\s+data|private\s+key|api\s+key|"
     r"all\s+customer\s+records|upload\s+.*pastebin|"
     r"/etc/shadow|rm\s+-rf"
@@ -154,6 +158,7 @@ class LobsterTrapAuditRecord(BaseModel):
     rule_name: NonEmptyStr | None = None
 
     model_config = ConfigDict(extra="allow", strict=True, validate_assignment=True)
+
 
 class NormalizedLobsterTrapAudit(BaseModel):
     """LT audit normalization preserving fields that P4 AuditEvent cannot hold."""
@@ -368,7 +373,9 @@ class AmlPolicyEvaluator:
         if block_hits:
             audit_events.extend(self._constraint_event(hit) for hit in block_hits)
             if redaction_hit is not None:
-                audit_events.append(self._constraint_event(redaction_hit, blocked=False))
+                audit_events.append(
+                    self._constraint_event(redaction_hit, blocked=False)
+                )
             return self._evaluation(
                 request=request,
                 decision=PolicyDecision.BLOCK,
@@ -585,11 +592,17 @@ class AmlPolicyEvaluator:
                 if approval is None:
                     return _route_violation("F1-routed Sec314bQuery requires approval.")
                 if approval.route_kind != RouteKind.PEER_314B:
-                    return _route_violation("Sec314bQuery requires peer_314b route kind.")
+                    return _route_violation(
+                        "Sec314bQuery requires peer_314b route kind."
+                    )
                 if approval.responding_bank_id == approval.requesting_bank_id:
                     return _route_violation("Peer route cannot target requester bank.")
-                if message.recipient_agent_id != _a3_agent_id(approval.responding_bank_id):
-                    return _route_violation("Peer route recipient must match A3 target.")
+                if message.recipient_agent_id != _a3_agent_id(
+                    approval.responding_bank_id
+                ):
+                    return _route_violation(
+                        "Peer route recipient must match A3 target."
+                    )
                 return None
             return _route_violation("Sec314bQuery sender role is not allowed.")
 
@@ -612,9 +625,15 @@ class AmlPolicyEvaluator:
             return None
 
         if isinstance(message, Sec314bResponse):
-            if message.sender_role == AgentRole.A3 and message.recipient_agent_id == "federation.F1":
+            if (
+                message.sender_role == AgentRole.A3
+                and message.recipient_agent_id == "federation.F1"
+            ):
                 return None
-            if message.sender_role == AgentRole.F1 and message.recipient_agent_id.endswith(".A2"):
+            if (
+                message.sender_role == AgentRole.F1
+                and message.recipient_agent_id.endswith(".A2")
+            ):
                 return None
             return _route_violation("Sec314bResponse route is not allowed.")
 

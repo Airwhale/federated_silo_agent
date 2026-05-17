@@ -172,7 +172,9 @@ class DemoSessionRuntime:
             self.updated_at = utc_now()
         return event
 
-    def to_snapshot(self, components: list[ComponentReadinessSnapshot]) -> SessionSnapshot:
+    def to_snapshot(
+        self, components: list[ComponentReadinessSnapshot]
+    ) -> SessionSnapshot:
         with self.lock:
             return SessionSnapshot(
                 session_id=self.session_id,
@@ -317,7 +319,8 @@ def _tcp_url_reachable(raw_url: str) -> bool:
     # CLI smoke tests, and the local demo all share one code path. Keep this
     # reachability probe sync too, but constrain it to localhost-style service
     # health with a 100ms timeout plus a short TTL cache. It is not used for
-    # provider calls or high-volume request forwarding.
+    # provider calls or high-volume request forwarding. If the UI API moves
+    # to async route handlers, replace this seam with asyncio.open_connection.
     parsed = urlparse(raw_url)
     host = parsed.hostname
     port = parsed.port
@@ -428,6 +431,7 @@ def _lobstertrap_rule(response: _UiChatCompletionResponse) -> str | None:
     rule = ingress.get("rule_name")
     return rule if isinstance(rule, str) else None
 
+
 # `ShortText` allows up to 2048 chars, but a downstream library may
 # produce a longer error string in unusual cases. Truncate at the
 # assignment site to defense-in-depth against a Pydantic ValidationError
@@ -456,6 +460,76 @@ def _truncate_detail(text: str, *, limit: int = _DETAIL_MAX_LEN) -> str:
         return text
     head_len = max(limit - len(_DETAIL_ELLIPSIS), 1)
     return text[:head_len] + _DETAIL_ELLIPSIS
+
+
+def _needs_prompt_boundary(
+    readiness_item: ComponentReadinessSnapshot,
+    request: ComponentInteractionRequest,
+) -> bool:
+    return (
+        readiness_item.status != SnapshotStatus.NOT_BUILT
+        and request.interaction_kind
+        in {ComponentInteractionKind.PROMPT, ComponentInteractionKind.SAFE_INPUT}
+    )
+
+
+def _gate_destination_outcome(
+    *,
+    component_id: ComponentId,
+    needs_prompt_boundary: bool,
+) -> _LiveInteractionOutcome | None:
+    if not needs_prompt_boundary or component_id != ComponentId.LOBSTER_TRAP:
+        return None
+    return _LiveInteractionOutcome(
+        status=SnapshotStatus.BLOCKED,
+        blocked_by=SecurityLayer.SCHEMA,
+        reason=(
+            "Lobster Trap is a policy gate, not a message destination. "
+            "Choose the business component or model route and leave LT gate enabled."
+        ),
+    )
+
+
+def _policy_scan_outcome_for_interaction(
+    *,
+    component_id: ComponentId,
+    request: ComponentInteractionRequest,
+    needs_prompt_boundary: bool,
+    sender_proof_outcome: _LiveInteractionOutcome | None,
+) -> _LiveInteractionOutcome | None:
+    if (
+        not needs_prompt_boundary
+        or not request.route_through_lobster_trap
+        or component_id == ComponentId.LOBSTER_TRAP
+        or sender_proof_outcome is not None
+    ):
+        return None
+    return _lobster_trap_policy_scan_outcome(request=request)
+
+
+def _live_model_route_outcome_for_interaction(
+    *,
+    component_id: ComponentId,
+    request: ComponentInteractionRequest,
+    needs_prompt_boundary: bool,
+    sender_proof_outcome: _LiveInteractionOutcome | None,
+    policy_scan_outcome: _LiveInteractionOutcome | None,
+) -> _LiveInteractionOutcome | None:
+    if (
+        not needs_prompt_boundary
+        or component_id != ComponentId.LITELLM
+        or sender_proof_outcome is not None
+        or policy_scan_outcome is not None
+    ):
+        return None
+    return _live_model_route_outcome(
+        component_id=(
+            ComponentId.LOBSTER_TRAP
+            if request.route_through_lobster_trap
+            else ComponentId.LITELLM
+        ),
+        request=request,
+    )
 
 
 def _live_model_route_outcome(
@@ -606,7 +680,9 @@ def _lobster_trap_policy_scan_outcome(
             reason="A Lobster Trap policy scan needs a non-empty payload.",
         )
 
-    domain = request.target_instance_id.value if request.target_instance_id else "federation"
+    domain = (
+        request.target_instance_id.value if request.target_instance_id else "federation"
+    )
     bank_id = _policy_bank_id(request.target_instance_id)
     evaluator = AmlPolicyEvaluator(
         config=AmlPolicyConfig(
@@ -643,7 +719,11 @@ def _policy_bank_id(target_instance_id: object | None) -> BankId:
     if target_instance_id is None:
         return BankId.FEDERATION
     value = getattr(target_instance_id, "value", str(target_instance_id))
-    if value in {BankId.BANK_ALPHA.value, BankId.BANK_BETA.value, BankId.BANK_GAMMA.value}:
+    if value in {
+        BankId.BANK_ALPHA.value,
+        BankId.BANK_BETA.value,
+        BankId.BANK_GAMMA.value,
+    }:
         return BankId(value)
     return BankId.FEDERATION
 
@@ -688,13 +768,22 @@ def _typed_interaction_boundary(
     if component_id == ComponentId.F5:
         return ("signed AuditReviewRequest windows", SecurityLayer.SCHEMA)
     if component_id in {ComponentId.SIGNING, ComponentId.ENVELOPE}:
-        return ("signed envelopes from an allowlisted principal", SecurityLayer.SIGNATURE)
+        return (
+            "signed envelopes from an allowlisted principal",
+            SecurityLayer.SIGNATURE,
+        )
     if component_id == ComponentId.REPLAY:
         return ("verified signed envelopes with fresh nonces", SecurityLayer.REPLAY)
     if component_id == ComponentId.ROUTE_APPROVAL:
-        return ("signed F1 route approvals bound to one request body", SecurityLayer.ROUTE_APPROVAL)
+        return (
+            "signed F1 route approvals bound to one request body",
+            SecurityLayer.ROUTE_APPROVAL,
+        )
     if component_id in {ComponentId.P7, ComponentId.DP_LEDGER}:
-        return ("typed primitive calls with a valid requester budget", SecurityLayer.P7_BUDGET)
+        return (
+            "typed primitive calls with a valid requester budget",
+            SecurityLayer.P7_BUDGET,
+        )
     if component_id == ComponentId.AUDIT_CHAIN:
         return ("orchestrator-emitted audit events", SecurityLayer.SCHEMA)
     return ("the component's typed API contract", SecurityLayer.SCHEMA)
@@ -863,12 +952,8 @@ class DemoControlService:
             artifact_path=_display_path(generation.artifact_path),
             notebook_html_path=_display_path(generation.notebook_html_path),
             artifact_html_path=_display_path(generation.artifact_html_path),
-            notebook_html=generation.notebook_html_path.read_text(
-                encoding="utf-8"
-            ),
-            artifact_html=generation.artifact_html_path.read_text(
-                encoding="utf-8"
-            ),
+            notebook_html=generation.notebook_html_path.read_text(encoding="utf-8"),
+            artifact_html=generation.artifact_html_path.read_text(encoding="utf-8"),
             cell_count=generation.cell_count,
             detail=(
                 "Generated federation-safe notebook, artifact bundle, and "
@@ -1157,56 +1242,31 @@ class DemoControlService:
         session = self._session(session_id)
         readiness = {item.component_id: item for item in self.component_readiness()}
         readiness_item = readiness[component_id]
-        needs_prompt_boundary = (
-            readiness_item.status != SnapshotStatus.NOT_BUILT
-            and request.interaction_kind
-            in {ComponentInteractionKind.PROMPT, ComponentInteractionKind.SAFE_INPUT}
-        )
-        needs_live_model_route = (
-            needs_prompt_boundary
-            and component_id == ComponentId.LITELLM
-        )
-        gate_destination_outcome = (
-            _LiveInteractionOutcome(
-                status=SnapshotStatus.BLOCKED,
-                blocked_by=SecurityLayer.SCHEMA,
-                reason=(
-                    "Lobster Trap is a policy gate, not a message destination. "
-                    "Choose the business component or model route and leave LT gate enabled."
-                ),
-            )
-            if needs_prompt_boundary and component_id == ComponentId.LOBSTER_TRAP
-            else None
+        needs_prompt_boundary = _needs_prompt_boundary(readiness_item, request)
+        gate_destination_outcome = _gate_destination_outcome(
+            component_id=component_id,
+            needs_prompt_boundary=needs_prompt_boundary,
         )
         sender_proof_outcome = (
             _sender_proof_outcome(request) if needs_prompt_boundary else None
         )
-        policy_scan_outcome = (
-            _lobster_trap_policy_scan_outcome(request=request)
-            if needs_prompt_boundary
-            and request.route_through_lobster_trap
-            and component_id != ComponentId.LOBSTER_TRAP
-            and sender_proof_outcome is None
-            else None
+        policy_scan_outcome = _policy_scan_outcome_for_interaction(
+            component_id=component_id,
+            request=request,
+            needs_prompt_boundary=needs_prompt_boundary,
+            sender_proof_outcome=sender_proof_outcome,
         )
         # Live proxy calls can block on localhost/provider I/O. Run them
         # outside the session lock, then commit the result and timeline
         # together below. The deterministic LT policy scan runs first:
         # a prompt that violates local policy should never need to reach
         # the proxy or model provider just to demonstrate the block.
-        live_model_route_outcome = (
-            _live_model_route_outcome(
-                component_id=(
-                    ComponentId.LOBSTER_TRAP
-                    if request.route_through_lobster_trap
-                    else ComponentId.LITELLM
-                ),
-                request=request,
-            )
-            if needs_live_model_route
-            and sender_proof_outcome is None
-            and policy_scan_outcome is None
-            else None
+        live_model_route_outcome = _live_model_route_outcome_for_interaction(
+            component_id=component_id,
+            request=request,
+            needs_prompt_boundary=needs_prompt_boundary,
+            sender_proof_outcome=sender_proof_outcome,
+            policy_scan_outcome=policy_scan_outcome,
         )
 
         # Atomic read-modify-write: hold ``session.lock`` across the
@@ -1419,7 +1479,9 @@ class DemoControlService:
         # source tree layout does not match the installed layout.
         provider_state = _local_provider_state()
         return ProviderHealthSnapshot(
-            status=SnapshotStatus.LIVE if provider_state.live else SnapshotStatus.PENDING,
+            status=SnapshotStatus.LIVE
+            if provider_state.live
+            else SnapshotStatus.PENDING,
             lobster_trap_configured=provider_state.lobster_trap_configured,
             litellm_configured=provider_state.litellm_configured,
             gemini_api_key_present=_env_key_present("GEMINI_API_KEY"),
@@ -1457,28 +1519,99 @@ class DemoControlService:
             else "Model proxy config is present, but the local service is not reachable."
         )
         return [
-            _component(ComponentId.A1, "A1 local monitor", SnapshotStatus.LIVE, "P6 complete."),
-            _component(ComponentId.A2, "A2 investigator", SnapshotStatus.LIVE, "P8 complete."),
-            _component(ComponentId.F1, "F1 coordinator", SnapshotStatus.LIVE, "P9 complete."),
-            _component(ComponentId.BANK_ALPHA_A3, "Bank Alpha A3", SnapshotStatus.LIVE, "P8a complete."),
-            _component(ComponentId.BANK_BETA_A3, "Bank Beta A3", SnapshotStatus.LIVE, "P8a complete."),
-            _component(ComponentId.BANK_GAMMA_A3, "Bank Gamma A3", SnapshotStatus.LIVE, "P8a complete."),
-            _component(ComponentId.P7, "P7 stats primitives", SnapshotStatus.LIVE, db_status),
-            _component(ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."),
-            _component(ComponentId.F2, "F2 graph analysis", SnapshotStatus.LIVE, "P11 complete."),
-            _component(ComponentId.F4, "F4 SAR drafter", SnapshotStatus.LIVE, "P12 complete."),
-            _component(ComponentId.F5, "F5 auditor", SnapshotStatus.LIVE, "P13 complete."),
-            _component(ComponentId.LOBSTER_TRAP, "Lobster Trap", lobster_trap_status, lobster_trap_detail),
+            _component(
+                ComponentId.A1, "A1 local monitor", SnapshotStatus.LIVE, "P6 complete."
+            ),
+            _component(
+                ComponentId.A2, "A2 investigator", SnapshotStatus.LIVE, "P8 complete."
+            ),
+            _component(
+                ComponentId.F1, "F1 coordinator", SnapshotStatus.LIVE, "P9 complete."
+            ),
+            _component(
+                ComponentId.BANK_ALPHA_A3,
+                "Bank Alpha A3",
+                SnapshotStatus.LIVE,
+                "P8a complete.",
+            ),
+            _component(
+                ComponentId.BANK_BETA_A3,
+                "Bank Beta A3",
+                SnapshotStatus.LIVE,
+                "P8a complete.",
+            ),
+            _component(
+                ComponentId.BANK_GAMMA_A3,
+                "Bank Gamma A3",
+                SnapshotStatus.LIVE,
+                "P8a complete.",
+            ),
+            _component(
+                ComponentId.P7, "P7 stats primitives", SnapshotStatus.LIVE, db_status
+            ),
+            _component(
+                ComponentId.F3, "F3 sanctions", SnapshotStatus.LIVE, "P10 complete."
+            ),
+            _component(
+                ComponentId.F2,
+                "F2 graph analysis",
+                SnapshotStatus.LIVE,
+                "P11 complete.",
+            ),
+            _component(
+                ComponentId.F4, "F4 SAR drafter", SnapshotStatus.LIVE, "P12 complete."
+            ),
+            _component(
+                ComponentId.F5, "F5 auditor", SnapshotStatus.LIVE, "P13 complete."
+            ),
+            _component(
+                ComponentId.LOBSTER_TRAP,
+                "Lobster Trap",
+                lobster_trap_status,
+                lobster_trap_detail,
+            ),
             _component(ComponentId.LITELLM, "LiteLLM", litellm_status, litellm_detail),
-            _component(ComponentId.SIGNING, "Signing", SnapshotStatus.LIVE, "Ed25519 envelope helpers are live."),
-            _component(ComponentId.ENVELOPE, "Envelope verification", SnapshotStatus.LIVE, "Security envelope checks are live."),
-            _component(ComponentId.REPLAY, "Replay cache", SnapshotStatus.LIVE, "In-memory replay cache is live."),
-            _component(ComponentId.ROUTE_APPROVAL, "Route approvals", SnapshotStatus.LIVE, "F1/A3 route-approval binding is live."),
-            _component(ComponentId.DP_LEDGER, "DP ledger", SnapshotStatus.LIVE, "P7 rho ledger is live."),
-            _component(ComponentId.AUDIT_CHAIN, "Audit chain", SnapshotStatus.LIVE, "P15 in-memory audit hash chain is live."),
+            _component(
+                ComponentId.SIGNING,
+                "Signing",
+                SnapshotStatus.LIVE,
+                "Ed25519 envelope helpers are live.",
+            ),
+            _component(
+                ComponentId.ENVELOPE,
+                "Envelope verification",
+                SnapshotStatus.LIVE,
+                "Security envelope checks are live.",
+            ),
+            _component(
+                ComponentId.REPLAY,
+                "Replay cache",
+                SnapshotStatus.LIVE,
+                "In-memory replay cache is live.",
+            ),
+            _component(
+                ComponentId.ROUTE_APPROVAL,
+                "Route approvals",
+                SnapshotStatus.LIVE,
+                "F1/A3 route-approval binding is live.",
+            ),
+            _component(
+                ComponentId.DP_LEDGER,
+                "DP ledger",
+                SnapshotStatus.LIVE,
+                "P7 rho ledger is live.",
+            ),
+            _component(
+                ComponentId.AUDIT_CHAIN,
+                "Audit chain",
+                SnapshotStatus.LIVE,
+                "P15 in-memory audit hash chain is live.",
+            ),
         ]
 
-    def _ensure_orchestrator_state(self, session: DemoSessionRuntime) -> SessionOrchestratorState:
+    def _ensure_orchestrator_state(
+        self, session: DemoSessionRuntime
+    ) -> SessionOrchestratorState:
         if session.orchestrator_state is None:
             session.orchestrator_state = self._orchestrator.bootstrap(
                 session_id=session.session_id,
@@ -1523,9 +1656,7 @@ class DemoControlService:
                 component_id=_turn_component_id(turn.agent_id),
                 title=f"Live turn: {turn.agent_id}",
                 detail=detail,
-                status=SnapshotStatus.PENDING
-                if is_f4_pending
-                else SnapshotStatus.LIVE,
+                status=SnapshotStatus.PENDING if is_f4_pending else SnapshotStatus.LIVE,
                 blocked_by=SecurityLayer.NOT_BUILT if is_f4_pending else None,
                 turn_agent_id=turn.agent_id,
             )
@@ -1688,7 +1819,11 @@ class DemoControlService:
             private_key=principal.private_key,
             signing_key_id=principal.signing_key_id,
         )
-        approved_hash = message.route_approval.approved_query_body_hash if message.route_approval else None
+        approved_hash = (
+            message.route_approval.approved_query_body_hash
+            if message.route_approval
+            else None
+        )
         computed_hash = approved_body_hash(tampered)
         if approved_hash == computed_hash:
             # Internal-setup invariant: the probe's tampered body
@@ -1700,7 +1835,9 @@ class DemoControlService:
             # but RuntimeError is the cleaner semantic for a
             # service-layer code-invariant violation.
             raise RuntimeError("route mismatch probe did not change approved body hash")
-        response = self._a3_for_bank(session, responding_bank).run(A3TurnInput(request=tampered))
+        response = self._a3_for_bank(session, responding_bank).run(
+            A3TurnInput(request=tampered)
+        )
         if response.refusal_reason != "route_violation":
             # A3 accepted a body that no longer matches the signed route
             # approval — surface as a structured probe-accepted result so
@@ -1832,7 +1969,9 @@ class DemoControlService:
         # probe family. A benign unsupported-shape payload should prove the
         # supported hash-only A3 path still works, while attack samples below
         # exercise the route-shape block.
-        if request.payload_text and not _payload_requests_unsupported_shape(request.payload_text):
+        if request.payload_text and not _payload_requests_unsupported_shape(
+            request.payload_text
+        ):
             signed_supported = self._signed_f1_routed_query(
                 nonce=f"supported-shape-{uuid4()}",
                 responding_bank=responding_bank,
@@ -1895,7 +2034,9 @@ class DemoControlService:
             private_key=principal.private_key,
             signing_key_id=principal.signing_key_id,
         )
-        response = self._a3_for_bank(session, responding_bank).run(A3TurnInput(request=signed))
+        response = self._a3_for_bank(session, responding_bank).run(
+            A3TurnInput(request=signed)
+        )
         if response.refusal_reason == "unsupported_query_shape":
             envelope = _envelope_snapshot(
                 signed,
@@ -2150,7 +2291,9 @@ def _orchestrator_component_fields(
         fields.append(
             SnapshotField(
                 name="latest_alert_id",
-                value=str(state.latest_alert.alert_id) if state.latest_alert else "none",
+                value=str(state.latest_alert.alert_id)
+                if state.latest_alert
+                else "none",
             )
         )
     elif component_id == ComponentId.A2:
@@ -2205,11 +2348,7 @@ def _orchestrator_component_fields(
     }:
         bank_id = _a3_component_bank(component_id)
         response = next(
-            (
-                item
-                for item in state.a3_responses
-                if item.responding_bank_id == bank_id
-            ),
+            (item for item in state.a3_responses if item.responding_bank_id == bank_id),
             None,
         )
         fields.extend(
@@ -2373,8 +2512,7 @@ def _dp_ledger_entries(state: SessionOrchestratorState) -> list[DpLedgerEntrySna
             responding_bank_id=response.responding_bank_id,
         )
         current_total_spend = (
-            cumulative_spend_by_requester_key.get(requester.stable_key, 0.0)
-            + rho_spent
+            cumulative_spend_by_requester_key.get(requester.stable_key, 0.0) + rho_spent
         )
         cumulative_spend_by_requester_key[requester.stable_key] = current_total_spend
         entries.append(
@@ -2421,7 +2559,17 @@ def _display_path(path: Path) -> str:
 def _cleanup_session_artifacts(session_id: UUID) -> None:
     # Session eviction should also discard generated report artifacts so the
     # bounded in-memory session store does not leave stale notebook trees.
-    shutil.rmtree(_DEFAULT_UI_NOTEBOOK_DIR / str(session_id), ignore_errors=True)
+    artifact_dir = _DEFAULT_UI_NOTEBOOK_DIR / str(session_id)
+    if not artifact_dir.exists():
+        return
+    try:
+        shutil.rmtree(artifact_dir)
+    except OSError:
+        _logger.warning(
+            "Failed to clean up UI notebook artifacts for session %s",
+            session_id,
+            exc_info=True,
+        )
 
 
 def _sample_case_report(session: DemoSessionRuntime) -> CaseNotebookReportSnapshot:
@@ -2445,7 +2593,7 @@ def _sample_case_report(session: DemoSessionRuntime) -> CaseNotebookReportSnapsh
 
 def _sample_notebook_html() -> str:
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8" />'
         "<style>body{margin:0;font-family:Inter,system-ui,sans-serif;color:#0f172a;background:#f8fafc}"
         "main{padding:20px}section{margin-top:12px;border:1px solid #cbd5e1;border-radius:8px;background:white;padding:14px}"
         "h1{margin:0 0 8px;font-size:24px}h2{margin:0 0 8px;font-size:16px}"
@@ -2455,7 +2603,7 @@ def _sample_notebook_html() -> str:
         "<body><main><h1>Sample AML notebook preview</h1>"
         "<section><h2>What judges will see after generation</h2>"
         "<p>The live report summarizes the completed demo path, reconstructs the pooled F2 statistic from bank-safe intermediaries, and lists DP, policy, SAR, and audit evidence.</p>"
-        "<div class=\"bar\" style=\"width:76%\"></div></section>"
+        '<div class="bar" style="width:76%"></div></section>'
         "<section><h2>Privacy boundary</h2><p>The generated notebook is built from signed messages, hashes, DP provenance, and audit findings. It does not query raw silo data.</p></section>"
         "<details><summary>Show sample code cell</summary><pre><code>CASE_ARTIFACTS['scenario_id']</code></pre></details>"
         "</main></body></html>"
@@ -2464,15 +2612,15 @@ def _sample_notebook_html() -> str:
 
 def _sample_artifact_html() -> str:
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\" />"
+        '<!doctype html><html lang="en"><head><meta charset="utf-8" />'
         "<style>body{margin:0;font-family:Inter,system-ui,sans-serif;color:#0f172a;background:#f8fafc}"
         "main{padding:20px}pre{white-space:pre-wrap;word-break:break-word;border-radius:8px;background:#0f172a;color:#dbeafe;padding:14px}</style></head>"
         "<body><main><h1>Sample sanitized artifact preview</h1><pre>{\n"
-        "  \"scenario_id\": \"s1_structuring_ring\",\n"
-        "  \"statistical_intermediaries\": \"[per-bank DP aggregate rows]\",\n"
-        "  \"graph_pattern_response\": \"[F2 pattern finding]\",\n"
-        "  \"sar_draft\": \"[F4 SAR draft]\",\n"
-        "  \"audit_review_result\": \"[F5 findings]\"\n"
+        '  "scenario_id": "s1_structuring_ring",\n'
+        '  "statistical_intermediaries": "[per-bank DP aggregate rows]",\n'
+        '  "graph_pattern_response": "[F2 pattern finding]",\n'
+        '  "sar_draft": "[F4 SAR draft]",\n'
+        '  "audit_review_result": "[F5 findings]"\n'
         "}</pre></main></body></html>"
     )
 
@@ -2545,7 +2693,8 @@ def _probe_result(
         component_id=request.target_component,
         title=f"Probe: {request.probe_kind.value}",
         detail=reason,
-        status=event_status or (SnapshotStatus.ERROR if accepted else SnapshotStatus.BLOCKED),
+        status=event_status
+        or (SnapshotStatus.ERROR if accepted else SnapshotStatus.BLOCKED),
         blocked_by=blocked_by,
     )
     return ProbeResult(

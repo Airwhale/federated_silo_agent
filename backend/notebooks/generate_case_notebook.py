@@ -15,6 +15,7 @@ from backend.demo.seeds import CANONICAL_RUN_LABEL
 from backend.notebooks.case_notebook import (
     CaseNotebookArtifacts,
     CaseNotebookGenerationResult,
+    NOTEBOOK_REPORTER_NODE_ID,
     NotebookNarrativeMode,
     build_case_artifacts_from_state,
     generate_case_notebook,
@@ -27,7 +28,7 @@ from backend.runtime.context import LLMClientConfig
 # next caller who needs a non-default route. ``_build_narrative`` itself
 # now requires the caller to pass a client -- there is no silent fallback.
 DEFAULT_NARRATIVE_MODEL = "gemini-notebook-narrator"
-DEFAULT_NARRATIVE_NODE_ID = "federation-notebook-node"
+DEFAULT_NARRATIVE_NODE_ID = NOTEBOOK_REPORTER_NODE_ID
 
 
 DEFAULT_NOTEBOOK_DIR = Path("out") / "notebooks"

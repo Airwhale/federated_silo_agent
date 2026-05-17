@@ -39,10 +39,14 @@ NotebookParagraph = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=1600),
 ]
-NOTEBOOK_PROMPT_PATH = BACKEND_ROOT / "notebooks" / "prompts" / "case_notebook_narrative.md"
-_SAFE_MARKDOWN = (
-    MarkdownIt("commonmark", {"html": False, "linkify": False})
-    .disable(["image", "link", "html_block", "html_inline"])
+NOTEBOOK_PROMPT_PATH = (
+    BACKEND_ROOT / "notebooks" / "prompts" / "case_notebook_narrative.md"
+)
+NOTEBOOK_REPORTER_AGENT_ID = "federation.notebook_reporter"
+NOTEBOOK_REPORTER_NODE_ID = "federation-notebook-node"
+_FEDERATION_NODE_ID_PREFIX = "federation-"
+_SAFE_MARKDOWN = MarkdownIt("commonmark", {"html": False, "linkify": False}).disable(
+    ["image", "link", "html_block", "html_inline"]
 )
 
 
@@ -272,7 +276,9 @@ def render_case_notebook_html(
     notebook_sections.append(_summary_graphics_html(artifacts))
     for index, cell in enumerate(notebook.cells, start=1):
         if isinstance(cell, NotebookMarkdownCell):
-            notebook_sections.append(_markdown_cell_html("".join(cell.source), index=index))
+            notebook_sections.append(
+                _markdown_cell_html("".join(cell.source), index=index)
+            )
         else:
             notebook_sections.append(_code_cell_html("".join(cell.source), index=index))
     artifact_json = json.dumps(
@@ -289,7 +295,7 @@ def render_case_notebook_html(
         title=f"Sanitized artifacts: {artifacts.scenario_id}",
         eyebrow="Federation-safe artifact bundle",
         body=(
-            "<section class=\"case-card\">"
+            '<section class="case-card">'
             "<h2>What this file contains</h2>"
             "<p>This is the exact sanitized JSON bundle embedded in the notebook. "
             "It contains signed message outputs, hash-only evidence, DP provenance, "
@@ -297,7 +303,7 @@ def render_case_notebook_html(
             "raw customer names, raw account identifiers, or raw transaction rows.</p>"
             "</section>"
             f"{_summary_graphics_html(artifacts)}"
-            f"<pre class=\"json-block\"><code>{escape(artifact_json)}</code></pre>"
+            f'<pre class="json-block"><code>{escape(artifact_json)}</code></pre>'
         ),
     )
     return CaseNotebookHtml(
@@ -330,22 +336,36 @@ def _build_narrative(
             "scoped notebook-narrator client) so the prompt flows "
             "through LT/LiteLLM under audited metadata."
         )
+    _validate_notebook_llm_client(llm)
     response = llm.chat_structured(
         system_prompt=NOTEBOOK_PROMPT_PATH.read_text(encoding="utf-8"),
         input_model=narrative_input,
         output_schema=NotebookNarrative,
         metadata=LobsterTrapMetadata(
-            agent_id="federation.notebook_reporter",
+            agent_id=NOTEBOOK_REPORTER_AGENT_ID,
             role=AgentRole.ORCHESTRATOR,
             bank_id=BankId.FEDERATION,
             trust_domain=TrustDomain.FEDERATION,
-            node_id="federation-notebook-node",
+            node_id=NOTEBOOK_REPORTER_NODE_ID,
             run_id=artifacts.run_id,
             declared_intent="generate_federation_safe_case_notebook",
             extra={"scenario_id": artifacts.scenario_id},
         ),
     )
     return NotebookNarrative.model_validate_json(response.content)
+
+
+def _validate_notebook_llm_client(llm: LLMClient) -> None:
+    # The call metadata below fixes the notebook reporter agent id. The
+    # only placement signal available on LLMClientConfig is node_id, so
+    # validate that the provided client belongs to the federation domain
+    # before any LLM narrative leaves the notebook boundary.
+    if not llm.config.node_id.startswith(_FEDERATION_NODE_ID_PREFIX):
+        raise ValueError(
+            "LLM notebook narratives require a federation-scoped LLM client. "
+            f"Expected node_id to start with {_FEDERATION_NODE_ID_PREFIX!r}; "
+            f"got {llm.config.node_id!r}."
+        )
 
 
 def _build_notebook(
@@ -377,10 +397,7 @@ def _build_notebook(
             "pd.set_option('display.max_colwidth', 140)\n"
             "CASE_ARTIFACTS['scenario_id'], CASE_ARTIFACTS['terminal_code']"
         ),
-        _markdown(
-            "## Statistical intermediaries\n\n"
-            f"{narrative.statistical_method}"
-        ),
+        _markdown(f"## Statistical intermediaries\n\n{narrative.statistical_method}"),
         _code(
             "intermediaries = pd.DataFrame(CASE_ARTIFACTS['statistical_intermediaries'])\n"
             "intermediaries"
@@ -439,10 +456,7 @@ def _build_notebook(
             "'rho_debited', 'per_bucket_rho', 'sensitivity', 'sigma_applied', "
             "'eps_delta_display', 'args_hash']] if not dp.empty else dp"
         ),
-        _markdown(
-            "## AML pattern analysis\n\n"
-            f"{narrative.aml_analysis}"
-        ),
+        _markdown(f"## AML pattern analysis\n\n{narrative.aml_analysis}"),
         _code(
             "graph = CASE_ARTIFACTS.get('graph_pattern_response') or {}\n"
             "pd.DataFrame([{\n"
@@ -475,10 +489,7 @@ def _build_notebook(
             "    'narrative': sar.get('narrative'),\n"
             "}])"
         ),
-        _markdown(
-            "## F5 audit review\n\n"
-            f"{narrative.audit_conclusion}"
-        ),
+        _markdown(f"## F5 audit review\n\n{narrative.audit_conclusion}"),
         _code(
             "audit_result = CASE_ARTIFACTS.get('audit_review_result') or {}\n"
             "findings = audit_result.get('findings') or []\n"
@@ -556,9 +567,13 @@ def _template_narrative(input_data: NotebookNarrativeInput) -> NotebookNarrative
         if input_data.pattern_confidence is not None
         else "not available"
     )
-    policy_counts = ", ".join(
-        f"{key}={value}" for key, value in sorted(input_data.policy_decision_counts.items())
-    ) or "none"
+    policy_counts = (
+        ", ".join(
+            f"{key}={value}"
+            for key, value in sorted(input_data.policy_decision_counts.items())
+        )
+        or "none"
+    )
     bank_count = len(input_data.statistical_intermediaries)
     rho_total = sum(row.rho_debited for row in input_data.statistical_intermediaries)
     return NotebookNarrative(
@@ -673,7 +688,7 @@ def _source_lines(source: str) -> list[str]:
 
 def _markdown_cell_html(source: str, *, index: int) -> str:
     return (
-        f"<section class=\"case-card markdown-cell\" data-cell=\"{index}\">"
+        f'<section class="case-card markdown-cell" data-cell="{index}">'
         f"{_markdown_to_html(source)}"
         "</section>"
     )
@@ -681,7 +696,7 @@ def _markdown_cell_html(source: str, *, index: int) -> str:
 
 def _code_cell_html(source: str, *, index: int) -> str:
     return (
-        f"<details class=\"case-card code-cell\" data-cell=\"{index}\">"
+        f'<details class="case-card code-cell" data-cell="{index}">'
         f"<summary>Show code cell {index}</summary>"
         f"<pre><code>{escape(source)}</code></pre>"
         "</details>"
@@ -718,28 +733,33 @@ def _summary_graphics_html(artifacts: CaseNotebookArtifacts) -> str:
         ("Pattern", graph.pattern_class.value if graph else "not available"),
         (
             "Confidence",
-            f"{graph.confidence:.2f}" if graph and graph.confidence is not None else "not available",
+            f"{graph.confidence:.2f}"
+            if graph and graph.confidence is not None
+            else "not available",
         ),
         ("SAR priority", sar.sar_priority.value if sar else "not available"),
         ("F5 findings", str(len(audit.findings) if audit else 0)),
-        ("Policy verdicts", ", ".join(f"{k}: {v}" for k, v in sorted(policy_counts.items())) or "none"),
+        (
+            "Policy verdicts",
+            ", ".join(f"{k}: {v}" for k, v in sorted(policy_counts.items())) or "none",
+        ),
     ]
     cards_html = "".join(
-        "<div class=\"metric-card\">"
+        '<div class="metric-card">'
         f"<span>{escape(label)}</span>"
         f"<strong>{escape(value)}</strong>"
         "</div>"
         for label, value in summary_cards
     )
     return (
-        "<section class=\"case-card visual-summary\">"
+        '<section class="case-card visual-summary">'
         "<h2>Case visuals</h2>"
         "<p>These graphics are built from the same federation-safe artifact bundle "
         "as the notebook. They show the flow, the pooled statistic, and privacy "
         "budget use without exposing raw bank rows.</p>"
-        f"<div class=\"metric-grid\">{cards_html}</div>"
+        f'<div class="metric-grid">{cards_html}</div>'
         f"{_flow_svg_html()}"
-        "<div class=\"chart-grid\">"
+        '<div class="chart-grid">'
         f"{_bar_chart_html('Pooled edge-count buckets', pooled_edges)}"
         f"{_bar_chart_html('Pooled flow buckets', pooled_flows)}"
         f"{_key_value_bar_html('DP rho by bank', rho_by_bank)}"
@@ -761,8 +781,8 @@ def _flow_svg_html() -> str:
         ("F5", 700, 44),
     ]
     node_html = "".join(
-        f"<g><rect x=\"{x}\" y=\"{y}\" rx=\"8\" width=\"72\" height=\"36\" />"
-        f"<text x=\"{x + 36}\" y=\"{y + 23}\" text-anchor=\"middle\">{label}</text></g>"
+        f'<g><rect x="{x}" y="{y}" rx="8" width="72" height="36" />'
+        f'<text x="{x + 36}" y="{y + 23}" text-anchor="middle">{label}</text></g>'
         for label, x, y in nodes
     )
     paths = [
@@ -774,15 +794,15 @@ def _flow_svg_html() -> str:
         "M556 62 L592 62",
         "M664 62 L700 62",
     ]
-    path_html = "".join(f"<path d=\"{path}\" />" for path in paths)
+    path_html = "".join(f'<path d="{path}" />' for path in paths)
     return (
-        "<div class=\"flow-graphic\" role=\"img\" "
-        "aria-label=\"Canonical AML flow from A1 through F5\">"
-        "<svg viewBox=\"0 0 812 188\" preserveAspectRatio=\"xMidYMid meet\">"
-        "<defs><marker id=\"arrow\" markerWidth=\"8\" markerHeight=\"8\" "
-        "refX=\"7\" refY=\"4\" orient=\"auto\"><path d=\"M0,0 L8,4 L0,8 Z\" /></marker></defs>"
+        '<div class="flow-graphic" role="img" '
+        'aria-label="Canonical AML flow from A1 through F5">'
+        '<svg viewBox="0 0 812 188" preserveAspectRatio="xMidYMid meet">'
+        '<defs><marker id="arrow" markerWidth="8" markerHeight="8" '
+        'refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" /></marker></defs>'
         f"{path_html}{node_html}"
-        "<text class=\"boundary\" x=\"286\" y=\"118\" text-anchor=\"middle\">bank silos</text>"
+        '<text class="boundary" x="286" y="118" text-anchor="middle">bank silos</text>'
         "</svg>"
         "</div>"
     )
@@ -793,16 +813,16 @@ def _bar_chart_html(title: str, values: list[int | float]) -> str:
         return _empty_chart_html(title)
     max_value = max(float(value) for value in values) or 1.0
     bars = "".join(
-        "<div class=\"bar-row\">"
-        f"<span class=\"bar-label\">B{index + 1}</span>"
-        "<span class=\"bar-track\">"
-        f"<span class=\"bar-fill\" style=\"width:{(float(value) / max_value) * 100:.2f}%\"></span>"
+        '<div class="bar-row">'
+        f'<span class="bar-label">B{index + 1}</span>'
+        '<span class="bar-track">'
+        f'<span class="bar-fill" style="width:{(float(value) / max_value) * 100:.2f}%"></span>'
         "</span>"
         f"<strong>{escape(_format_number(value))}</strong>"
         "</div>"
         for index, value in enumerate(values)
     )
-    return f"<div class=\"chart-card\"><h3>{escape(title)}</h3>{bars}</div>"
+    return f'<div class="chart-card"><h3>{escape(title)}</h3>{bars}</div>'
 
 
 def _key_value_bar_html(title: str, values: dict[str, int | float]) -> str:
@@ -810,21 +830,21 @@ def _key_value_bar_html(title: str, values: dict[str, int | float]) -> str:
         return _empty_chart_html(title)
     max_value = max(float(value) for value in values.values()) or 1.0
     rows = "".join(
-        "<div class=\"bar-row\">"
-        f"<span class=\"bar-label\">{escape(key)}</span>"
-        "<span class=\"bar-track\">"
-        f"<span class=\"bar-fill\" style=\"width:{(float(value) / max_value) * 100:.2f}%\"></span>"
+        '<div class="bar-row">'
+        f'<span class="bar-label">{escape(key)}</span>'
+        '<span class="bar-track">'
+        f'<span class="bar-fill" style="width:{(float(value) / max_value) * 100:.2f}%"></span>'
         "</span>"
         f"<strong>{escape(_format_number(value))}</strong>"
         "</div>"
         for key, value in sorted(values.items())
     )
-    return f"<div class=\"chart-card\"><h3>{escape(title)}</h3>{rows}</div>"
+    return f'<div class="chart-card"><h3>{escape(title)}</h3>{rows}</div>'
 
 
 def _empty_chart_html(title: str) -> str:
     return (
-        f"<div class=\"chart-card\"><h3>{escape(title)}</h3>"
+        f'<div class="chart-card"><h3>{escape(title)}</h3>'
         "<p>No released rows for this chart.</p></div>"
     )
 
@@ -849,9 +869,9 @@ def _html_document(*, title: str, eyebrow: str, body: str) -> str:
     escaped_eyebrow = escape(eyebrow)
     return (
         "<!doctype html>\n"
-        "<html lang=\"en\">\n"
+        '<html lang="en">\n'
         "<head>\n"
-        "  <meta charset=\"utf-8\" />\n"
+        '  <meta charset="utf-8" />\n'
         f"  <title>{escaped_title}</title>\n"
         "  <style>\n"
         "    :root { color-scheme: light; font-family: Inter, ui-sans-serif, "
@@ -911,7 +931,7 @@ def _html_document(*, title: str, eyebrow: str, body: str) -> str:
         "</head>\n"
         "<body>\n"
         "  <main>\n"
-        f"    <p class=\"eyebrow\">{escaped_eyebrow}</p>\n"
+        f'    <p class="eyebrow">{escaped_eyebrow}</p>\n'
         f"    <h1>{escaped_title}</h1>\n"
         f"    {body}\n"
         "  </main>\n"
