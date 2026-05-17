@@ -873,12 +873,13 @@ class DemoControlService:
             self._ensure_orchestrator_state(session)
         for _ in range(_MAX_ORCHESTRATOR_TURNS):
             with session.lock:
-                if not self._run_one_orchestrator_turn(session):
-                    break
-            # Report generation is a synchronous API call that returns static
-            # artifacts, not the visible "Run story" animation. Do not apply
-            # the UI turn delay here or one report request can hold a worker
-            # thread for many seconds.
+                should_continue = self._run_one_orchestrator_turn(session)
+            if not should_continue:
+                break
+            # This is the visible "Run story" path. Keep the animation delay
+            # outside session.lock so timeline polling and inspection can
+            # observe progress between turns.
+            self._sleep_between_run_turns()
         else:
             with session.lock:
                 session.phase = "turn_cap_reached"
