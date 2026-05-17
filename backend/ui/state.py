@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import socket
 import threading
 import time
@@ -744,6 +745,7 @@ class DemoControlService:
 
     def create_session(self, request: SessionCreateRequest) -> SessionSnapshot:
         session = DemoSessionRuntime(request)
+        evicted_ids: list[UUID] = []
         with self._sessions_lock:
             # Belt-and-braces with the __init__ validation: even if the
             # cap were somehow zeroed, `and self._sessions` keeps the
@@ -751,7 +753,10 @@ class DemoControlService:
             while len(self._sessions) >= MAX_ACTIVE_SESSIONS and self._sessions:
                 oldest_id = next(iter(self._sessions))
                 del self._sessions[oldest_id]
+                evicted_ids.append(oldest_id)
             self._sessions[session.session_id] = session
+        for evicted_id in evicted_ids:
+            _cleanup_session_artifacts(evicted_id)
         return session.to_snapshot(self.component_readiness())
 
     def get_session(self, session_id: UUID) -> SessionSnapshot:
@@ -768,11 +773,13 @@ class DemoControlService:
         session = self._session(session_id)
         with session.lock:
             self._ensure_orchestrator_state(session)
-            for _ in range(_MAX_ORCHESTRATOR_TURNS):
+        for _ in range(_MAX_ORCHESTRATOR_TURNS):
+            with session.lock:
                 if not self._run_one_orchestrator_turn(session):
                     break
-                self._sleep_between_run_turns()
-            else:
+            self._sleep_between_run_turns()
+        else:
+            with session.lock:
                 session.phase = "turn_cap_reached"
                 session.append_event(
                     TimelineEventSnapshot(
@@ -800,13 +807,16 @@ class DemoControlService:
         session_id: UUID,
     ) -> CaseNotebookReportSnapshot:
         session = self._session(session_id)
+        start = time.perf_counter()
         with session.lock:
             state = self._ensure_orchestrator_state(session)
-            for _ in range(_MAX_ORCHESTRATOR_TURNS):
+        for _ in range(_MAX_ORCHESTRATOR_TURNS):
+            with session.lock:
                 if not self._run_one_orchestrator_turn(session):
                     break
-                self._sleep_between_run_turns()
-            else:
+            self._sleep_between_run_turns()
+        else:
+            with session.lock:
                 session.phase = "turn_cap_reached"
                 session.append_event(
                     TimelineEventSnapshot(
@@ -820,45 +830,43 @@ class DemoControlService:
                         blocked_by=SecurityLayer.INTERNAL_ERROR,
                     )
                 )
-
-            duration_seconds = max(
-                (utc_now() - session.created_at).total_seconds(),
-                0.0,
-            )
+        duration_seconds = max(time.perf_counter() - start, 0.0)
+        with session.lock:
             artifacts = build_case_artifacts_from_state(
                 state,
                 duration_seconds=duration_seconds,
                 scenario_id=session.scenario_id,
             )
             notebook_dir = _DEFAULT_UI_NOTEBOOK_DIR / str(session.session_id)
-            generation = generate_case_notebook(
-                artifacts,
-                out_dir=notebook_dir,
-                narrative_mode=NotebookNarrativeMode.TEMPLATE,
-            )
-            report = CaseNotebookReportSnapshot(
-                status=SnapshotStatus.LIVE,
-                scenario_id=artifacts.scenario_id,
-                run_id=artifacts.run_id,
-                generated_at=artifacts.generated_at,
-                terminal_code=artifacts.terminal_code,
-                terminal_reason=artifacts.terminal_reason,
-                notebook_path=_display_path(generation.notebook_path),
-                artifact_path=_display_path(generation.artifact_path),
-                notebook_html_path=_display_path(generation.notebook_html_path),
-                artifact_html_path=_display_path(generation.artifact_html_path),
-                notebook_html=generation.notebook_html_path.read_text(
-                    encoding="utf-8"
-                ),
-                artifact_html=generation.artifact_html_path.read_text(
-                    encoding="utf-8"
-                ),
-                cell_count=generation.cell_count,
-                detail=(
-                    "Generated federation-safe notebook, artifact bundle, and "
-                    "static HTML reports from the current demo path."
-                ),
-            )
+        generation = generate_case_notebook(
+            artifacts,
+            out_dir=notebook_dir,
+            narrative_mode=NotebookNarrativeMode.TEMPLATE,
+        )
+        report = CaseNotebookReportSnapshot(
+            status=SnapshotStatus.LIVE,
+            scenario_id=artifacts.scenario_id,
+            run_id=artifacts.run_id,
+            generated_at=artifacts.generated_at,
+            terminal_code=artifacts.terminal_code,
+            terminal_reason=artifacts.terminal_reason,
+            notebook_path=_display_path(generation.notebook_path),
+            artifact_path=_display_path(generation.artifact_path),
+            notebook_html_path=_display_path(generation.notebook_html_path),
+            artifact_html_path=_display_path(generation.artifact_html_path),
+            notebook_html=generation.notebook_html_path.read_text(
+                encoding="utf-8"
+            ),
+            artifact_html=generation.artifact_html_path.read_text(
+                encoding="utf-8"
+            ),
+            cell_count=generation.cell_count,
+            detail=(
+                "Generated federation-safe notebook, artifact bundle, and "
+                "static HTML reports from the current demo path."
+            ),
+        )
+        with session.lock:
             session.latest_case_report = report
             session.append_event(
                 TimelineEventSnapshot(
@@ -2399,6 +2407,12 @@ def _display_path(path: Path) -> str:
         return str(path.relative_to(_REPO_ROOT))
     except ValueError:
         return str(path)
+
+
+def _cleanup_session_artifacts(session_id: UUID) -> None:
+    # Session eviction should also discard generated report artifacts so the
+    # bounded in-memory session store does not leave stale notebook trees.
+    shutil.rmtree(_DEFAULT_UI_NOTEBOOK_DIR / str(session_id), ignore_errors=True)
 
 
 def _sample_case_report(session: DemoSessionRuntime) -> CaseNotebookReportSnapshot:

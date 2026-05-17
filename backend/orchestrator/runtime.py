@@ -617,10 +617,11 @@ def _correlated_alert_id(source_alert_id: UUID, ordinal: int) -> UUID:
 def _query_window(state: SessionOrchestratorState) -> tuple[date, date]:
     if state.original_query is not None:
         payload = state.original_query.query_payload
-        window_start = getattr(payload, "window_start", None)
-        window_end = getattr(payload, "window_end", None)
-        if window_start is not None and window_end is not None:
-            return window_start, window_end
+        if payload is not None:
+            window_start = getattr(payload, "window_start", None)
+            window_end = getattr(payload, "window_end", None)
+            if window_start is not None and window_end is not None:
+                return window_start, window_end
     if state.latest_alert is None:
         raise ValueError("query window requires original_query or latest_alert")
     end = state.latest_alert.created_at.date()
@@ -632,8 +633,9 @@ def _graph_candidate_hashes(state: SessionOrchestratorState) -> list[str]:
     hashes: set[str] = set()
     if state.original_query is not None:
         payload = state.original_query.query_payload
-        hashes.update(getattr(payload, "name_hashes", []))
-        hashes.update(getattr(payload, "counterparty_hashes", []))
+        if payload is not None:
+            hashes.update(getattr(payload, "name_hashes", []))
+            hashes.update(getattr(payload, "counterparty_hashes", []))
     if state.sar_contribution is not None:
         for item in state.sar_contribution.contributed_evidence:
             hashes.update(item.entity_hashes)
