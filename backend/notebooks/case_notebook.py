@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 import textwrap
 from collections import Counter
 from datetime import UTC, datetime
@@ -702,14 +701,23 @@ def _sum_vectors(vectors: list[list[int]]) -> list[int]:
     ]
 
 
+_SUM_VECTORS_NOTEBOOK_SOURCE = textwrap.dedent(
+    """\
+    def _sum_vectors(vectors):
+        if not vectors:
+            return []
+        width = max(len(vector) for vector in vectors)
+        return [
+            sum(vector[index] for vector in vectors if index < len(vector))
+            for index in range(width)
+        ]
+    """
+)
+
+
 def _sum_vectors_notebook_source() -> str:
-    """Return notebook-visible pooling code from the same source of truth."""
-    return textwrap.dedent(
-        inspect.getsource(_sum_vectors)
-    ).replace(
-        "def _sum_vectors(vectors: list[list[int]]) -> list[int]:",
-        "def _sum_vectors(vectors):",
-    )
+    """Return notebook-visible pooling code without source-file introspection."""
+    return _SUM_VECTORS_NOTEBOOK_SOURCE
 
 
 def _summary_graphics_html(artifacts: CaseNotebookArtifacts) -> str:

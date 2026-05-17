@@ -12,14 +12,12 @@ import logging
 import os
 import re
 import shutil
-import socket
 import threading
 import time
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Mapping, NamedTuple
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import httpx
@@ -38,6 +36,7 @@ from backend.orchestrator import Orchestrator, OrchestratorPrincipals
 from backend.orchestrator.runtime import SessionOrchestratorState, TerminalCode
 from backend.policy import AmlPolicyConfig, AmlPolicyEvaluator, RawPolicyContent
 from backend.runtime.context import AgentRuntimeContext, TrustDomain
+from backend.runtime.network import tcp_url_reachable
 from backend.security import (
     PrincipalNotAllowed,
     ReplayCache,
@@ -164,6 +163,7 @@ class DemoSessionRuntime:
         )
         self.latest_case_report: CaseNotebookReportSnapshot | None = None
         self.orchestrator_state: SessionOrchestratorState | None = None
+        self.run_until_idle_thread: threading.Thread | None = None
         self.lock = threading.RLock()
 
     def append_event(self, event: TimelineEventSnapshot) -> TimelineEventSnapshot:
@@ -220,7 +220,10 @@ _MODEL_ROUTE_TIMEOUT_SECONDS = 20.0
 _MODEL_ROUTE_MAX_TOKENS = 64
 _PROVIDER_REACHABILITY_CACHE_SECONDS = 2.0
 _MODEL_ROUTE_CLIENT_LOCK = threading.Lock()
-_MODEL_ROUTE_CLIENT: httpx.Client | None = None
+_MODEL_ROUTE_CLIENT: httpx.AsyncClient | None = None
+_PROVIDER_REACHABILITY_LOCK = threading.Lock()
+_PROVIDER_REACHABILITY_CACHE: dict[str, tuple[float, bool]] = {}
+_PROVIDER_REACHABILITY_IN_FLIGHT: set[str] = set()
 
 
 class _UiChatMessage(UiStateModel):
@@ -321,47 +324,54 @@ def _tcp_url_reachable(raw_url: str) -> bool:
     # health with a 100ms timeout plus a short TTL cache. It is not used for
     # provider calls or high-volume request forwarding. If the UI API moves
     # to async route handlers, replace this seam with asyncio.open_connection.
-    parsed = urlparse(raw_url)
-    host = parsed.hostname
-    port = parsed.port
-    if not host or port is None:
-        return False
+    return tcp_url_reachable(raw_url, timeout=_SERVICE_CONNECT_TIMEOUT_SECONDS)
+
+
+def _refresh_tcp_url_reachability(raw_url: str) -> None:
+    reachable = False
     try:
-        with socket.create_connection(
-            (host, port),
-            timeout=_SERVICE_CONNECT_TIMEOUT_SECONDS,
-        ):
-            return True
-    except OSError:
-        return False
+        # Keep network I/O outside the lock. The finally block below must
+        # always clear the in-flight marker so one unexpected probe failure
+        # cannot permanently suppress future refresh attempts for this URL.
+        reachable = _tcp_url_reachable(raw_url)
+    except Exception:  # noqa: BLE001
+        # Health probes are advisory UI state. A malformed URL parser edge or
+        # unexpected socket-layer failure should render as "not reachable,"
+        # not escape a daemon worker thread.
+        _logger.debug("provider reachability probe failed", exc_info=True)
+    finally:
+        with _PROVIDER_REACHABILITY_LOCK:
+            _PROVIDER_REACHABILITY_CACHE[raw_url] = (time.monotonic(), reachable)
+            _PROVIDER_REACHABILITY_IN_FLIGHT.discard(raw_url)
 
 
-@lru_cache(maxsize=16)
-def _tcp_url_reachable_cached(raw_url: str, cache_bucket: int) -> bool:
-    _ = cache_bucket
-    return _tcp_url_reachable(raw_url)
-
-
-def _provider_reachability_cache_bucket() -> int:
-    return int(time.monotonic() / _PROVIDER_REACHABILITY_CACHE_SECONDS)
+def _tcp_url_reachable_cached(raw_url: str) -> bool:
+    now = time.monotonic()
+    with _PROVIDER_REACHABILITY_LOCK:
+        cached = _PROVIDER_REACHABILITY_CACHE.get(raw_url)
+        if cached and now - cached[0] <= _PROVIDER_REACHABILITY_CACHE_SECONDS:
+            return cached[1]
+        stale_value = cached[1] if cached else False
+        if raw_url not in _PROVIDER_REACHABILITY_IN_FLIGHT:
+            _PROVIDER_REACHABILITY_IN_FLIGHT.add(raw_url)
+            threading.Thread(
+                target=_refresh_tcp_url_reachability,
+                args=(raw_url,),
+                name="ui-provider-health",
+                daemon=True,
+            ).start()
+        return stale_value
 
 
 def _local_provider_state() -> _LocalProviderState:
     infra_root = _infra_root()
-    cache_bucket = _provider_reachability_cache_bucket()
     lobster_trap_url = os.getenv(_LOBSTER_TRAP_URL_ENV, _DEFAULT_LOBSTER_TRAP_URL)
     litellm_url = os.getenv(_LITELLM_URL_ENV, _DEFAULT_LITELLM_URL)
     return _LocalProviderState(
         lobster_trap_configured=(infra_root / "lobstertrap").exists(),
         litellm_configured=(infra_root / "litellm_config.yaml").exists(),
-        lobster_trap_reachable=_tcp_url_reachable_cached(
-            lobster_trap_url,
-            cache_bucket,
-        ),
-        litellm_reachable=_tcp_url_reachable_cached(
-            litellm_url,
-            cache_bucket,
-        ),
+        lobster_trap_reachable=_tcp_url_reachable_cached(lobster_trap_url),
+        litellm_reachable=_tcp_url_reachable_cached(litellm_url),
     )
 
 
@@ -372,16 +382,14 @@ def _chat_completion_url(base_url: str) -> str:
     return f"{normalized}{_OPENAI_CHAT_PATH}"
 
 
-def _post_live_chat_completion(
+async def _post_live_chat_completion(
     *,
     url: str,
     request: _UiChatCompletionRequest,
 ) -> _UiChatCompletionResponse:
-    # The judge console has a synchronous API surface today. Live model-route
-    # calls happen only after an explicit operator action, outside session
-    # locks, through a shared client with bounded timeout. P15 can move this
-    # seam to AsyncClient when the runtime grows a truly async event stream.
-    response = _model_route_client().post(
+    # Live model-route calls happen only after an explicit operator action,
+    # outside session locks, through a shared async client with bounded timeout.
+    response = await _model_route_client().post(
         url,
         json=request.model_dump(by_alias=True, exclude_none=True, mode="json"),
     )
@@ -389,21 +397,26 @@ def _post_live_chat_completion(
     return _UiChatCompletionResponse.model_validate(response.json())
 
 
-def _model_route_client() -> httpx.Client:
+def _model_route_client() -> httpx.AsyncClient:
     global _MODEL_ROUTE_CLIENT
     with _MODEL_ROUTE_CLIENT_LOCK:
         if _MODEL_ROUTE_CLIENT is None or _MODEL_ROUTE_CLIENT.is_closed:
-            _MODEL_ROUTE_CLIENT = httpx.Client(timeout=_MODEL_ROUTE_TIMEOUT_SECONDS)
+            _MODEL_ROUTE_CLIENT = httpx.AsyncClient(
+                timeout=_MODEL_ROUTE_TIMEOUT_SECONDS
+            )
         return _MODEL_ROUTE_CLIENT
 
 
-def close_model_route_client() -> None:
+async def close_model_route_client() -> None:
     """Close the shared UI model-route client during API shutdown."""
     global _MODEL_ROUTE_CLIENT
+    client: httpx.AsyncClient | None = None
     with _MODEL_ROUTE_CLIENT_LOCK:
         if _MODEL_ROUTE_CLIENT is not None:
-            _MODEL_ROUTE_CLIENT.close()
+            client = _MODEL_ROUTE_CLIENT
             _MODEL_ROUTE_CLIENT = None
+    if client is not None:
+        await client.aclose()
 
 
 def _response_preview(response: _UiChatCompletionResponse) -> str:
@@ -507,14 +520,14 @@ def _policy_scan_outcome_for_interaction(
     return _lobster_trap_policy_scan_outcome(request=request)
 
 
-def _live_model_route_outcome_for_interaction(
+async def _live_model_route_outcome_for_interaction(
     *,
     component_id: ComponentId,
     request: ComponentInteractionRequest,
     needs_prompt_boundary: bool,
     sender_proof_outcome: _LiveInteractionOutcome | None,
     policy_scan_outcome: _LiveInteractionOutcome | None,
-) -> _LiveInteractionOutcome | None:
+    ) -> _LiveInteractionOutcome | None:
     if (
         not needs_prompt_boundary
         or component_id != ComponentId.LITELLM
@@ -522,7 +535,7 @@ def _live_model_route_outcome_for_interaction(
         or policy_scan_outcome is not None
     ):
         return None
-    return _live_model_route_outcome(
+    return await _live_model_route_outcome(
         component_id=(
             ComponentId.LOBSTER_TRAP
             if request.route_through_lobster_trap
@@ -532,7 +545,7 @@ def _live_model_route_outcome_for_interaction(
     )
 
 
-def _live_model_route_outcome(
+async def _live_model_route_outcome(
     *,
     component_id: ComponentId,
     request: ComponentInteractionRequest,
@@ -571,7 +584,7 @@ def _live_model_route_outcome(
     )
 
     try:
-        response = _post_live_chat_completion(
+        response = await _post_live_chat_completion(
             url=_chat_completion_url(base_url),
             request=chat_request,
         )
@@ -871,6 +884,38 @@ class DemoControlService:
         session = self._session(session_id)
         with session.lock:
             self._ensure_orchestrator_state(session)
+            if self._run_turn_delay_seconds > 0:
+                self._start_run_until_idle_worker(session)
+                return session.to_snapshot(self.component_readiness())
+        return self._run_until_idle_sync(session)
+
+    def _start_run_until_idle_worker(self, session: DemoSessionRuntime) -> None:
+        if (
+            session.run_until_idle_thread is not None
+            and session.run_until_idle_thread.is_alive()
+        ):
+            return
+        session.run_until_idle_thread = threading.Thread(
+            target=self._run_until_idle_worker,
+            args=(session,),
+            name=f"ui-run-until-idle-{session.session_id}",
+            daemon=True,
+        )
+        session.run_until_idle_thread.start()
+
+    def _run_until_idle_worker(self, session: DemoSessionRuntime) -> None:
+        try:
+            self._run_until_idle_sync(session)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "Background run-until-idle failed for session %s",
+                session.session_id,
+            )
+        finally:
+            with session.lock:
+                session.run_until_idle_thread = None
+
+    def _run_until_idle_sync(self, session: DemoSessionRuntime) -> SessionSnapshot:
         for _ in range(_MAX_ORCHESTRATOR_TURNS):
             with session.lock:
                 should_continue = self._run_one_orchestrator_turn(session)
@@ -881,21 +926,34 @@ class DemoControlService:
             # observe progress between turns.
             self._sleep_between_run_turns()
         else:
-            with session.lock:
-                session.phase = "turn_cap_reached"
-                session.append_event(
-                    TimelineEventSnapshot(
-                        component_id=ComponentId.AUDIT_CHAIN,
-                        title="Orchestrator turn cap reached",
-                        detail=(
-                            f"Run stopped after {_MAX_ORCHESTRATOR_TURNS} turns "
-                            "to avoid an infinite loop."
-                        ),
-                        status=SnapshotStatus.ERROR,
-                        blocked_by=SecurityLayer.INTERNAL_ERROR,
-                    )
-                )
+            self._mark_turn_cap_reached(
+                session,
+                title="Orchestrator turn cap reached",
+                detail=(
+                    f"Run stopped after {_MAX_ORCHESTRATOR_TURNS} turns "
+                    "to avoid an infinite loop."
+                ),
+            )
         return session.to_snapshot(self.component_readiness())
+
+    def _mark_turn_cap_reached(
+        self,
+        session: DemoSessionRuntime,
+        *,
+        title: str,
+        detail: str,
+    ) -> None:
+        with session.lock:
+            session.phase = "turn_cap_reached"
+            session.append_event(
+                TimelineEventSnapshot(
+                    component_id=ComponentId.AUDIT_CHAIN,
+                    title=title,
+                    detail=detail,
+                    status=SnapshotStatus.ERROR,
+                    blocked_by=SecurityLayer.INTERNAL_ERROR,
+                )
+            )
 
     def case_notebook_report(self, session_id: UUID) -> CaseNotebookReportSnapshot:
         session = self._session(session_id)
@@ -1228,7 +1286,7 @@ class DemoControlService:
             fields=fields,
         )
 
-    def run_component_interaction(
+    async def run_component_interaction(
         self,
         session_id: UUID,
         component_id: ComponentId,
@@ -1268,7 +1326,7 @@ class DemoControlService:
         # together below. The deterministic LT policy scan runs first:
         # a prompt that violates local policy should never need to reach
         # the proxy or model provider just to demonstrate the block.
-        live_model_route_outcome = _live_model_route_outcome_for_interaction(
+        live_model_route_outcome = await _live_model_route_outcome_for_interaction(
             component_id=component_id,
             request=request,
             needs_prompt_boundary=needs_prompt_boundary,
@@ -1385,7 +1443,7 @@ class DemoControlService:
             session.append_event(event)
         return result
 
-    def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
+    async def run_probe(self, session_id: UUID, request: ProbeRequest) -> ProbeResult:
         session = self._session(session_id)
         # Probe handlers run *outside* the session lock so a slow probe
         # (future LLM-driven LT injection, A3 with policy adapter, etc.)
@@ -1395,7 +1453,7 @@ class DemoControlService:
         # `_commit_probe_outcome` takes the lock briefly to apply the
         # bundle and append the timeline event in one critical section.
         try:
-            result = self._dispatch_probe(session, request)
+            result = await self._dispatch_probe(session, request)
         except Exception as exc:  # noqa: BLE001
             # Probe handlers call into real agent code
             # (A3SiloResponderAgent, PrivacyBudgetLedger, etc.).
@@ -1419,7 +1477,7 @@ class DemoControlService:
         self._commit_probe_outcome(session, result)
         return result
 
-    def _dispatch_probe(
+    async def _dispatch_probe(
         self,
         session: DemoSessionRuntime,
         request: ProbeRequest,
@@ -1435,7 +1493,7 @@ class DemoControlService:
         if request.probe_kind == ProbeKind.ROUTE_MISMATCH:
             return self._route_mismatch_probe(session, request)
         if request.probe_kind == ProbeKind.PROMPT_INJECTION:
-            return self._prompt_injection_probe(session, request)
+            return await self._prompt_injection_probe(session, request)
         if request.probe_kind == ProbeKind.UNSUPPORTED_QUERY_SHAPE:
             return self._unsupported_query_shape_probe(session, request)
         if request.probe_kind == ProbeKind.BUDGET_EXHAUSTION:
@@ -1884,7 +1942,7 @@ class DemoControlService:
             route_approval=route,
         )
 
-    def _prompt_injection_probe(
+    async def _prompt_injection_probe(
         self,
         session: DemoSessionRuntime,
         request: ProbeRequest,
@@ -1929,7 +1987,7 @@ class DemoControlService:
         # the same live route used by the interaction console. This keeps the
         # prompt-injection probe honest: it tests both the local LT/F6 rules
         # and, when enabled, the live Lobster Trap proxy verdict.
-        outcome = _live_model_route_outcome(
+        outcome = await _live_model_route_outcome(
             component_id=(
                 ComponentId.LOBSTER_TRAP
                 if request.route_through_lobster_trap
